@@ -2,264 +2,96 @@
 // error in render() fails here instead of in a window. Every element method returns the same
 // chainable stub; .when() and .hover() run their callbacks, and the virtual list draws every
 // item. The pane reads synthetic fixtures through the real extractor (exec runs it).
-import { test, expect, mock, setSystemTime, spyOn } from "bun:test";
+import { test, expect, setSystemTime, spyOn } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest, ruleSender, newSession as newSessionForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, PIN_ROW, pinRowShape, pinPromptText, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS, weightHerdr as weightHerdrOf } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS, weightHerdr as weightHerdrOf } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf, COMPACT_PAD as COMPACT_PAD_T } from "../mods/agent-threads/ledger.js";
 
-const root = join(import.meta.dir, "..");
-const modDir = join(root, "mods/agent-threads");
-const app = mkdtempSync(join(tmpdir(), "threads-render-"));
+import {
+  afterPress,
+  allPins,
+  alphaForTest,
+  app,
+  bubbleMax,
+  calls,
+  closed,
+  columnWidth,
+  compactPins,
+  dayKey,
+  draw,
+  drawRange,
+  dropTimers,
+  editors,
+  fakeH,
+  fixture,
+  focusCalls,
+  frame,
+  H,
+  handlerAfterId,
+  hcBy,
+  herdrSettings,
+  herdrVersion,
+  hostPlatform,
+  hostReads,
+  itemWords,
+  keyBinds,
+  keyEv,
+  lacking,
+  lastList,
+  log,
+  makeCx,
+  marks,
+  MD_MAX,
+  mdSources,
+  modDir,
+  never,
+  openAt,
+  overlays,
+  ownOf,
+  pane,
+  pinPane,
+  PINS,
+  pinsShown,
+  pinWrites,
+  probeFrame,
+  railLook,
+  rec,
+  recordFiles,
+  root,
+  ROW,
+  rowHeight,
+  saved,
+  scripted,
+  scrolled,
+  settingsWrites,
+  settle,
+  settleList,
+  settleRows,
+  setup,
+  simList,
+  stamp,
+  state,
+  stillAt,
+  stubHas,
+  svgs,
+  theme,
+  Threads,
+  thumbSize,
+  tileRow,
+  toastText,
+  tooltips,
+  until,
+  views,
+  work,
+  worked,
+} from "./render-harness.js";
 
-let calls = 0;
-// With rec set, every element method call is recorded as [name, ...args].
-let rec = null;
-// Element methods by what a test says the running Herdr has, for code that asks with
-// "name in el". `lacking`: an older Herdr's gap, so `name in el` answers false and a call
-// throws, as Herdr's "not a function". `stubHas`: a method only a newer Herdr has (NEWER),
-// which answers true only while a test adds it.
-const lacking = new Set();
-const stubHas = new Set();
-const NEWER = new Set(["mode"]);
-const el = new Proxy(() => {}, {
-  has(_t, name) { const n = String(name); return !lacking.has(n) && (!NEWER.has(n) || stubHas.has(n)); },
-  get(_t, name) {
-    if (name === "then") return undefined;
-    if (lacking.has(String(name))) return undefined;
-    if (name === "when") return (cond, fn) => { if (cond) fn(el); return el; };
-    if (name === "hover") return (fn) => { fn(el); return el; };
-    return (...args) => { calls++; if (rec) rec.push([String(name), ...args]); for (const a of args) if (a === undefined) throw new Error(`undefined passed to .${String(name)}()`); return el; };
-  },
-  apply() { return el; },
-});
-const theme = {
-  background: "#1e1e1e", foreground: "#e6e6e6", muted: "#a0a0a0", dim: "#777777", border: "#333333", raised: "#262626",
-  chrome: "#202020", hover: "#2c2c2c", selected: "#2a2d3a", accent: "#4f8cff", popover: "#2a2a2a", working: "#d7a000",
-  blocked: "#e05050", done: "#40b060", ansi1: "#e06c75", ansi2: "#98c379", ansi3: "#e5c07b", ansi4: "#61afef",
-  ansi5: "#c678dd", ansi6: "#56b6c2",
-};
-let state = { panes: [], terminals: [], props: {}, shared: {} };
-// What the pane did through Herdr: run() calls, the clipboard, and hc get's answer.
-let log = [];
-let hcOut = JSON.stringify({ foreground: { name: "claude", argv: ["claude"], pid: 42 } });
-// hc get's answer per terminal, and session records by path, for the binding tests.
-let hcBy = {};
-let recordFiles = {};
-let focusNow = null;
-let afterFocus = (args) => { focusNow = { terminal: state.panes.find((p) => p.pane === args?.pane)?.terminal ?? null }; };
-const mdSources = [];
-// Overlays the mod opened (the image gallery).
-const overlays = [];
-const closed = [];
-// Every TextView made, with the calls on it (scrollable, size_full, …).
-const views = [];
-function viewEl(calls) {
-  const p = new Proxy(() => {}, {
-    get(_t, name) {
-      if (name === "then") return undefined;
-      if (name === "when") return (cond, fn) => { if (cond) fn(p); return p; };
-      return (...args) => { calls.push([String(name), ...args]); return p; };
-    },
-  });
-  return p;
-}
-const editors = [];
-// Plain scroll handles made (the image viewer's panel), with the children each was asked to reveal.
-const scrollHandles = [];
-let focusCalls = 0;
-// Every list given to cx.bind_keys, for the whole file: the mod installs its keys once.
-const keyBinds = [];
-const never = () => new Promise(() => {});
-// The items the virtual list draws, as Herdr does for what is on screen: all of them unless a
-// test sets this (n) => { start, end }.
-let listWindow = null;
-// What the last v_virtual_list was given: its sizes and item keys.
-let lastList = null;
-// settings(): the person's Herdr settings (zoom, fonts).
-let herdrSettings = { font_family: "Mono" };
-// What Herdr's window() reports as the platform (round 6 face).
-let hostPlatform = "linux";
-// updates().app.version: Herdr's version.
-let herdrVersion = "0.1.17";
-// Reads of Herdr's settings, panes and terminals, for the draw-time guard.
-const hostReads = { settings: 0, panes: 0, terminals: 0 };
-mock.module("gpui-kit", () => ({ View: class {}, div: () => el, svg: (p) => { if (rec) rec.push(["svg", p]); return el; }, image: () => el }));
-mock.module("gpui-base", () => ({
-  v_flex: () => el, h_flex: () => el,
-  InputState: { new: () => { const st = { handlers: {}, text: "", on(ev, f) { st.handlers[ev] = f; return true; }, value: () => st.text, set_value(x) { st.text = x; }, focus() {} }; return st; } },
-  Input: { new: () => el }, Scrollbar: { vertical: () => el },
-  Popup: { new: (id) => { if (rec) rec.push(["Popup", id]); return el; } },
-  HoverCard: { new: (id) => { if (rec) rec.push(["HoverCard", id]); return el; } },
-  VirtualListScrollHandle: { new: () => ({ scroll_to_bottom() {}, scroll_to_item() {} }) },
-  ScrollHandle: { new: () => { const h = { asked: [], scroll_to_item(i) { h.asked.push(i); }, release() { return true; } }; scrollHandles.push(h); return h; } },
-  v_virtual_list: (_id, n, sizes, keyOf, draw) => {
-    // One number is one height for every item (the Trajectory's list); an array is one each.
-    const size = (i) => (typeof sizes === "number" ? sizes : sizes[i]);
-    lastList = { sizes: typeof sizes === "number" ? Array.from({ length: n }, () => sizes) : [...sizes], keys: [], draw };
-    for (let i = 0; i < n; i++) { if (!(size(i) > 0)) throw new Error(`item ${keyOf(i)} has height ${size(i)}`); lastList.keys.push(keyOf(i)); }
-    draw(listWindow ? listWindow(n) : { start: 0, end: n });
-    return el;
-  },
-  TextView: { html: (id, html) => { const calls = []; views.push({ id, html, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); }, markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: (opts) => { const st = { opts, handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
-}));
-// With marks set, exec records when the script hands off ("out") and gets its answer back
-// ("in"), with the time and the work counted so far, so a test can measure the synchronous
-// stretches between awaits.
-let marks = null;
-const stamp = (what) => { if (marks) marks.push([what, performance.now(), { ...work }]); };
-mock.module("herdr", () => ({
-  exec: async (cmd, args) => {
-    // A link the pane opens is logged, never opened.
-    if (cmd === "open") { log.push(["open", ...args]); return { code: 0, stdout: "", stderr: "" }; }
-    // A test's stand-in for the extractor: its answer, or null to run it.
-    if (extractHook && String(args?.[0] ?? "").endsWith("core/extract.sh")) { const r = await extractHook(args); if (r) return r; }
-    stamp("out");
-    try { return execReal(cmd, args); } finally { stamp("in"); }
-  },
-  hc: async (args) => { log.push(["hc", ...args]); return { code: 0, stdout: hcBy[args[1]] ?? hcOut, stderr: "" }; },
-  ...herdrRest(),
-}));
-let pinWrites = 0;
-let extractHook = null;
-// What the pane wrote to settings.json (the viewer keeps its panel choice there). With
-// keepSettings set, a write is also what the next read finds, as on disk.
-const settingsWrites = [];
-let keepSettings = false;
-// With settingsStale set, a settings write whose expected text is not what the file holds is
-// rejected, as Herdr rejects a stale snapshot.
-let settingsStale = false;
-// A script that has not ended in 4 s is killed with everything it started, and the call fails
-// with a line naming it: a hung child ends before bun's 5 s test limit kills it as a dangling
-// process, which says nothing of which call it was (once in CI). The script runs in a process
-// group of its own under this perl, which kills the group: a timeout on the call alone stops
-// only sh, and the extractor's sh waits for its pipeline before it heeds a TERM.
-const EXEC_LIMIT_S = 4;
-const EXEC_GUARD = `my $s = shift; my $late = 0;
-my $pid = fork() // die "fork: $!";
-if (!$pid) { setpgrp(0, 0); exec { $ARGV[0] } @ARGV; exit 127 }
-$SIG{ALRM} = sub { $late = 1; kill "KILL", -$pid; kill "KILL", $pid };
-alarm $s; waitpid($pid, 0); my $st = $?; alarm 0;
-exit 124 if $late;
-exit($st & 127 ? 128 + ($st & 127) : $st >> 8);`;
-function execReal(cmd, args) {
-    const opts = { encoding: "utf8", maxBuffer: 1 << 28, stdio: ["ignore", "pipe", "pipe"], timeout: (EXEC_LIMIT_S + 2) * 1000 };
-    try { return { code: 0, stdout: execFileSync("perl", ["-e", EXEC_GUARD, String(EXEC_LIMIT_S), cmd, ...args], opts), stderr: "" }; }
-    catch (e) {
-      if (e.status === 124 || e.code === "ETIMEDOUT") console.error(`exec: ${cmd} ${args.join(" ")} ran past ${EXEC_LIMIT_S} s and was killed`);
-      return { code: e.status ?? 1, stdout: String(e.stdout ?? ""), stderr: String(e.stderr ?? "") };
-    }
-}
-function herdrRest() { return {
-  home: () => "/home/test", appHome: () => app,
-  window: () => ({ platform: hostPlatform, titlebar: "system", buttons: false, maximized: false, fullscreen: false, active: true }),
-  updates: () => ({ app: { version: herdrVersion } }),
-  readTextFile: async (p) => recordFiles[p] ?? null,
-  writeTextFile: async (p, text, expected) => {
-    if (p.endsWith("settings.json")) {
-      if (settingsStale && (recordFiles[p] ?? null) !== (expected ?? null)) throw new Error("stale snapshot");
-      settingsWrites.push(text);
-      if (keepSettings) recordFiles[p] = text;
-    }
-    if (!p.endsWith("pins.json")) return null;
-    if ((recordFiles[p] ?? null) !== (expected ?? null)) throw new Error("stale snapshot");
-    recordFiles[p] = text;
-    pinWrites++;
-    return null;
-  },
-  watchFolder: never,
-  theme: () => theme, themes: () => [{ name: "test", colors: theme }], settings: () => { hostReads.settings++; return herdrSettings; },
-  panes: () => { hostReads.panes++; return state.panes; }, terminals: () => { hostReads.terminals++; return state.terminals; }, spaces: () => [{ tabs: [{ id: "A", name: "work" }] }],
-  focused: () => focusNow, props: () => state.props,
-  run: (name, args) => { log.push(["run", name, args ?? null]); if (name === "pane.focus") afterFocus(args); return null; },
-  shared: (k) => state.shared[k], setShared: (k, v) => { state.shared[k] = v; },
-  closeOverlay: (id) => { closed.push(id); return null; }, openOverlay: (spec) => { overlays.push(spec); return `ov${overlays.length}`; }, notify: (n) => { log.push(["notify", n]); return null; }, nextCommand: never,
-}; }
-
-// main.js finds its scripts under appHome()/mods/agent-threads.
-execFileSync("mkdir", ["-p", join(app, "mods")]);
-execFileSync("cp", ["-R", modDir, join(app, "mods/agent-threads")]);
-// The read's work, counted for the S1 child: lines parsed and events applied (through a
-// counting stand-in for core/turns.js, in the child only), turns reshaped, and turns whose
-// rows were built.
-const work = { lines: 0, events: 0, reshapes: 0, built: 0 };
-// What each costs in ms in bun with the JIT off, the interpreter's speed, on a developer
-// machine: 0.7 to 1.4 µs a line, 1.25 to 1.4 µs an event, 0.21 to 0.27 ms a reshape, and
-// 4.7 to 4.8 µs a turn's rows without its reshape.
-const PRICE = { lines: 0.001, events: 0.0013, reshapes: 0.22, built: 0.005 };
-// The S1 child's clock: the work done so far, at those prices.
-const worked = () => work.lines * PRICE.lines + work.events * PRICE.events + work.reshapes * PRICE.reshapes + work.built * PRICE.built;
-if (process.env.THREADS_CHILD === "read-timing") {
-  const turnsPath = join(modDir, "core/turns.js");
-  const real = await import(turnsPath);
-  const { parseLine, apply } = real;
-  mock.module(turnsPath, () => ({ ...real, parseLine: (c, line) => { work.lines++; return parseLine(c, line); }, apply: (s, e) => { work.events++; return apply(s, e); } }));
-}
-const { default: Threads } = await import("../mods/agent-threads/main.js");
-const { thumbSize, tileRow, bubbleMax, ROW, columnWidth, railLook, rowHeight, MD_MAX, alpha: alphaForTest, dayKey } = await import("../mods/agent-threads/ui.js");
-
-function fixture(...flags) {
-  const dir = mkdtempSync(join(tmpdir(), "threads-fx-"));
-  const file = join(dir, "f.jsonl");
-  execFileSync("bun", [join(root, "test/make-fixture.js"), file, "00000000-0000-4000-8000-000000000009", "/tmp/threads-demo", ...flags], { stdio: "ignore" });
-  return file;
-}
-
-// A press on a closed turn opens it OPEN_WAIT_MS (300) after the release, unless a second
-// press comes first (issue 131). This runs that wait and nothing else.
-function afterPress(cx) {
-  const due = cx.timers.filter((x) => x.ms === 300);
-  cx.timers = cx.timers.filter((x) => x.ms !== 300);
-  for (const x of due) x.fn(cx);
-}
-
-function makeCx() {
-  const cx = {
-    focus_handle: () => ({ focus() { focusCalls++; }, is_focused: () => true }),
-    // Timers are kept; flush() runs the ones due within ms (the quote's focus retries).
-    timer: { after(ms, fn) { cx.timers.push({ ms, fn }); }, every(ms, fn) { cx.everies.push({ ms, fn }); } },
-    timers: [], everies: [],
-    // cx.sleep: a macrotask by default; a test can swap in its own (a dead task, timing marks).
-    sleep: (ms) => (cx.sleepHook ? cx.sleepHook(ms) : new Promise((r) => setTimeout(r, 0))),
-    sleepHook: null, notifyHook: null,
-    flush(ms = 200, rounds = 10) { for (let i = 0; i < rounds; i++) { const due = cx.timers.filter((x) => x.ms <= ms); cx.timers = cx.timers.filter((x) => x.ms > ms); if (!due.length) return; for (const x of due) x.fn(cx); } },
-    spawn: (fn) => { const p = fn(cx); cx.pending.push(p); return p; },
-    pending: [], notify() { cx.notifyHook?.(); }, stop_propagation() {},
-    bind_keys(list) { keyBinds.push(list); return list.length; },
-    clip: null,
-    write_to_clipboard(t) { cx.clip = t; log.push(["clipboard", t]); },
-    read_from_clipboard() { return cx.clip ?? undefined; },
-    open_url(u) { log.push(["open_url", u]); },
-  };
-  return cx;
-}
-// The watch and command loops never end, so wait for the read itself.
-async function settle(v, tries = 200) {
-  for (let i = 0; i < tries; i++) {
-    if (v.current()?.loaded && !v.reading && !v.resolving && v.prefsLoaded) return;
-    await new Promise((r) => setTimeout(r, 25));
-  }
-  throw new Error("the pane never finished reading");
-}
-
-async function pane(file) {
-  state = {
-    terminals: [{ address: "t4", status: "idle", name: "claude" }],
-    panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
-    props: { terminal: "t4", transcript: file, debug: true }, shared: {},
-  };
-  const v = new Threads();
-  const cx = makeCx();
-  v.init(state.props, cx);
-  await settle(v);
-  return { v, cx };
-}
-
-function draw(v, cx) { v.render(cx); v.report(); return v; }
+setup();
 
 test("every state draws at 240 and 380 px, agents on and off, every card open", { timeout: 30000 }, async () => {
   const { v, cx } = await pane(fixture("--extra", "3", "--agents", "--commands", "--latest", "--skill", "--notify", "--langs", "--long"));
@@ -329,13 +161,13 @@ test("the strip under the reply is copy and quote, and acts only on each icon", 
   v.width = 240;
   expect(v.barHit(50)).toBe("quote");
   expect(v.barHit(100)).toBe(null);
-  const icons = () => { rec = []; v.actsStrip(theme, v.findTurn(v.sel), v.sel, true); const c = rec; rec = null; return c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop()); };
+  const icons = () => { H.rec = []; v.actsStrip(theme, v.findTurn(v.sel), v.sel, true); const c = rec; H.rec = null; return c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop()); };
   expect(icons()).toEqual(["copy.svg", "quote.svg"]);
   // Before Herdr 0.1.13 the formatted reply cannot be selected, so the select icon stays,
   // after quote, as the way there by mouse.
   const was = herdrVersion;
   try {
-    herdrVersion = "0.1.12"; v.selectableMemo = null;
+    H.herdrVersion = "0.1.12"; v.selectableMemo = null;
     expect(v.barHit(75)).toBe("select");
     expect(v.barHit(100)).toBe(null);
     expect(icons()).toEqual(["copy.svg", "quote.svg", "text-cursor.svg"]);
@@ -343,7 +175,7 @@ test("the strip under the reply is copy and quote, and acts only on each icon", 
     state.panes = state.panes.filter((p) => p.terminal !== "t4");
     expect(v.barHit(50)).toBe("select");
     expect(v.barHit(75)).toBe(null);
-  } finally { herdrVersion = was; v.selectableMemo = null; }
+  } finally { H.herdrVersion = was; v.selectableMemo = null; }
   expect(icons()).toEqual(["copy.svg"]);
   expect(readFileSync(join(modDir, "main.js"), "utf8")).toContain("barHit");
 });
@@ -439,12 +271,12 @@ test("the working card's estimate uses the YOU part it draws and the 20 px note 
     // note line counts 20 px.
     const g = v.workingGeom(r.turn, r.shape);
     expect(est).toBe(8 + v.youHeight(v.workYou(r)) + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
-    rec = [];
+    H.rec = [];
     v.workingItem(theme, r);
     const lh = rec.filter(([n]) => n === "line_height").map(([, x]) => x);
     // The message is the YOU part's TextView; the note sets 20 px lines.
     expect(rec).toContainEqual(["TextView", `th-you-wyou:${r.key}`]);
-    rec = null;
+    H.rec = null;
     expect(lh).toContain("20px");
   }
   expect(seen).toBe(3);
@@ -459,10 +291,10 @@ test("a code block's box and estimate use 20 px lines, and the box sets that lin
   const r = v.rows().find((x) => x.kind === "code");
   expect(v.codeBoxH(r)).toBe(r.shown * 20 + 16 + (r.wide ? 10 : 0));
   expect(v.estimate(r)).toBe(v.codeBoxH(r) + (r.caption ? 24 : 0));
-  rec = [];
+  H.rec = [];
   v.partContent(theme, r, false);
   const calls = rec;
-  rec = null;
+  H.rec = null;
   const at = calls.findIndex(([n, x]) => n === "h" && x === v.codeBoxH(r));
   expect(at).toBeGreaterThanOrEqual(0);
   expect(calls.slice(at, at + 12).some(([n, x]) => n === "line_height" && x === "20px")).toBe(true);
@@ -475,10 +307,10 @@ test("the probe is clipped and transparent, never invisible()", async () => {
   v.width = 380;
   const key = v.turnKeys(v.rows())[0];
   v.toggle(key, cx);
-  rec = [];
+  H.rec = [];
   v.render(cx);
   const calls = rec;
-  rec = null;
+  H.rec = null;
   expect(calls.some(([n]) => n === "invisible")).toBe(false);
   const i = calls.findIndex(([n, x]) => n === "id" && String(x).startsWith("th-probe-"));
   expect(i).toBeGreaterThan(0);
@@ -531,15 +363,6 @@ test("a debug Pinned pane reports under the terminal plus :pinned; the Chat's en
   expect(state.shared["threads.debug"].t4).toEqual(chat);
 });
 
-async function scripted(events) {
-  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
-  const { v, cx } = await pane(fixture("--only", "1"));
-  const s = newSession("00000000-0000-4000-8000-00000000000a", v.current().file);
-  for (const e of events) apply(s, e);
-  s.loaded = true;
-  v.sessions = [s];
-  return { v, cx, s };
-}
 const at = (m) => `2026-11-01T09:${String(m).padStart(2, "0")}:00.000Z`;
 const peer = (text) => `<teammate-message teammate_id="helper-a" color="blue" summary="x">${text}</teammate-message>`;
 
@@ -716,10 +539,10 @@ test("under a search, the reply's own text decides flat or Markdown, and a hit a
     const sh = row(k).shape;
     expect(sh.md).toBeUndefined();
     expect(sh.reply.join(" ").toLowerCase()).toContain(q.toLowerCase());
-    rec = [];
+    H.rec = [];
     draw(v, cx);
     const drawn = rec;
-    rec = null;
+    H.rec = null;
     expect(drawn.some(([n, x]) => n === "child" && x === q)).toBe(true);
   }
 });
@@ -985,7 +808,7 @@ test("a task notification's quiet line has no chevron, closed or open, and its p
   draw(v, cx);
   const row = v.rows().find((r) => r.kind === "turn" && r.turn.n === 6);
   expect(row.fold).toBe("folded");
-  const icons = (r) => { rec = []; v.foldLine(theme, r); const c = rec; rec = null; return svgs(c); };
+  const icons = (r) => { H.rec = []; v.foldLine(theme, r); const c = rec; H.rec = null; return svgs(c); };
   expect(icons(row)).toEqual(["bell.svg"]);
   v.open.add(row.key);
   draw(v, cx);
@@ -1031,11 +854,11 @@ test("a running task-notification turn draws its quiet line, not a bubble, and i
   const r = v.rows().find((x) => x.key === "0:2");
   expect(r.kind).toBe("wrow");
   expect(v.estimate(r)).toBe(ROW.PAD_T + ROW.META + ROW.GAP + ROW.LINE + ROW.GAP + ROW.STATS + ROW.PAD_B);
-  rec = [];
+  H.rec = [];
   views.length = 0;
   v.workingRow(theme, r, true);
   let drawn = rec;
-  rec = null;
+  H.rec = null;
   const strings = (c) => c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
   expect(strings(drawn).join(" ")).toContain("Background task finished");
   expect(strings(drawn).join(" ")).not.toContain("no message text");
@@ -1046,10 +869,10 @@ test("a running task-notification turn draws its quiet line, not a bubble, and i
   expect(w.kind).toBe("working");
   const g = v.workingGeom(w.turn, w.shape);
   expect(v.estimate(w)).toBe(ROW.PAD_T + ROW.META + ROW.GAP + ROW.LINE + ROW.GAP + g.note * 20 + ROW.PAD_B);
-  rec = [];
+  H.rec = [];
   v.workingItem(theme, w);
   drawn = rec;
-  rec = null;
+  H.rec = null;
   expect(strings(drawn).join(" ")).toContain("Background task finished");
   expect(strings(drawn).join(" ")).not.toContain("no message text");
   state.terminals[0].status = "idle";
@@ -1080,7 +903,6 @@ const senderEvents = () => [
   // The From message, with no reply: hidden once a rule marks it.
   { k: "p", o: "human", t: FROM, ts: at(4) }, { k: "d", ms: 200, ts: at(5) },
 ];
-const tooltips = (v, cx) => { rec = []; v.render(cx); const out = rec.filter(([n]) => n === "tooltip").map(([, x]) => x); rec = null; return out; };
 
 test("with no sender rules nothing changes: typed prompts stay the person's", async () => {
   const { v, cx } = await scripted(senderEvents());
@@ -1127,10 +949,10 @@ test("a typed prompt a sender rule matches folds, hides and counts as an agent m
   v.sel = "0:2";
   v.action("pin", cx);
   v.setView("pinned");
-  rec = [];
+  H.rec = [];
   v.render(cx);
   const kids = rec.filter(([n]) => n === "child").map(([, x]) => x);
-  rec = null;
+  H.rec = null;
   expect(v.rows().find((r) => r.key === "0:2")?.turn.agent).toBe(true);
   expect(kids).toEqual(expect.arrayContaining(["build-bot", "matched by rule"]));
   v.setView("all");
@@ -1203,10 +1025,9 @@ const twoKinds = () => scripted([
   { k: "p", o: "human", t: "From helper-a: the cart tests are green", ts: at(2) }, { k: "t", t: "Thanks." }, { k: "d", ms: 500, ts: at(3) },
   { k: "p", o: "peer", t: peer("The cart tests are green"), ts: at(4) }, { k: "t", t: "Thanks again." }, { k: "d", ms: 500, ts: at(5) },
 ]);
-const recOf = (fn) => { rec = []; try { fn(); return rec; } finally { rec = null; } };
+const recOf = (fn) => { H.rec = []; try { fn(); return rec; } finally { H.rec = null; } };
 // The colour each dashed edge was drawn in: the border_color after each border_dashed.
 const dashes = (c) => c.flatMap((e, i) => (e[0] === "border_dashed" ? [c.slice(i + 1).find((x) => x[0] === "border_color")?.[1] ?? null] : []));
-const svgs = (c) => c.filter((e) => e[0] === "svg").map((e) => e[1].split("/").pop());
 
 test("a message a sender rule matched reads \"matched by rule\" with the tag icon, its tooltip says a rule named its sender; a sent one is as before", async () => {
   const { senderIcon, kindWords } = await import("../mods/agent-threads/ui.js");
@@ -1344,10 +1165,10 @@ test("a sender rule that is not valid shows a note in the panel and is ignored",
   // The card's Sender rules page shows each on its rule, with the reason.
   v.settingsOpen = true;
   v.setPage = "senders";
-  rec = [];
+  H.rec = [];
   v.render(cx);
   const kids = rec.filter(([n]) => n === "child").map(([, x]) => x);
-  rec = null;
+  H.rec = null;
   expect(kids).toContain("Not working: nested quantifier, as in (a+)+");
   expect(kids).toContain("Not working: pattern has no (?<sender>...) group");
   expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
@@ -1377,21 +1198,21 @@ test("agentRail: off by default, only the person's turns and the running one hav
   v.prefs = { ...v.prefs, agentTurns: false };
   // The panel's switch, next to Agent messages, shown off.
   v.settingsOpen = true;
-  rec = [];
+  H.rec = [];
   v.render(cx);
   const ids = rec.filter(([n]) => n === "id").map(([, x]) => x);
   const kids = rec.filter(([n]) => n === "child").map(([, x]) => x);
-  rec = null;
+  H.rec = null;
   expect(ids.indexOf("th-set-agent-rail")).toBe(ids.indexOf("th-set-agents") + 1);
   expect(kids).toContain("Agent messages on the rail");
   v.settingsOpen = false;
   // The switch's knob sits at the end only while it is on.
   const switchOn = () => {
     v.settingsOpen = true;
-    rec = [];
+    H.rec = [];
     v.render(cx);
     const r = rec;
-    rec = null;
+    H.rec = null;
     v.settingsOpen = false;
     const i = r.findIndex((e) => e[0] === "id" && e[1] === "th-set-agent-rail");
     const j = r.findIndex((e, k) => k > i && e[0] === "id");
@@ -1400,7 +1221,7 @@ test("agentRail: off by default, only the person's turns and the running one hav
   expect(switchOn()).toBe(false);
   // On: the switch writes true, and the folded agent message gets its tick. The writes are
   // what the next read finds, as on disk.
-  keepSettings = true;
+  H.keepSettings = true;
   settingsWrites.length = 0;
   v.action("agentRail", cx);
   expect(v.prefs.agentRail).toBe(true);
@@ -1430,7 +1251,7 @@ test("agentRail: off by default, only the person's turns and the running one hav
   v.applyPrefs(JSON.stringify({ agentTurns: false, agentRail: false }));
   draw(v, cx);
   expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
-  keepSettings = false;
+  H.keepSettings = false;
   delete recordFiles[v.prefsPath()];
 });
 
@@ -1476,7 +1297,7 @@ test("a settings file from a build before agentRail's new default: the first loa
   const settle = () => new Promise((r) => setTimeout(r, 30));
   // A pane opening: what it reads is the file on disk.
   const load = async () => { v.prefsLoaded = false; v.prefsRaw = undefined; v.readPrefs(cx); await settle(); };
-  keepSettings = true;
+  H.keepSettings = true;
   settingsWrites.length = 0;
   try {
     // What an earlier build saved: agentRail true (its default), its mark 3, a key it kept.
@@ -1535,7 +1356,7 @@ test("a settings file from a build before agentRail's new default: the first loa
     expect(settingsWrites.length).toBe(0);
     // A write that does not land (the file still holds the old text when read again) is
     // not tried again on that text, so the pane does not write in a loop.
-    keepSettings = false;
+    H.keepSettings = false;
     recordFiles[path] = JSON.stringify({ agentRail: true, look: 3 });
     await load();
     expect(settingsWrites.length).toBe(1);
@@ -1545,7 +1366,7 @@ test("a settings file from a build before agentRail's new default: the first loa
     expect(settingsWrites.length).toBe(1);
     expect(v.prefs.agentRail).toBe(false);
   } finally {
-    keepSettings = false;
+    H.keepSettings = false;
     delete recordFiles[path];
   }
 });
@@ -1729,10 +1550,10 @@ test("a turn answered together with a later one: its line says so, and its note 
   v.action("open", cx);
   const note = v.rows().find((r) => r.kind === "noreply" && r.key.includes("0:1"));
   expect(note).toBeTruthy();
-  rec = [];
+  H.rec = [];
   v.partContent(theme, note, false);
   const drawn = rec;
-  rec = null;
+  H.rec = null;
   expect(drawn).toContainEqual(["text_color", theme.accent]);
   expect(v.noReplyText(t1)).toContain("Go to that reply");
   // The link opens the answering turn with the start of its reply at the top.
@@ -1751,7 +1572,7 @@ test("the info icon is always shown: dim, like the line's label, on every turn, 
   v.sel = b;
   expect(v.infoState(a)).toBe("hover");
   expect(v.infoState(b)).toBe("sel");
-  const drawn = (state) => { rec = []; v.infoIcon(theme, state); const c = rec; rec = null; return c; };
+  const drawn = (state) => { H.rec = []; v.infoIcon(theme, state); const c = rec; H.rec = null; return c; };
   const other = drawn("hover");
   expect(other.filter((e) => e[0] === "text_color")).toEqual([["text_color", theme.dim]]);
   // The label's colour with no fade (about 3:1; at half strength it was under 2:1).
@@ -1780,10 +1601,10 @@ test("no list row registers an event handler: Herdr throws on one inside the ite
   for (const k of v.turnKeys(v.rows())) v.open.add(k);
   v.sel = v.turnKeys(v.rows()).at(-2);
   const rows = v.rows();
-  rec = [];
+  H.rec = [];
   v.listItems(theme, rows, v.slotsMemo ?? rows.map(() => 40), { start: 0, end: rows.length }, true, false);
   const drawn = rec;
-  rec = null;
+  H.rec = null;
   const handlers = drawn.filter((e) => /^on_/.test(String(e[0])));
   expect(rows.length).toBeGreaterThan(10);
   expect(rows.filter((r) => r.kind === "noreply").length).toBeGreaterThanOrEqual(2);
@@ -1818,7 +1639,6 @@ test("an agent row's sender label leaves room for the time and #n at 240 px (R6)
 
 // ---- round 2 ----------------------------------------------------------------------------
 
-const keyEv = (key, extra = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false }, ...extra });
 async function settleCx(cx) { await Promise.all(cx.pending); cx.pending = []; }
 const writes = () => log.filter((x) => x[0] === "run" || x[0] === "clipboard").map((x) => (x[0] === "run" ? `${x[1]}${x[2] ? ` ${JSON.stringify(x[2])}` : ""}` : "clipboard"));
 
@@ -1828,10 +1648,10 @@ async function quotePane(...flags) {
   r.v.sel = r.v.turnKeys(r.v.rows())[0];
   r.v.toggle(r.v.sel, r.cx);
   r.cx.pending = []; // the folder watch and command loops never end; wait only for what follows
-  log = [];
-  focusNow = null;
-  hcOut = JSON.stringify({ foreground: { name: "claude", argv: ["claude"], pid: 42 } });
-  afterFocus = (args) => { focusNow = { terminal: state.panes.find((p) => p.pane === args?.pane)?.terminal ?? null }; };
+  H.log = [];
+  H.focusNow = null;
+  H.hcOut = JSON.stringify({ foreground: { name: "claude", argv: ["claude"], pid: 42 } });
+  H.afterFocus = (args) => { H.focusNow = { terminal: state.panes.find((p) => p.pane === args?.pane)?.terminal ?? null }; };
   return r;
 }
 
@@ -1847,7 +1667,7 @@ test("q quotes the open reply: the clipboard, then pane.focus, then terminal.pas
   expect(v.lastQuote.text).toBeUndefined();
   expect(v.toast.text).toMatch(/^Quoted 1 line into t4 · focus is in the terminal$/);
   // A second press within 1 s does nothing; an auto-repeat press never does anything.
-  log = [];
+  H.log = [];
   v.key(keyEv("q"), cx);
   await settleCx(cx);
   expect(writes()).toEqual([]);
@@ -1870,10 +1690,10 @@ test("q quotes the open reply: the clipboard, then pane.focus, then terminal.pas
 
 test("the quote is never pasted when focus, the program, the status or the terminal is wrong", async () => {
   const cases = [
-    ["focus elsewhere", () => { afterFocus = () => { focusNow = { terminal: "t9" }; }; }, /^Could not focus t4\. Quote copied\.$/],
+    ["focus elsewhere", () => { H.afterFocus = () => { H.focusNow = { terminal: "t9" }; }; }, /^Could not focus t4\. Quote copied\.$/],
     ["blocked", () => { state.terminals[0].status = "blocked"; }, /^Claude is waiting on a prompt in t4\. Quote copied\.$/],
-    ["a shell", () => { hcOut = JSON.stringify({ foreground: { name: "zsh", argv: ["-zsh"] } }); }, /^t4 is at a shell\. Quote copied\.$/],
-    ["another program", () => { hcOut = JSON.stringify({ foreground: { name: "vim", argv: ["vim"] } }); }, /^t4 is not running claude\. Quote copied\.$/],
+    ["a shell", () => { H.hcOut = JSON.stringify({ foreground: { name: "zsh", argv: ["-zsh"] } }); }, /^t4 is at a shell\. Quote copied\.$/],
+    ["another program", () => { H.hcOut = JSON.stringify({ foreground: { name: "vim", argv: ["vim"] } }); }, /^t4 is not running claude\. Quote copied\.$/],
     ["closed", () => { state.terminals = []; }, /^t4 is closed\. Quote copied\.$/],
     ["no pane", () => { state.panes = state.panes.filter((p) => p.terminal !== "t4"); }, /^No terminal for this pane\. Quote copied\.$/],
   ];
@@ -1911,8 +1731,8 @@ test("busy: the paste still goes in, Claude queues it, and the toast says so for
   // Focus that lands a tick later: the paste waits for it.
   const late = await quotePane();
   let n = 0;
-  afterFocus = () => { focusNow = null; };
-  const realFocus = () => { n++; if (n === 2) focusNow = { terminal: "t4" }; };
+  H.afterFocus = () => { H.focusNow = null; };
+  const realFocus = () => { n++; if (n === 2) H.focusNow = { terminal: "t4" }; };
   late.v.quote(late.cx, "button");
   await settleCx(late.cx);
   expect(writes()).toEqual(["clipboard", 'pane.focus {"pane":"p1"}']);
@@ -1935,7 +1755,7 @@ test("on Herdr 0.1.16 q in Select view quotes the editor's highlight with no ⌘
   const at = text.indexOf(part);
   range = { start: at + part.length, end: at }; // dragged right to left
   cx.clip = "rm -rf / from some other window";
-  log = [];
+  H.log = [];
   v.quoteAt = 0;
   v.key(keyEv("q"), cx);
   cx.flush();
@@ -1946,7 +1766,7 @@ test("on Herdr 0.1.16 q in Select view quotes the editor's highlight with no ⌘
   // Nothing highlighted, and nothing from the reply on the clipboard: nothing is pasted.
   range = { start: 5, end: 5 };
   cx.clip = "";
-  log = [];
+  H.log = [];
   v.quoteAt = 0;
   v.key(keyEv("q"), cx);
   cx.flush();
@@ -1956,7 +1776,7 @@ test("on Herdr 0.1.16 q in Select view quotes the editor's highlight with no ⌘
   // An editor that throws falls back to the clipboard as before.
   st.selected_range = () => { throw new Error("released"); };
   cx.clip = part;
-  log = [];
+  H.log = [];
   v.quoteAt = 0;
   v.key(keyEv("q"), cx);
   cx.flush();
@@ -1977,7 +1797,7 @@ test("q quotes what ⌘C copied from another turn on screen, from that turn, and
   expect(v.replyText(t2)).toContain(part);
   expect(v.replyText(v.findTurn(k1))).not.toContain(part);
   const quoteNow = async () => {
-    log = [];
+    H.log = [];
     v.quoteAt = 0;
     v.key(keyEv("q"), cx);
     cx.flush();
@@ -2058,7 +1878,7 @@ test("in Select view q quotes what ⌘C copied from the reply, and never the who
   // Highlighted but not copied: the clipboard holds outside text. q pastes nothing, neither
   // that text nor the whole reply, and says how.
   for (const [clip, why] of [["rm -rf / from some other window", "notInReply"], ["", "empty"]]) {
-    log = [];
+    H.log = [];
     v.quoteAt = 0;
     cx.clip = clip;
     v.key(keyEv("q"), cx);
@@ -2078,7 +1898,7 @@ test("in Select view q quotes what ⌘C copied from the reply, and never the who
   expect(v.selectCopy.ok).toBe(false);
   // Out of Select view, q quotes the whole reply as before.
   v.endSelect();
-  log = [];
+  H.log = [];
   v.quoteAt = 0;
   v.key(keyEv("q"), cx);
   cx.flush();
@@ -2127,18 +1947,18 @@ test("the footer is one row of the most-used keys with q quote for a local termi
 
 test("before Herdr 0.1.13 the first click on a formatted reply says how to select, once", async () => {
   const was = herdrVersion;
-  herdrVersion = "0.1.12";
+  H.herdrVersion = "0.1.12";
   try {
     const { v, cx } = await quotePane();
     v.replySelectable();
-    herdrVersion = "0.1.13";
+    H.herdrVersion = "0.1.13";
     const md = v.rows().find((r) => r.kind === "md");
     v.click(md.key, cx);
     expect(v.toast.text).toBe("Press s to select text in this reply");
     v.toast = null;
     v.click(md.key, cx);
     expect(v.toast).toBe(null);
-  } finally { herdrVersion = was; }
+  } finally { H.herdrVersion = was; }
 });
 
 test("the formatted reply is selectable from Herdr 0.1.13, and a click there says nothing", async () => {
@@ -2153,13 +1973,13 @@ test("the formatted reply is selectable from Herdr 0.1.13, and a click there say
   v.click(v.rows().find((r) => r.kind === "md").key, cx);
   expect(v.toast).toBe(null);
   const was = herdrVersion;
-  herdrVersion = "0.1.12";
+  H.herdrVersion = "0.1.12";
   try {
     const old = await quotePane();
     old.v.replySelectable();
-    herdrVersion = "0.1.13";
+    H.herdrVersion = "0.1.13";
     expect(selectable(old.v)).toBe(false);
-  } finally { herdrVersion = was; }
+  } finally { H.herdrVersion = was; }
 });
 
 test("after ⌘C on the formatted reply q quotes what it copied, as long as the clipboard holds it", async () => {
@@ -2169,7 +1989,7 @@ test("after ⌘C on the formatted reply q quotes what it copied, as long as the 
   // A part of the reply, the way Herdr copies it: no Markdown markers.
   const part = reply.replace(/[*_`#>]/g, "").split(/\s+/).filter(Boolean).slice(1, 4).join(" ");
   const quoteNow = async () => {
-    log = [];
+    H.log = [];
     v.quoteAt = 0;
     v.key(keyEv("q"), cx);
     cx.flush();
@@ -2338,7 +2158,7 @@ test("a closed turn's long path breaks after a slash or a hyphen, in a blue bubb
   v.width = 460;
   v.prefs = { ...v.prefs, truncate: false };
   const row = () => v.rows().find((r) => r.kind === "turn");
-  const strings = () => { rec = []; v.rowItem(theme, row(), false); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  const strings = () => { H.rec = []; v.rowItem(theme, row(), false); const c = rec; H.rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
   // Joined back with the spaces the wrap took out (none after a break inside a token), the
   // lines are the message: nothing lost or added.
   const whole = (ls) => ls.reduce((s, l, i) => s + (i && !/[/-]$/.test(ls[i - 1]) ? " " : "") + l, "");
@@ -2370,20 +2190,20 @@ test("a closed turn's long path breaks after a slash or a hyphen, in a blue bubb
 
 test("the command name is quiet: no fill, muted, foreground when bare, tinted on a hit", async () => {
   const { v } = await quotePane();
-  rec = [];
+  H.rec = [];
   v.chip(theme, theme.background, "/review-pr", 120);
   expect(rec.some(([n]) => n === "bg")).toBe(false);
   expect(rec.filter(([n]) => n === "text_color").map(([, c]) => c)).toEqual([theme.muted]);
   expect(rec.find(([n]) => n === "text_size")[1]).toBe(12.5);
-  rec = [];
+  H.rec = [];
   v.chip(theme, theme.background, "/x", 120, true);
   expect(rec.filter(([n]) => n === "text_color").map(([, c]) => c)).toEqual([theme.foreground]);
   v.query = "review";
-  rec = [];
+  H.rec = [];
   v.chip(theme, theme.background, "/review-pr", 120);
   expect(rec.some(([n, c]) => n === "bg" && c === "#d7a00052")).toBe(true);
   v.query = "";
-  rec = null;
+  H.rec = null;
   // A theme where muted reads under 4.5:1 on the selected row: foreground there only.
   const low = { ...theme, selected: theme.muted };
   expect(v.cmdColor(low, true)).toBe(theme.foreground);
@@ -2399,7 +2219,7 @@ test("long messages show in full by default: no Show more anywhere, and Shorten 
   long.prompt = "Please look at this. ".repeat(60);
   long.shapeKey = null;
   draw(v, cx);
-  const strings = (fn) => { rec = []; fn(); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  const strings = (fn) => { H.rec = []; fn(); const c = rec; H.rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
   const row = () => v.rows().find((r) => r.turn === long && r.kind === "turn");
   // Off: the whole reply as Markdown and the whole prompt, and no Show more.
   let sh = v.shape(long);
@@ -2510,7 +2330,7 @@ test("pasted output: closed rows keep line breaks, hide the wrapper, draw mono p
   const snap = () => state.shared["threads.debug"].t4;
   const turn = (n) => snap().detail.find((d) => d.startsWith(`turn#${n} `));
   const rowsText = () => snap().detail.filter((d) => /^turn#\d /.test(d)).join("\n");
-  const strings = (fn) => { rec = []; fn(); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  const strings = (fn) => { H.rec = []; fn(); const c = rec; H.rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
   // The issue's example: the label row, then the table's own lines, no wrapper anywhere.
   const d1 = turn(1);
   expect(d1).toMatch(/^turn#1 p10\/r\d h\d+ /);
@@ -2530,10 +2350,10 @@ test("pasted output: closed rows keep line breaks, hide the wrapper, draw mono p
   }
   // The quiet label row is a fixed 12.5 px: it does not follow the reading size, as the
   // open turn's label and docs/reference.md say.
-  rec = [];
+  H.rec = [];
   v.promptBlock(theme, theme.background, v.current().turns[0], { kinds: ["pl", "p"], prompt: ["Pasted · 7 lines", "body"], p: 2 });
   const pasteSizes = rec.filter((e) => e[0] === "text_size").map((e) => e[1]);
-  rec = null;
+  H.rec = null;
   expect(pasteSizes).toEqual([12.5, 12.5]);
   // Shorten long messages on: label and paste rows count against Prompt lines, cut, with
   // Show more under the bubble.
@@ -2688,7 +2508,7 @@ test("link rules: the open card's reply and prompt carry links, rows never do", 
   expect(v.codeShape(tall, true)).toMatchObject({ rows: 20, shown: 20, more: true, all: true });
   // The label is the fence's language, or nothing: never "code".
   const head = v.rows().find((r) => r.kind === "codehead");
-  rec = []; v.partContent(theme, head, false); const hs = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); rec = null;
+  H.rec = []; v.partContent(theme, head, false); const hs = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); H.rec = null;
   expect(hs).not.toContain("code");
   expect(v.rows().filter((r) => r.kind === "md").at(-1).links).toBe(0);
   const snap = state.shared["threads.debug"].t4;
@@ -2781,7 +2601,7 @@ const busy = () => (busyFile ??= fixture("--busy", "130"));
 
 // A pane on file whose cx is set up by prep before init (hooks must be in place for the read).
 async function paneWith(file, prep, tries = 200) {
-  state = {
+  H.state = {
     terminals: [{ address: "t4", status: "idle", name: "claude" }],
     panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
     props: { terminal: "t4", transcript: file, debug: true }, shared: {},
@@ -2792,10 +2612,6 @@ async function paneWith(file, prep, tries = 200) {
   v.init(state.props, cx);
   if (tries) await settle(v, tries);
   return { v, cx };
-}
-async function until(f, what, n = 400) {
-  for (let i = 0; i < n; i++) { if (f()) return; await new Promise((r) => setTimeout(r, 10)); }
-  throw new Error(`timed out waiting for ${what}`);
 }
 
 // Runs in a child bun; the parent test below starts it and checks what it wrote.
@@ -2816,7 +2632,7 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   let v;
   const r = await paneWith(busy(), (cx, view) => {
     v = view;
-    marks = [];
+    H.marks = [];
     cx.sleepHook = () => { stamp("out"); return new Promise((res) => setTimeout(() => { stamp("in"); res(); }, 0)); };
     // The read's last notify (in its finally) closes its last stretch.
     cx.notifyHook = () => {
@@ -2827,7 +2643,7 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
     };
   }, 2000);
   const m = marks;
-  marks = null;
+  H.marks = null;
   // The longest stretch from a resume ("in") to the next hand-off ("out"), or to the end of
   // the read for the last one.
   // most: the most work of each kind in one stretch.
@@ -2856,7 +2672,7 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   // The list draws the rows of one screen at its end, as Herdr does (the stub otherwise draws
   // all 1,305, and each row's own cost, its hover card and its whole reply, adds up past
   // anything Herdr draws). allFrame is the same open frame with every row drawn, for the log.
-  listWindow = (n) => ({ start: Math.max(0, n - 14), end: n });
+  H.listWindow = (n) => ({ start: Math.max(0, n - 14), end: n });
   // The rows build can take more than one slice (BUILD_MS, one a frame) once agent turns with
   // replies show: the frames that finish it, before the keys are read.
   for (let k = 0; k < 50 && view.rowJob; k++) view.render(r.cx);
@@ -2864,7 +2680,7 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   view.toggle(keys.at(-2), r.cx);
   const openFrame = time(() => view.render(r.cx));
   const nextFrame = time(() => view.render(r.cx));
-  listWindow = null;
+  H.listWindow = null;
   view.toggle(keys.at(-3), r.cx);
   const allFrame = time(() => view.render(r.cx));
   performance.now = realPerf;
@@ -2914,10 +2730,10 @@ test("S1: before the first chunk the header says Reading… with no percentage, 
   // The first draw arms the opening, which paints the background alone in its quiet time.
   v.render(cx);
   v.opening.at -= 1000;
-  rec = [];
+  H.rec = [];
   v.render(cx);
   const widths = rec.filter(([n]) => n === "w").map(([, x]) => x);
-  rec = null;
+  H.rec = null;
   expect(widths).toContain("30%"); // the looping bar, never "0%"
   expect(widths).not.toContain("0%");
 });
@@ -2997,11 +2813,11 @@ test("S1: a second stall shows Read failed with Retry, and Retry reads the sessi
   expect(v.reading).toBe(false);
   expect(s.error).toBe("The read stopped before it finished.");
   expect(v.headerText()).toBe("Read failed");
-  rec = [];
+  H.rec = [];
   v.render(cx);
   const ids = rec.filter(([n]) => n === "id").map(([, x]) => x);
   const widths = rec.filter(([n]) => n === "w").map(([, x]) => x);
-  rec = null;
+  H.rec = null;
   expect(ids).toContain("th-retry");
   expect(widths).not.toContain("40%"); // no loading skeleton
   if (s.turns.length) expect(v.bannerTitles()).toContain("Could not read the transcript");
@@ -3136,34 +2952,26 @@ test("S1: a slow extractor call or a sleep never wipes a loaded session", async 
 
 // ---- round 3: V3a, design px at any zoom --------------------------------------------------
 
-// The handler a recorded element chain set right after .id(id), or null.
-function handlerAfterId(calls, id, name) {
-  for (let i = 0; i < calls.length; i++) {
-    if (calls[i][0] !== "id" || calls[i][1] !== id) continue;
-    for (let j = i + 1; j < calls.length && j < i + 8; j++) if (calls[j][0] === name) return calls[j].at(-1);
-  }
-  return null;
-}
 
 test("V3a: at zoom 0.9 the panel lays out in design px and hands the list the same design px (the list zooms them)", async () => {
   const { v, cx } = await pane(fixture("--extra", "3", "--latest", "--langs"));
   const key = v.turnKeys(v.rows()).at(-2);
   v.toggle(key, cx);
   const run = (zoom, reported) => {
-    herdrSettings = { font_family: "Mono", zoom };
+    H.herdrSettings = { font_family: "Mono", zoom };
     v.forcedWidth = null;
-    rec = [];
+    H.rec = [];
     v.render(cx);
     const calls = rec;
-    rec = null;
+    H.rec = null;
     handlerAfterId(calls, "threads-root", "on_size_change")({ width: reported, height: 800 * zoom }, cx);
     handlerAfterId(calls, "threads-listbox", "on_size_change")({ width: reported, height: 700 * zoom }, cx);
     // Each run is a pane of its own size, not a drag: the column takes it at once (REWRAP_PAUSE_MS).
     v.sizeAt = Date.now() - 1000;
-    rec = [];
+    H.rec = [];
     v.render(cx);
     const drawn = rec;
-    rec = null;
+    H.rec = null;
     return { width: v.width, pane: v.pw(), listH: v.listH, rows: v.rows().map((r) => r.key), est: [...v.sizesMemo], list: lastList, drawn };
   };
   try {
@@ -3184,7 +2992,7 @@ test("V3a: at zoom 0.9 the panel lays out in design px and hands the list the sa
       const hs = z.drawn.filter(([n, x]) => n === "h" && typeof x === "number").map(([, x]) => x);
       for (const slot of z.list.sizes) expect(hs.includes(slot)).toBe(true);
     }
-  } finally { herdrSettings = { font_family: "Mono" }; }
+  } finally { H.herdrSettings = { font_family: "Mono" }; }
 });
 
 test("V3a: at zoom 0.9 a press in the action bar hits the button drawn there", async () => {
@@ -3193,18 +3001,18 @@ test("V3a: at zoom 0.9 a press in the action bar hits the button drawn there", a
   v.toggle(key, cx);
   try {
     for (const w of [240, 380, 640]) {
-      herdrSettings = { font_family: "Mono", zoom: 0.9 };
+      H.herdrSettings = { font_family: "Mono", zoom: 0.9 };
       v.forcedWidth = null;
-      rec = [];
+      H.rec = [];
       v.render(cx);
       const calls = rec;
-      rec = null;
+      H.rec = null;
       handlerAfterId(calls, "threads-root", "on_size_change")({ width: w * 0.9, height: 720 }, cx);
       v.sizeAt = Date.now() - 1000;
-      rec = [];
+      H.rec = [];
       v.render(cx);
       const down = handlerAfterId(rec, "threads-body", "on_mouse_down");
-      rec = null;
+      H.rec = null;
       // A pane wider than fitWidth centres a column that wide; a press is read in its px.
       const c = columnWidth(w);
       expect(v.width).toBeCloseTo(c, 6);
@@ -3220,7 +3028,7 @@ test("V3a: at zoom 0.9 a press in the action bar hits the button drawn there", a
         expect(v.bodyW).toBeCloseTo(c, 6);
       }
     }
-  } finally { herdrSettings = { font_family: "Mono" }; }
+  } finally { H.herdrSettings = { font_family: "Mono" }; }
 });
 
 // ---- round 3: V3b, measured heights, and C1, C3, C5 on top -------------------------------
@@ -3238,7 +3046,6 @@ function probeEntries(calls) {
   }
   return out;
 }
-function frame(v, cx) { rec = []; v.render(cx); const c = rec; rec = null; return c; }
 
 test("V3b: the open card's text parts are measured in the probe, and the list uses the measure", async () => {
   const { v, cx } = await pane(fixture("--extra", "2", "--latest", "--commands", "--blocks"));
@@ -3247,7 +3054,7 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
   const key = `0:${latestKey.n}`;
   try {
     for (const zoom of [1, 0.9]) for (const w of [240, 380, 640]) {
-      herdrSettings = { font_family: "Mono", zoom };
+      H.herdrSettings = { font_family: "Mono", zoom };
       v.forcedWidth = w; v.width = w;
       v.meas = new Map(); v.probeTries = new Map();
       v.open = new Set([key]);
@@ -3301,7 +3108,7 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
       expect(rep.zoom).toBe(zoom);
       expect(rep.parts.find((x) => x.startsWith(`rhead:${key} `))).toMatch(/est \d+ · measured: \d+ · slot \d+/);
     }
-  } finally { herdrSettings = { font_family: "Mono" }; }
+  } finally { H.herdrSettings = { font_family: "Mono" }; }
 });
 
 test("V3b: reply, latest and YOU TextViews never scroll; a message over 420 px is cut there with Show all, which a press opens in place", async () => {
@@ -3321,7 +3128,7 @@ test("V3b: reply, latest and YOU TextViews never scroll; a message over 420 px i
   // The 40-line prompt: its first 420 px, cut, no scrolling box, and Show all in the bubble.
   const capped = v.rows().find((r) => r.kind === "you" && v.youMd(r).capped);
   expect(capped).toBeTruthy();
-  const drawn = (r) => { rec = []; v.partContent(theme, r, false); const d = rec; rec = null; return d; };
+  const drawn = (r) => { H.rec = []; v.partContent(theme, r, false); const d = rec; H.rec = null; return d; };
   let d = drawn(capped);
   expect(d.some(([n]) => n === "overflow_y_scrollbar" || n === "overflow_scroll")).toBe(false);
   expect(d.some(([n, a]) => n === "h" && a === 420)).toBe(true);
@@ -3395,7 +3202,7 @@ test("C5: LATEST UPDATE is one wrapped block, clamped to whole lines, with Show 
   v.open = new Set([key]);
   try {
     for (const [zoom, reported] of [[1, 380], [0.9, 342]]) {
-      herdrSettings = { font_family: "Mono", zoom };
+      H.herdrSettings = { font_family: "Mono", zoom };
       v.forcedWidth = null; v.meas = new Map(); v.probeTries = new Map();
       handlerAfterId(frame(v, cx), "threads-root", "on_size_change")({ width: reported, height: 800 }, cx);
       expect(v.width).toBeCloseTo(columnWidth(380), 6);
@@ -3428,7 +3235,7 @@ test("C5: LATEST UPDATE is one wrapped block, clamped to whole lines, with Show 
       expect(v.full.has(`l:${key}`)).toBe(true);
       v.full.clear();
     }
-  } finally { herdrSettings = { font_family: "Mono" }; }
+  } finally { H.herdrSettings = { font_family: "Mono" }; }
 });
 
 // The owner, 18 Nov, on the fourth test build: LATEST UPDATE drew as one flat paragraph (a
@@ -3450,7 +3257,7 @@ test("LATEST UPDATE draws as Markdown with Shorten long messages off, whole and 
   v.prefs = { ...v.prefs, truncate: false };
   let r = lt();
   expect(r.md).toBe(md);
-  rec = []; v.partContent(theme, r, false); let calls = rec; rec = null;
+  H.rec = []; v.partContent(theme, r, false); let calls = rec; H.rec = null;
   expect(calls.some((e) => e[0] === "TextView" && String(e[1]).startsWith(`th-lmd-${r.key}`))).toBe(true);
   expect(strs(calls)).not.toContain("Show all");
   expect(strs(calls)).not.toContain("Show less");
@@ -3468,7 +3275,7 @@ test("LATEST UPDATE draws as Markdown with Shorten long messages off, whole and 
   expect(r.md.endsWith(" …")).toBe(true);
   expect(r.left).toBe(long.trim().length - r.md.replace(/\s*…$/, "").length);
   expect(r.left).toBeGreaterThan(3000);
-  rec = []; v.partContent(theme, r, false); calls = rec; rec = null;
+  H.rec = []; v.partContent(theme, r, false); calls = rec; H.rec = null;
   expect(strs(calls)).toContain(`… ${r.left.toLocaleString()} more characters not shown`);
   // On: the clamped one-block preview, as before, with Show all past 6 lines.
   t.latest = md;
@@ -3480,7 +3287,7 @@ test("LATEST UPDATE draws as Markdown with Shorten long messages off, whole and 
   v.full.add(`l:${key}`);
   r = lt();
   expect(r.md).toBe(md);
-  rec = []; v.partContent(theme, r, false); calls = rec; rec = null;
+  H.rec = []; v.partContent(theme, r, false); calls = rec; H.rec = null;
   expect(strs(calls)).toContain("Show less");
 });
 
@@ -3604,8 +3411,8 @@ test("Turn card: resting the pointer on a line's info icon shows the card, on a 
   const key = `0:${t.n}`;
   v.width = 380;
   v.bodyW = 380;
-  const rowOf = (sel) => { rec = []; v.rowItem(theme, v.rows().find((r) => r.key === key), sel); const c = rec; rec = null; return c; };
-  const partOfLine = (probe = false) => { rec = []; v.partContent(theme, v.rows().find((r) => r.key === `rhead:${key}`), probe); const c = rec; rec = null; return c; };
+  const rowOf = (sel) => { H.rec = []; v.rowItem(theme, v.rows().find((r) => r.key === key), sel); const c = rec; H.rec = null; return c; };
+  const partOfLine = (probe = false) => { H.rec = []; v.partContent(theme, v.rows().find((r) => r.key === `rhead:${key}`), probe); const c = rec; H.rec = null; return c; };
   const hover = (c) => {
     const i = c.findIndex((e) => e[0] === "HoverCard" && e[1] === `th-hover-${key}`);
     return i < 0 ? null : c.slice(i);
@@ -3640,7 +3447,7 @@ test("Turn card: resting the pointer on a line's info icon shows the card, on a 
   v.detailsOpen = false;
   const run = v.rows().find((r) => r.kind === "turn" && (r.running || r.live));
   if (run) {
-    rec = []; v.rowItem(theme, run, false); const rc = rec; rec = null;
+    H.rec = []; v.rowItem(theme, run, false); const rc = rec; H.rec = null;
     expect(rc.some((e) => e[0] === "HoverCard")).toBe(false);
   }
 });
@@ -3652,8 +3459,8 @@ test("Turn card: every settled Worked for line has the info icon, on the selecte
   v.width = 380;
   v.bodyW = 380;
   const right = 16 + Math.min(380 - 32, v.prose());
-  const partOfLine = () => { rec = []; v.partContent(theme, v.rows().find((r) => r.key === `rhead:${key}`), false); const c = rec; rec = null; return c; };
-  const rowOf = () => { rec = []; v.rowItem(theme, v.rows().find((r) => r.key === key), true); const c = rec; rec = null; return c; };
+  const partOfLine = () => { H.rec = []; v.partContent(theme, v.rows().find((r) => r.key === `rhead:${key}`), false); const c = rec; H.rec = null; return c; };
+  const rowOf = () => { H.rec = []; v.rowItem(theme, v.rows().find((r) => r.key === key), true); const c = rec; H.rec = null; return c; };
   const icons = (c) => c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
   // A closed turn: its row's line has the icon, dim, with no fade.
   v.sel = key;
@@ -3690,7 +3497,7 @@ test("Turn card: every settled Worked for line has the info icon, on the selecte
   expect(c.slice(pop).some((e) => e[0] === "anchor" && e[1] === "top_right")).toBe(true);
   expect(c.some((e) => e[0] === "child" && e[1] === `Turn #${t.n}`)).toBe(true);
   // Never in the hidden probe.
-  rec = []; v.partContent(theme, v.rows().find((r) => r.key === `rhead:${key}`), true); const pc = rec; rec = null;
+  H.rec = []; v.partContent(theme, v.rows().find((r) => r.key === `rhead:${key}`), true); const pc = rec; H.rec = null;
   expect(pc.some((e) => e[0] === "Popup")).toBe(false);
   // While open, any press closes it and does nothing else: a press on the words of the line
   // does not open the line.
@@ -3754,7 +3561,7 @@ test("Turn card: i opens it beside the selected turn's line, brings that line on
   expect(i).toBeGreaterThanOrEqual(4);
   {
     expect(v.detailsDir(key, t)).toBe("up");
-    rec = []; v.rowItem(theme, v.rows().find((r) => r.key === key), true); const c = rec; rec = null;
+    H.rec = []; v.rowItem(theme, v.rows().find((r) => r.key === key), true); const c = rec; H.rec = null;
     expect(c.some((e) => e[0] === "anchor" && e[1] === "bottom_right")).toBe(true);
   }
   v.action("escape", cx);
@@ -3808,21 +3615,21 @@ test("the Jump to latest pill, the rail card, the Turn card, the ? sheet and toa
     for (const c of [rest, hover]) expect(c).toMatch(/^#[0-9a-f]{6}$/);
     expect(hover).not.toBe(rest);
     // The pill: the opaque fill, and the opaque hover fill in its hover style.
-    rec = []; v.pillView(th); const pc = rec; rec = null;
+    H.rec = []; v.pillView(th); const pc = rec; H.rec = null;
     expect(pc.some((e) => e[0] === "bg" && e[1] === rest)).toBe(true);
     // The stub applies a hover style as it is described, so its fill is recorded too.
     expect(pc).toContainEqual(["bg", hover]);
     expect(pc.some((e) => e[0] === "bg" && String(e[1]).length === 9)).toBe(false);
     // The ? sheet and a toast.
-    rec = []; v.keySheetView(th); const kc = rec; rec = null;
+    H.rec = []; v.keySheetView(th); const kc = rec; H.rec = null;
     expect(kc.some((e) => e[0] === "bg" && e[1] === rest)).toBe(true);
     v.toast = { text: "x", at: 1 };
-    rec = []; v.toastView(th); const tc = rec; rec = null;
+    H.rec = []; v.toastView(th); const tc = rec; H.rec = null;
     v.toast = null;
     expect(tc.some((e) => e[0] === "bg" && e[1] === rest)).toBe(true);
     // The Turn card, opened by i or the pointer on the info icon.
     const turn = v.current().turns.find((x) => x.done);
-    rec = []; v.detailsCard(th, turn); const dc = rec; rec = null;
+    H.rec = []; v.detailsCard(th, turn); const dc = rec; H.rec = null;
     expect(dc.some((e) => e[0] === "bg" && e[1] === rest)).toBe(true);
     expect(dc.some((e) => e[0] === "bg" && e[1] === th.popover)).toBe(th.popover === rest);
   }
@@ -4021,9 +3828,9 @@ test("pasted images: tiles over the message at any width, decoded on first draw,
   expect(v.open.has(key)).toBe(true);
   expect(overlays).toHaveLength(1);
   // Drawn rows and cards hold image elements with the cached paths.
-  rec = [];
+  H.rec = [];
   v.render(cx);
-  const drawn = rec; rec = null;
+  const drawn = rec; H.rec = null;
   expect(drawn.some(([n]) => n === "size_full")).toBe(true);
 });
 
@@ -4056,9 +3863,9 @@ test("a running turn shows its pasted images, and a tile opens the viewer", asyn
     await new Promise((r) => setTimeout(r, 20));
   }
   expect(v.imgState(last)).toBe("ok");
-  rec = [];
+  H.rec = [];
   draw(v, cx);
-  const drawn = rec; rec = null;
+  const drawn = rec; H.rec = null;
   expect(drawn.some(([n]) => n === "size_full")).toBe(true);
   expect(state.shared["threads.debug"].t4.detail.some((d) => d.startsWith(`wtop#${last.n} tiles 2`))).toBe(true);
   // Selected, it is the working card, still under its tiles, 24 px shorter than one with no tiles.
@@ -4151,7 +3958,7 @@ function fg(pid, cwd, argv = ["claude"]) {
   return JSON.stringify({ foreground: { name: "claude", argv, pid, cwd }, cwd });
 }
 function sharedState(f, terminal) {
-  state = {
+  H.state = {
     terminals: [{ address: "t3b", status: "idle", cwd: f.cwd }, { address: "t3c", status: "idle", cwd: f.cwd }],
     panes: ["t3b", "t3c"].map((t) => ({ pane: `p${t}`, tab: "A", terminal: t, app: "claude-code", cwd: f.cwd, program: { key: "claude", name: "Claude Code" } }))
       .concat([{ pane: "pm", tab: "A", terminal: null, mod: "agent-threads" }]),
@@ -4175,7 +3982,7 @@ test("each terminal in a shared folder binds its own session, whichever file is 
   const f = sharedFolder();
   f.record(5101, SESSION_A);
   f.record(5102, SESSION_B);
-  hcBy = { t3c: fg(5101, f.cwd), t3b: fg(5102, f.cwd) };
+  H.hcBy = { t3c: fg(5101, f.cwd), t3b: fg(5102, f.cwd) };
   const c = sharedState(f, "t3c");
   await looked(c.v);
   expect(c.v.current().file).toEndWith(`${SESSION_A}.jsonl`);
@@ -4191,15 +3998,15 @@ test("each terminal in a shared folder binds its own session, whichever file is 
   await looked(again.v);
   expect(again.v.res.guess).toBe(false);
   expect(shownPrompts(again.v)).toEqual(["Prompt in session A"]);
-  hcBy = {};
-  recordFiles = {};
+  H.hcBy = {};
+  H.recordFiles = {};
 });
 
 test("a resume in the other terminal does not move a pane to its session", async () => {
   const f = sharedFolder();
   f.record(5101, SESSION_A);
   f.record(5102, SESSION_B);
-  hcBy = { t3c: fg(5101, f.cwd), t3b: fg(5102, f.cwd) };
+  H.hcBy = { t3c: fg(5101, f.cwd), t3b: fg(5102, f.cwd) };
   const { v, cx } = sharedState(f, "t3c");
   await looked(v);
   // The other terminal restarts: its old record goes, then a new pid records the same session.
@@ -4218,8 +4025,8 @@ test("a resume in the other terminal does not move a pane to its session", async
   v.resolve(cx);
   await looked(v);
   expect(shownPrompts(v)).toEqual(["Prompt in session A"]);
-  hcBy = {};
-  recordFiles = {};
+  H.hcBy = {};
+  H.recordFiles = {};
 });
 
 // claude attach <id|name> writes no session record: the background session's own record names
@@ -4228,7 +4035,7 @@ test("claude attach binds the claude --bg session its record names", async () =>
   const f = sharedFolder();
   // The background session's record: its process (this one, alive), kind "bg".
   writeFileSync(join(f.home, "sessions", `${process.pid}.json`), JSON.stringify({ pid: process.pid, kind: "bg", sessionId: SESSION_A, name: "Fix the cart", cwd: f.cwd }));
-  hcBy = { t3c: fg(5199, "/tmp/threads-elsewhere", ["claude", "attach", "cart"]) };
+  H.hcBy = { t3c: fg(5199, "/tmp/threads-elsewhere", ["claude", "attach", "cart"]) };
   const c = sharedState(f, "t3c");
   await looked(c.v);
   expect(c.v.current().file).toEndWith(`${SESSION_A}.jsonl`);
@@ -4236,13 +4043,13 @@ test("claude attach binds the claude --bg session its record names", async () =>
   expect(c.v.res.via).toBe("attach");
   expect(c.v.res.tried.some((x) => x.what === "Background session it attached to" && x.ok)).toBe(true);
   // A name no live background session has: no exact bind.
-  hcBy = { t3c: fg(5199, f.cwd, ["claude", "attach", "nothing-like-it"]) };
+  H.hcBy = { t3c: fg(5199, f.cwd, ["claude", "attach", "nothing-like-it"]) };
   const d = sharedState(f, "t3c");
   await looked(d.v);
   expect(d.v.res.via).not.toBe("attach");
   expect(d.v.res.tried.some((x) => x.what === "Background session it attached to" && !x.ok)).toBe(true);
-  hcBy = {};
-  recordFiles = {};
+  H.hcBy = {};
+  H.recordFiles = {};
 });
 
 // Plain codex with Codex's app-server daemon: the daemon holds the rollout, the terminal's
@@ -4262,8 +4069,8 @@ test("plain codex binds the session Codex's daemon holds for its folder", async 
   try {
     await new Promise((r) => setTimeout(r, 400));
     process.env.THREADS_CODEX_DAEMONS = String(daemon.pid);
-    hcBy = { t5: JSON.stringify({ foreground: { name: "codex", argv: ["codex"], pid: client.pid, cwd }, cwd }) };
-    state = {
+    H.hcBy = { t5: JSON.stringify({ foreground: { name: "codex", argv: ["codex"], pid: client.pid, cwd }, cwd }) };
+    H.state = {
       terminals: [{ address: "t5", status: "idle", cwd }],
       panes: [{ pane: "pt5", tab: "A", terminal: "t5", cwd }, { pane: "pm", tab: "A", terminal: null, mod: "agent-threads" }],
       props: { terminal: "t5", debug: true }, shared: {},
@@ -4282,7 +4089,7 @@ test("plain codex binds the session Codex's daemon holds for its folder", async 
     if (keep === undefined) delete process.env.THREADS_CODEX_DAEMONS; else process.env.THREADS_CODEX_DAEMONS = keep;
     client.kill();
     daemon.kill();
-    hcBy = {};
+    H.hcBy = {};
   }
 });
 
@@ -4332,16 +4139,6 @@ test("a row cut off shows Answered in #N, goes there, and search finds the answe
 
 // ---- pins ----
 
-const PINS = join(app, "data/agent-threads/pins.json");
-async function pinPane(...flags) {
-  delete recordFiles[PINS];
-  const { v, cx } = await pane(fixture(...flags));
-  await new Promise((r) => setTimeout(r, 20)); // the first read of pins.json
-  return { v, cx, keys: () => v.turnKeys(v.rows()) };
-}
-const saved = async () => { await new Promise((r) => setTimeout(r, 30)); return JSON.parse(recordFiles[PINS] ?? "{}"); };
-const allPins = (j) => Object.values(j.sessions ?? {}).flatMap((x) => x.pins);
-const toastText = (v) => v.toast?.text ?? null;
 
 test("p pins the selected turn, teaches the return key, and saves; p again unpins and u undoes", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
@@ -4366,828 +4163,6 @@ test("p pins the selected turn, teaches the return key, and saves; p again unpin
   expect(allPins(JSON.parse(recordFiles[PINS])).length).toBe(2);
   expect(v.key(keyEv("u"), cx)).toBeUndefined(); // nothing left to undo, and no error
   draw(v, cx);
-});
-
-test("seven pins are kept and listed, 1 to 7 return to them in order; an eighth is refused, and undo cannot pass the limit", async () => {
-  const { v, cx, keys } = await pinPane("--extra", "10");
-  const k = keys();
-  // Five, then two more.
-  for (let i = 0; i < 5; i++) { v.sel = k[i]; v.action("pin", cx); }
-  for (const i of [5, 6]) { v.sel = k[i]; v.action("pin", cx); }
-  expect(toastText(v)).toMatch(/press 7 to come back$/);
-  expect(v.pinnedList().map((p) => p.key)).toEqual(k.slice(0, 7));
-  expect(allPins(await saved()).length).toBe(7);
-  // Listed: seven compact rows in the Pinned view, numbered 1 to 7.
-  v.width = 400;
-  v.key(keyEv("v"), cx);
-  expect(v.rows().filter((r) => r.kind === "turn").map((r) => r.pinNo)).toEqual([1, 2, 3, 4, 5, 6, 7]);
-  expect(v.headerText()).toBe("7 of 7");
-  v.key(keyEv("v"), cx);
-  // The digits, in order.
-  for (let d = 1; d <= 7; d++) {
-    v.sel = k.at(-1);
-    v.key(keyEv(String(d)), cx);
-    expect(v.sel).toBe(k[d - 1]);
-    if (v.open.has(k[d - 1])) v.toggle(k[d - 1], cx);
-  }
-  // An eighth is refused, in words that say seven.
-  v.sel = k[7];
-  v.action("pin", cx);
-  expect(toastText(v)).toBe("Pins are full (7). Unpin one first.");
-  expect(v.pinnedList().length).toBe(7);
-  expect(v.isPinned(k[7])).toBe(false);
-  v.sel = k[0];
-  v.action("pin", cx);
-  v.sel = k[8];
-  v.action("pin", cx);
-  v.action("undoUnpin", cx);
-  expect(toastText(v)).toBe("Pins are full (7). Unpin one first.");
-  expect(v.pinnedList().length).toBe(7);
-  draw(v, cx);
-});
-
-test("pins saved before seven load unchanged: the same pins, in the same order, and the file is not written again", async () => {
-  const first = await pinPane("--extra", "6");
-  const k = first.keys();
-  for (const i of [4, 0, 2, 5, 1]) { first.v.sel = k[i]; first.v.action("pin", first.cx); }
-  await saved();
-  const text = recordFiles[PINS];
-  const ids = allPins(JSON.parse(text)).map((p) => p.id);
-  expect(ids.length).toBe(5);
-  // A new pane on the same session reads that file.
-  const { v } = await pane(fixture("--extra", "6"));
-  await new Promise((r) => setTimeout(r, 40));
-  expect(v.pinnedList().map((p) => p.pin.id).sort()).toEqual([...ids].sort());
-  expect(v.pinnedList().map((p) => p.key)).toEqual([0, 1, 2, 4, 5].map((i) => k[i]));
-  expect(recordFiles[PINS]).toBe(text);
-});
-
-// The Pinned view with three pins, in this pane (under 480 px), in a list box 700 px tall so
-// they fit. The pointer goes through the list's own handlers (threads-body): a frame is drawn,
-// then the pointer moves to x (unless move is false) and presses there, and the list reports
-// the item pressed (click).
-async function threePins(x) {
-  const { v, cx, k } = await pinsShown(["--extra", "6"], [1, 3, 5]);
-  v.listH = 700;
-  const body = () => { const c = frame(v, cx); return { move: handlerAfterId(c, "threads-body", "on_mouse_move"), down: handlerAfterId(c, "threads-body", "on_mouse_down") }; };
-  // pos false: an event with no window position (only the list's own x). y: the list's y.
-  const ev = (at, pos = true, y = 300) => { const lx = (v.colLeft() + at) * v.zoom(); return { local_position: { x: lx, y }, ...(pos ? { position: { x: lx, y } } : {}), bounds: { width: v.width * v.zoom() }, click_count: 1 }; };
-  const point = (at = x, pos = true) => body().move(ev(at, pos), cx);
-  const press = (key, at = x, { move = true, pos = true, y = 300 } = {}) => { const h = body(); if (move) h.move(ev(at, pos, y), cx); h.down(ev(at, pos, y), cx); v.click(key, cx); };
-  return { v, cx, k, press, point, body, ev, keyOf: (i) => compactPins(v)[i].key };
-}
-// The unpin buttons' layer in a frame: whether it is drawn, and the pins whose row box
-// (th-unpin-row-N) it holds.
-const unpinLayer = (v, cx) => {
-  const c = frame(v, cx);
-  const rows = c.filter((e) => e[0] === "id" && /^th-unpin-row-\d+$/.test(e[1])).map((e) => Number(e[1].slice(13)));
-  return { c, has: c.some((e) => e[0] === "id" && e[1] === "th-unpins"), rows };
-};
-// The pointer comes onto pin n's row (on) or leaves it, as gpui tells the row's box
-// (on_hover). False with no such box or no hover handler on it.
-const hoverRow = (v, cx, n, on = true, c = frame(v, cx)) => {
-  const h = ownOf(c, `th-unpin-row-${n}`).find((e) => e[0] === "on_hover")?.at(-1);
-  if (!h) return false;
-  h(on, cx);
-  return true;
-};
-// The pins whose unpin button the pane draws in a frame: its row box in the plain dim colour.
-const drawnRows = (v, cx) => {
-  const c = frame(v, cx);
-  return unpinLayer(v, cx).rows.filter((n) => ownOf(c, `th-unpin-row-${n}`).some((e) => e[0] === "text_color" && e[1] === theme.dim));
-};
-// Pin n's button's press-down in a frame, as gpui delivers it (it notes whether the button was
-// drawn in that frame). The number of times it stopped the press, or null with no such handler.
-const downButton = (cx, n, c) => {
-  const h = ownOf(c, `th-unpin-${n}`).find((e) => e[0] === "on_mouse_down")?.at(-1);
-  if (!h) return null;
-  let stopped = 0;
-  h({ position: { x: 0, y: 0 }, click_count: 1 }, { ...cx, stop_propagation() { stopped++; } });
-  return stopped;
-};
-// A press on pin n's button as gpui delivers it: its press-down, then its own click. The number
-// of times the click kept the press there (stop_propagation), or null with no such button. The
-// pointer on the button is on its row, so its box is told first (hoverRow) and the pane draws
-// again before the press lands, unless hover is false: a press with the pointer at rest since
-// the last frame. With a frame given, the press lands on that frame as it is.
-const clickButton = (v, cx, n, c = null, { hover = true } = {}) => {
-  if (!c) {
-    c = frame(v, cx);
-    if (hover) { hoverRow(v, cx, n, true, c); c = frame(v, cx); }
-  } else if (hover) hoverRow(v, cx, n, true, c);
-  const h = ownOf(c, `th-unpin-${n}`).find((e) => e[0] === "on_click")?.at(-1);
-  if (!h) return null;
-  downButton(cx, n, c);
-  let stopped = 0;
-  h({ position: { x: 0, y: 0 }, click_count: 1 }, { ...cx, stop_propagation() { stopped++; } });
-  return stopped;
-};
-// Each row's top in the list and its height, by index.
-const rowTops = (v) => { const out = []; let top = 0; for (const r of v.rows()) { const h = v.height(r); out.push({ r, top, h }); top += h; } return out; };
-
-test("the Pinned column: a click on a pin's unpin button unpins it and it leaves the list; the press stays on the button, the turn is not opened or selected, and u puts it back", async () => {
-  const { v, cx, keyOf } = await threePins(390);
-  const [a, b, c] = [0, 1, 2].map(keyOf);
-  v.sel = a;
-  const n = v.findTurn(b).n;
-  expect(clickButton(v, cx, 2)).toBe(1);
-  expect(v.isPinned(b)).toBe(false);
-  expect(compactPins(v).map((r) => r.key)).toEqual([a, c]);
-  expect(v.sel).toBe(a);
-  expect(v.open.has(b)).toBe(false);
-  expect(v.openWait ?? null).toBe(null);
-  cx.flush(1000, 3);
-  expect(v.open.has(b)).toBe(false);
-  expect(v.sel).toBe(a);
-  expect(toastText(v)).toBe(`Unpinned #${n} · u to undo`);
-  v.key(keyEv("u"), cx);
-  expect(compactPins(v).map((r) => r.key)).toEqual([a, b, c]);
-  draw(v, cx);
-});
-
-test("the Pinned column: a press through the list never unpins, wherever it lands; it selects: in the button's column at any height, on the selected pin or another, with or without a move, after a scroll, a narrower list, a banner, a move after the press, a release on another row, or under the key sheet", async () => {
-  const { v, cx, press, body, ev, keyOf } = await threePins(390);
-  const [a, b] = [0, 1].map(keyOf);
-  const mid = v.width - PIN_ROW.UNPIN_R - PIN_ROW.UNPIN / 2;
-  const kept = () => { expect(v.isPinned(a)).toBe(true); expect(v.isPinned(b)).toBe(true); };
-  for (const x of [mid, v.width - PIN_ROW.UNPIN_R - PIN_ROW.UNPIN, v.width - 3]) {
-    for (const y of [120, 300, 330]) {
-      for (const sel of [null, b]) {
-        for (const move of [true, false]) {
-          v.sel = sel;
-          press(b, x, { move, y });
-          kept();
-          expect(v.sel).toBe(b);
-        }
-      }
-    }
-  }
-  // A scroll by key, and another first row drawn: still a selection.
-  v.sel = a;
-  v.key(keyEv("j"), cx);
-  v.sel = null;
-  press(b, mid);
-  kept();
-  listWindow = (n) => ({ start: 1, end: n });
-  try {
-    v.sel = null;
-    press(b, mid);
-    kept();
-  } finally { listWindow = null; }
-  // A wheel, a narrower list and a banner above it: still a selection.
-  v.sel = null;
-  v.listWheel({ delta: { x: 0, y: -40 } });
-  press(b, mid, { move: false });
-  kept();
-  v.sel = null;
-  let h = body();
-  h.move({ ...ev(mid), bounds: { width: (v.width + 20) * v.zoom() } }, cx);
-  h.down({ ...ev(mid), bounds: { width: (v.width - 20) * v.zoom() } }, cx);
-  v.click(b, cx);
-  kept();
-  v.sel = null;
-  h = body();
-  h.move(ev(mid, true, 300), cx);
-  h.down({ ...ev(mid, true, 260), position: ev(mid, true, 300).position }, cx);
-  v.click(b, cx);
-  kept();
-  // A move after the press, and a release on another row.
-  v.sel = null;
-  h = body();
-  h.down(ev(mid), cx);
-  h.move(ev(mid + 0.5), cx);
-  v.click(b, cx);
-  kept();
-  v.sel = null;
-  h = body();
-  h.move(ev(mid), cx);
-  h.down(ev(mid), cx);
-  v.click(a, cx);
-  kept();
-  expect(v.sel).toBe(a);
-  // The key sheet open over the list, with the last press's place left over.
-  v.action("keys", cx);
-  expect(v.keysOpen).toBe(true);
-  v.click(b, cx);
-  kept();
-  v.action("keys", cx);
-});
-
-test("the Pinned column: each closed pin's unpin button is an element of its own over the list, in a box its row's size at its row's place, centred in the row's height and 6 px in from the column's edge: its 24 px box is all that takes the press", async () => {
-  const { v, cx } = await threePins(390);
-  const L = unpinLayer(v, cx);
-  expect(L.has).toBe(true);
-  expect(L.rows).toEqual([1, 2, 3]);
-  // Over the list, in the reading column as the list's items are.
-  const layer = ownOf(L.c, "th-unpins");
-  for (const m of ["absolute", "size_full", "justify_center"]) expect(layer.some((e) => e[0] === m)).toBe(true);
-  expect(layer.some((e) => e[0] === "max_w" && e[1] === v.width)).toBe(true);
-  for (const { r, top, h } of rowTops(v)) {
-    if (r.kind !== "turn") continue;
-    const box = ownOf(L.c, `th-unpin-row-${r.pinNo}`);
-    expect(box).toContainEqual(["top", top]);
-    expect(box).toContainEqual(["h", h]);
-    // The button's place: the row's full height, items centred, UNPIN_R from the right.
-    for (const e of [["absolute"], ["top", 0], ["bottom", 0], ["right", PIN_ROW.UNPIN_R], ["items_center"]]) expect(box).toContainEqual(e);
-    const btn = ownOf(L.c, `th-unpin-${r.pinNo}`);
-    expect(btn).toContainEqual(["size", PIN_ROW.UNPIN]);
-    expect(PIN_ROW.UNPIN).toBe(24);
-    expect(PIN_ROW.UNPIN_R).toBe(6);
-  }
-  // No other element of the layer takes a press or a drag, and the button's press-down only
-  // notes (it stops nothing): a drag that starts on a button, as one on the divider beside the
-  // column can, is not held by it, and the button's click needs the press and the release on it.
-  const takes = (c) => c.filter((e) => /^on_(mouse_down|mouse_up|drag|click|item)/.test(e[0])).map((e) => e[0]);
-  expect(takes(layer)).toEqual([]);
-  expect(takes(ownOf(L.c, "th-unpin-row-2"))).toEqual([]);
-  expect(takes(ownOf(L.c, "th-unpin-2"))).toEqual(["on_mouse_down", "on_click"]);
-  // The list's own item has no button any more: nothing in it takes the press as an unpin.
-  expect(itemWords(v, compactPins(v)[1]).some((e) => e[0] === "id" && e[1] === "th-unpin-2")).toBe(false);
-});
-
-test("the Pinned column: no unpin buttons where a row's place on screen is not known for sure, or where nothing should take the press: a list taller than its box (at the top, at the end, after a wheel past the end), a row the list did not draw last, an open pin, under the key sheet or the settings card, outside the Pinned view; and a button drawn before the sheet opened does nothing under it", async () => {
-  const { v, cx, keyOf } = await threePins(390);
-  expect(unpinLayer(v, cx).rows).toEqual([1, 2, 3]);
-  const total = rowTops(v).reduce((s, x) => s + x.h, 0);
-  // Exactly its box: the list cannot scroll, so each row is where its heights put it.
-  v.listH = total;
-  expect(unpinLayer(v, cx).rows).toEqual([1, 2, 3]);
-  // Taller than its box, so the list scrolls and Herdr gives no read of where it is: none.
-  v.listH = total - 10;
-  v.listOff = 0;
-  expect(unpinLayer(v, cx).has).toBe(false);
-  v.listOff = 10;
-  expect(unpinLayer(v, cx).has).toBe(false);
-  v.listWheel({ delta: { x: 0, y: -5000 } });
-  expect(unpinLayer(v, cx).has).toBe(false);
-  v.listWheel({ delta: { x: 0, y: 5000 } });
-  expect(unpinLayer(v, cx).has).toBe(false);
-  // Not measured yet (a box of 0): none.
-  v.listH = 0;
-  expect(unpinLayer(v, cx).has).toBe(false);
-  v.listH = 700;
-  v.listOff = 0;
-  expect(unpinLayer(v, cx).rows).toEqual([1, 2, 3]);
-  // The list drew only its first two items (the day band and pin 1): pins 2 and 3 have none.
-  // A change in the rows drawn asks for another frame (the 120 ms timer), so the buttons
-  // follow it.
-  listWindow = () => ({ start: 0, end: 2 });
-  try {
-    expect(unpinLayer(v, cx).rows).toEqual([1]);
-  } finally { listWindow = null; }
-  // The day band scrolled off (all three pins still drawn, the list's end still on screen):
-  // only the change in the rows drawn asks for the frame; the same rows again do not.
-  listWindow = (n) => ({ start: 1, end: n });
-  try {
-    frame(v, cx);
-    v.stickyDue = false;
-    frame(v, cx);
-    expect(v.stickyDue).toBe(false);
-  } finally { listWindow = null; }
-  v.stickyDue = false;
-  expect(unpinLayer(v, cx).rows).toEqual([1, 2, 3]);
-  expect(v.stickyDue).toBe(true);
-  expect(unpinLayer(v, cx).rows).toEqual([1, 2, 3]);
-  // An open pin is the full card, with its own pin: no button over it.
-  const k2 = keyOf(1);
-  v.toggle(k2, cx);
-  expect(unpinLayer(v, cx).rows).toEqual([1, 3]);
-  v.toggle(k2, cx);
-  expect(unpinLayer(v, cx).rows).toEqual([1, 2, 3]);
-  // The key sheet and the settings card cover the list: none.
-  v.action("keys", cx);
-  expect(unpinLayer(v, cx).has).toBe(false);
-  v.action("keys", cx);
-  v.settingsOpen = true;
-  expect(unpinLayer(v, cx).has).toBe(false);
-  v.settingsOpen = false;
-  // A button's click from a frame drawn before the sheet opened: nothing.
-  const before = frame(v, cx);
-  v.action("keys", cx);
-  expect(clickButton(v, cx, 2, before)).toBe(1);
-  expect(v.isPinned(k2)).toBe(true);
-  expect(compactPins(v).length).toBe(3);
-  v.action("keys", cx);
-  // The list's own view: none, and a button's click from a frame drawn before it does nothing.
-  const inPinned = frame(v, cx);
-  v.key(keyEv("v"), cx);
-  expect(v.view).not.toBe("pinned");
-  expect(unpinLayer(v, cx).has).toBe(false);
-  expect(clickButton(v, cx, 2, inPinned)).toBe(1);
-  expect(v.isPinned(k2)).toBe(true);
-});
-
-test("the Pinned column: the unpin buttons follow the rows' heights when they change: a pin opened above, a narrower column that wraps the titles, and back", async () => {
-  const { v, cx, keyOf } = await threePins(390);
-  const check = () => {
-    const L = unpinLayer(v, cx);
-    for (const { r, top, h } of rowTops(v)) {
-      if (r.kind !== "turn" || !r.compact) continue;
-      const box = ownOf(L.c, `th-unpin-row-${r.pinNo}`);
-      expect(box).toContainEqual(["top", top]);
-      expect(box).toContainEqual(["h", h]);
-    }
-    return L.rows;
-  };
-  const tops0 = rowTops(v).filter((x) => x.r.kind === "turn").map((x) => x.top);
-  expect(check()).toEqual([1, 2, 3]);
-  const k1 = keyOf(0);
-  v.toggle(k1, cx);
-  expect(check()).toEqual([2, 3]);
-  const tops1 = rowTops(v).filter((x) => x.r.kind === "turn" && x.r.compact).map((x) => x.top);
-  expect(tops1[0]).toBeGreaterThan(tops0[1]);
-  v.toggle(k1, cx);
-  expect(check()).toEqual([1, 2, 3]);
-  v.width = 240;
-  const tops2 = rowTops(v).filter((x) => x.r.kind === "turn").map((x) => x.top);
-  expect(tops2[2]).toBeGreaterThan(tops0[2]);
-  expect(check()).toEqual([1, 2, 3]);
-  v.width = 400;
-  expect(check()).toEqual([1, 2, 3]);
-});
-
-// gpui's click as it reaches the elements under the pointer, topmost first: each one's click
-// runs until one stops it. The handlers given are the on_click ones, top to bottom.
-const clickThrough = (cx, handlers) => {
-  let stopped = false;
-  const scx = { ...cx, stop_propagation() { stopped = true; } };
-  for (const h of handlers) { h({ position: { x: 0, y: 0 }, click_count: 1 }, scx); if (stopped) return true; }
-  return false;
-};
-
-test("the undo notice and the Jump to latest pill take the click: it stops on them, so nothing under them, a pin's button or a row, gets it; the press-down goes on to the pane, so Herdr still focuses it, and no unpin control stops it either", async () => {
-  const { v, cx, keyOf } = await threePins(390);
-  v.sel = keyOf(1);
-  v.key(keyEv("p"), cx);
-  expect(toastText(v)).toMatch(/^Unpinned/);
-  hoverRow(v, cx, 1); // the pointer on pin 1's row, under the notice
-  const c = frame(v, cx);
-  const toast = ownOf(c, "th-toast");
-  expect(toast.some((e) => e[0] === "on_mouse_down")).toBe(false);
-  const click = toast.find((e) => e[0] === "on_click")?.at(-1);
-  expect(typeof click).toBe("function");
-  // A click on the notice over pin 1's button: the notice's click stops it, the button's never runs.
-  const btn = ownOf(c, "th-unpin-1").find((e) => e[0] === "on_click")?.at(-1);
-  expect(typeof btn).toBe("function");
-  // The press-down reaches the button under the notice too (the notice does not stop it).
-  expect(downButton(cx, 1, c)).toBe(0);
-  expect(clickThrough(cx, [click, btn])).toBe(true);
-  expect(v.isPinned(keyOf(0))).toBe(true);
-  // Without the notice the same click reaches the button and unpins (the model is not empty).
-  const k0 = keyOf(0);
-  expect(downButton(cx, 1, c)).toBe(0);
-  expect(clickThrough(cx, [btn])).toBe(true);
-  expect(v.isPinned(k0)).toBe(false);
-  v.key(keyEv("u"), cx);
-  // No unpin control stops the press-down: the rows' buttons only note it, their boxes and the
-  // header's take none.
-  const c2 = frame(v, cx);
-  const ids = c2.filter((e) => e[0] === "id" && /^th-unpin/.test(e[1])).map((e) => e[1]);
-  expect(ids.length).toBeGreaterThan(0);
-  for (const id of ids) {
-    if (/^th-unpin-\d+$/.test(id)) expect(downButton(cx, Number(id.slice(9)), c2)).toBe(0);
-    else expect(ownOf(c2, id).some((e) => e[0] === "on_mouse_down")).toBe(false);
-  }
-  rec = []; v.header(theme); const h = rec; rec = null;
-  expect(ownOf(h, "th-pin").some((e) => e[0] === "on_click")).toBe(true);
-  expect(ownOf(h, "th-pin").some((e) => e[0] === "on_mouse_down")).toBe(false);
-  // The pill, in the list's own view.
-  const p = await pinPane("--extra", "6");
-  listWindow = (n) => ({ start: 0, end: n - 1 }); // the list's end off screen
-  let pill;
-  try {
-    frame(p.v, p.cx);
-    expect(p.v.pillShown()).toBe(true);
-    pill = ownOf(frame(p.v, p.cx), "th-latest-pill");
-  } finally { listWindow = null; }
-  expect(pill.some((e) => e[0] === "on_mouse_down")).toBe(false);
-  let s2 = 0;
-  pill.find((e) => e[0] === "on_click").at(-1)({ position: { x: 0, y: 0 } }, { ...p.cx, stop_propagation() { s2++; } });
-  expect(s2).toBe(1);
-});
-
-test("the Pinned column: a press on a pin anywhere but its unpin control still selects it and keeps the pin", async () => {
-  const { v, cx, press, keyOf } = await threePins(60);
-  const b = keyOf(1);
-  press(b);
-  expect(v.isPinned(b)).toBe(true);
-  expect(v.sel).toBe(b);
-  // Just left of the control, too.
-  const c = keyOf(2);
-  press(c, v.width - PIN_ROW.PAD_X - PIN_ROW.UNPIN - 4);
-  expect(v.isPinned(c)).toBe(true);
-  expect(v.sel).toBe(c);
-  // An open pin is the full card: its own pin does that, not the row's right edge.
-  v.toggle(c, cx);
-  press(c, v.width - 8);
-  expect(v.isPinned(c)).toBe(true);
-  draw(v, cx);
-});
-
-test("the Pinned column: the unpin button is the heading's button, shown while the pointer is on its row and on the selected pin, and the row's text stays put", async () => {
-  const { v, cx, keyOf } = await threePins(390);
-  const rows = compactPins(v);
-  const r = rows[1];
-  v.sel = rows[0].key;
-  const c0 = frame(v, cx);
-  // Clear at rest, with no hover style of gpui's: the pane draws it (pinHover).
-  expect(ownOf(c0, "th-unpin-row-2").filter((e) => e[0] === "text_color").map((e) => e[1])).toEqual(["#00000000"]);
-  expect(ownOf(c0, "th-unpin-row-2").some((e) => e[0] === "hover")).toBe(false);
-  expect(ownOf(c0, "th-unpin-2").some((e) => e[0] === "hover" || e[0] === "cursor_pointer")).toBe(false);
-  hoverRow(v, cx, 2, true, c0);
-  const c = frame(v, cx);
-  const box = ownOf(c, "th-unpin-row-2");
-  const own = ownOf(c, "th-unpin-2");
-  // As the heading's buttons (iconButton): 24 px, radius 5, a 14 px icon, the hover fill and a tooltip.
-  for (const [m, x] of [["size", 24], ["rounded", 5]]) expect(own.some((e) => e[0] === m && e[1] === x)).toBe(true);
-  expect(svgs(own)).toEqual(["pin-off.svg"]);
-  expect(own.some((e) => e[0] === "size" && e[1] === 14)).toBe(true);
-  expect(own.some((e) => e[0] === "bg" && e[1] === theme.hover)).toBe(true);
-  expect(own.some((e) => e[0] === "cursor_pointer")).toBe(true);
-  expect(own.filter((e) => e[0] === "tooltip").map((e) => e[1])).toEqual([`Unpin #${r.turn.n}`]);
-  expect(own.filter((e) => e[0] === "text_color").map((e) => e[1])).toEqual([theme.foreground]); // its own hover
-  // With the pointer on its row, its box is dim, which the button takes, and still has no
-  // hover style of gpui's.
-  expect(box.filter((e) => e[0] === "text_color").map((e) => e[1])).toEqual([theme.dim]);
-  expect(box.some((e) => e[0] === "hover" || e[0] === "bg")).toBe(false);
-  // The selected pin shows it at rest, with p in its tooltip.
-  hoverRow(v, cx, 2, false, c);
-  v.sel = r.key;
-  const c2 = frame(v, cx);
-  expect(ownOf(c2, "th-unpin-row-2").filter((e) => e[0] === "text_color").map((e) => e[1])).toEqual([theme.dim]);
-  expect(ownOf(c2, "th-unpin-2").filter((e) => e[0] === "tooltip").map((e) => e[1])).toEqual([`Unpin #${r.turn.n} (p)`]);
-  // The row keeps its hover fill, and its own text colours: the button is not in it.
-  const rest = itemWords(v, rows[2]);
-  expect(rest.some((e) => e[0] === "id" && /^th-unpin/.test(String(e[1])))).toBe(false);
-  const head = rest.slice(rest.findIndex((e) => e[0] === "px" && e[1] === PIN_ROW.PAD_X));
-  expect(head.some((e) => e[0] === "bg" && e[1] === theme.hover)).toBe(true);
-  expect(head.some((e) => e[0] === "text_color" && e[1] === "#00000000")).toBe(false);
-  // The same layout selected or not, and the text keeps clear of the button: the lines' column
-  // leaves its room, and the prompt is cut for the row's width less that room.
-  const layout = (x) => x.filter((e) => ["px", "pt", "pb", "pr", "pl", "w", "mr", "gap", "absolute", "right", "top", "bottom"].includes(e[0])).map((e) => e.join(" "));
-  v.sel = null;
-  const off = itemWords(v, r);
-  v.sel = r.key;
-  expect(layout(itemWords(v, r))).toEqual(layout(off));
-  expect(off.some((e) => e[0] === "pr" && e[1] === PIN_ROW.UNPIN_ROOM)).toBe(true);
-  const textW = 300 - 2 * PIN_ROW.PAD_X - PIN_ROW.BADGE - PIN_ROW.GAP_X - PIN_ROW.UNPIN_ROOM;
-  const long = pinRowShape({ prompt: "ab ".repeat(200), reply: "cd ".repeat(200), width: 300 });
-  expect(long.prompt[0].length).toBeLessThanOrEqual(Math.floor(textW / ROW.PROMPT_CHAR));
-  expect(long.prompt[0].length).toBeGreaterThan(Math.floor(textW / ROW.PROMPT_CHAR) - 3);
-  expect(long.reply.length).toBeLessThanOrEqual(Math.floor(textW / (ROW.REPLY_CHAR * (PIN_ROW.REPLY_SIZE / 13))) + 1);
-  expect({ prompt: r.shape.prompt, reply: r.shape.reply, height: r.shape.height }).toEqual(pinRowShape({ prompt: pinPromptText(r.turn.prompt), reply: r.shape.reply, width: v.width }));
-  // No Tab stop: the heading's buttons have none either.
-  const focusable = (x) => x.some((e) => ["track_focus", "tab_index", "tab_stop", "focusable"].includes(e[0]));
-  expect(focusable(own)).toBe(false);
-  expect(focusable(box)).toBe(false);
-  void keyOf;
-});
-
-test("in the list, a press at the right edge of a pinned turn's row is a press on the turn: only the Pinned view's rows have the control", async () => {
-  const { v, cx, keys } = await pinPane("--extra", "6");
-  const k = keys()[1];
-  v.sel = k;
-  v.action("pin", cx);
-  v.sel = null;
-  v.pressX = v.width - 8;
-  v.bodyW = v.width;
-  v.click(k, cx);
-  expect(v.isPinned(k)).toBe(true);
-  expect(v.sel).toBe(k);
-});
-
-test("the Pinned column: p on a selected pin still unpins it, and u puts it back", async () => {
-  const { v, cx, keyOf } = await threePins(390);
-  const b = keyOf(1);
-  v.sel = b;
-  v.key(keyEv("p"), cx);
-  expect(v.isPinned(b)).toBe(false);
-  expect(toastText(v)).toMatch(/^Unpinned #\d+ · u to undo$/);
-  v.key(keyEv("u"), cx);
-  expect(v.isPinned(b)).toBe(true);
-});
-
-test("the Pinned column: no unpin buttons while the Turn card is open, with one pin open and the list still fitting; a button drawn before the card opened only closes it, as any press outside the card does", async () => {
-  const { v, cx, keyOf } = await threePins(390);
-  const [a, b] = [0, 1].map(keyOf);
-  v.toggle(a, cx);
-  v.sel = a;
-  expect(unpinLayer(v, cx).rows).toEqual([2, 3]);
-  const before = frame(v, cx);
-  expect(v.action("legend", cx)).toBe(true);
-  expect(v.detailsOpen).toBe(true);
-  // The list still fits its box, so only the card hides the closed pins' buttons.
-  expect(rowTops(v).reduce((s, x) => s + x.h, 0)).toBeLessThanOrEqual(v.listH);
-  expect(unpinLayer(v, cx).has).toBe(false);
-  // The button from the frame before the card: the press closes the card and keeps the pin.
-  expect(clickButton(v, cx, 2, before)).toBe(1);
-  expect(v.detailsOpen).toBe(false);
-  expect(v.isPinned(b)).toBe(true);
-  expect(toastText(v) ?? "").not.toMatch(/^Unpinned/);
-  // Closed again: the buttons are back.
-  expect(unpinLayer(v, cx).rows).toEqual([2, 3]);
-});
-
-test("the Pinned column: the pane draws a row's unpin button while the pointer is on the row (its box's hover) and on the selected pin, in the plain colour; enter and leave in either order; leaving the pane, the layer going or the row opening clears it; a redraw only on a change", async () => {
-  const { v, cx, keyOf } = await threePins(390);
-  const [a, b] = [0, 1].map(keyOf);
-  v.sel = a;
-  let n = 0;
-  const ncx = { ...cx, notify() { n++; } };
-  expect(drawnRows(v, cx)).toEqual([1]);
-  expect(hoverRow(v, ncx, 2)).toBe(true);
-  expect(drawnRows(v, cx)).toEqual([1, 2]);
-  expect(n).toBe(1);
-  hoverRow(v, ncx, 2);
-  expect(n).toBe(1);
-  // Onto row 3 before row 2's leave: row 2's leave does not clear row 3.
-  hoverRow(v, ncx, 3);
-  hoverRow(v, ncx, 2, false);
-  expect(drawnRows(v, cx)).toEqual([1, 3]);
-  expect(n).toBe(2);
-  hoverRow(v, ncx, 3, false);
-  expect(drawnRows(v, cx)).toEqual([1]);
-  expect(n).toBe(3);
-  // A drawn button has the hover fill and the hand; one not drawn has neither.
-  hoverRow(v, cx, 2);
-  const c = frame(v, cx);
-  expect(ownOf(c, "th-unpin-2").some((e) => e[0] === "cursor_pointer")).toBe(true);
-  expect(ownOf(c, "th-unpin-3").some((e) => e[0] === "cursor_pointer" || e[0] === "hover")).toBe(false);
-  // The pointer leaves the pane (the root's hover ends): no row has it.
-  handlerAfterId(c, "threads-root", "on_hover")(false, ncx);
-  expect(drawnRows(v, cx)).toEqual([1]);
-  // The layer goes (a card over the list) and comes back: no row has it.
-  hoverRow(v, cx, 2);
-  v.settingsOpen = true;
-  expect(unpinLayer(v, cx).has).toBe(false);
-  v.settingsOpen = false;
-  expect(drawnRows(v, cx)).toEqual([1]);
-  // Its row opens (no button) and closes: no row has it.
-  hoverRow(v, cx, 2);
-  v.toggle(b, cx);
-  frame(v, cx);
-  v.toggle(b, cx);
-  v.sel = a;
-  expect(drawnRows(v, cx)).toEqual([1]);
-  // The boxes and buttons take no move of their own.
-  const c2 = frame(v, cx);
-  for (const id of c2.filter((e) => e[0] === "id" && /^th-unpin/.test(e[1])).map((e) => e[1])) {
-    expect(ownOf(c2, id).some((e) => e[0] === "on_mouse_move")).toBe(false);
-  }
-});
-
-// The pointer rests on pin 2's row, then something that is not a pointer move happens (go),
-// then a press on the spot: pin 2's button is still drawn and the press unpins it.
-async function restThenPress(go) {
-  const { v, cx, keyOf } = await threePins(390);
-  const [a, b] = [0, 1].map(keyOf);
-  v.sel = a;
-  hoverRow(v, cx, 2);
-  go(v, cx);
-  v.sel = a;
-  expect(drawnRows(v, cx)).toEqual([1, 2]);
-  expect(clickButton(v, cx, 2, frame(v, cx), { hover: false })).toBe(1);
-  expect(v.isPinned(b)).toBe(false);
-  expect(toastText(v)).toMatch(/^Unpinned/);
-}
-
-test("the Pinned column: a key the pane gets (key()) while the pointer rests on a pin's row leaves its button drawn, and a press on it unpins", async () => {
-  await restThenPress((v, cx) => v.key(keyEv("j"), cx));
-});
-
-test("the Pinned column: a mod command (a keys.json binding, command()) while the pointer rests on a pin's row leaves its button drawn, and a press on it unpins", async () => {
-  await restThenPress((v, cx) => v.command("latest", cx));
-});
-
-test("the Pinned column: a key the pane never sees (another pane's, Herdr's own) while the pointer rests on a pin's row leaves its button drawn, and a press on it unpins", async () => {
-  await restThenPress(() => {});
-});
-
-test("the Pinned column: a press on a button the pane did not draw selects its pin and keeps it, and a second press on the spot unpins it; a row that moved under the pointer at rest has no button drawn", async () => {
-  const { v, cx, keyOf } = await threePins(390);
-  const [a, b, c] = [0, 1, 2].map(keyOf);
-  v.sel = a;
-  hoverRow(v, cx, 3);
-  expect(drawnRows(v, cx)).toEqual([1, 3]);
-  // Pin 2's button, not drawn: the press selects pin 2 and keeps it.
-  expect(clickButton(v, cx, 2, frame(v, cx), { hover: false })).toBe(1);
-  expect(v.isPinned(b)).toBe(true);
-  expect(v.sel).toBe(b);
-  expect(toastText(v) ?? "").not.toMatch(/^Unpinned/);
-  // Selected, it is drawn: the next press on the spot unpins it.
-  expect(drawnRows(v, cx)).toContain(2);
-  expect(clickButton(v, cx, 2, frame(v, cx), { hover: false })).toBe(1);
-  expect(v.isPinned(b)).toBe(false);
-  v.key(keyEv("u"), cx);
-  // The pointer on pin 2's row unpins it there; pin 3 moves up under the pointer at rest, with
-  // no enter of its own: no button is drawn on it, and a press there selects it.
-  v.sel = a;
-  expect(clickButton(v, cx, 2)).toBe(1);
-  expect(v.isPinned(b)).toBe(false);
-  expect(compactPins(v)[1].key).toBe(c);
-  expect(drawnRows(v, cx)).toEqual([1]);
-  expect(clickButton(v, cx, 2, frame(v, cx), { hover: false })).toBe(1);
-  expect(v.isPinned(c)).toBe(true);
-  expect(v.sel).toBe(c);
-  // A click whose own press-down the button did not get (another pin's, or none) goes by no
-  // record: it selects, even on a drawn button.
-  v.sel = a;
-  hoverRow(v, cx, 2);
-  const f = frame(v, cx);
-  const click2 = ownOf(f, "th-unpin-2").find((e) => e[0] === "on_click").at(-1);
-  downButton(cx, 1, f);
-  click2({ position: { x: 0, y: 0 }, click_count: 1 }, { ...cx, stop_propagation() {} });
-  expect(v.isPinned(c)).toBe(true);
-  expect(v.sel).toBe(c);
-  v.sel = a;
-  click2({ position: { x: 0, y: 0 }, click_count: 1 }, { ...cx, stop_propagation() {} });
-  expect(v.isPinned(c)).toBe(true);
-  expect(v.sel).toBe(c);
-});
-
-// The rows' heights as the list takes them, with a count of the walks over them (each for...of).
-const walkedSlots = (v) => {
-  const n = { walks: 0 };
-  const slots = new Proxy(v.rows().map((r) => v.height(r)), { get(t, k) { if (k === Symbol.iterator) n.walks++; return Reflect.get(t, k); } });
-  return { slots, n };
-};
-
-test("outside the Pinned view the rows' unpin buttons cost nothing a frame: a long Chat has no button layer, and its rows' heights are not summed for one", async () => {
-  // In the Pinned view (the same pane's switch) the heights are summed: the count sees it.
-  const { v: pv, cx: pcx } = await threePins(390);
-  expect(pv.view).toBe("pinned");
-  frame(pv, pcx); // the rows the list drew
-  const a = walkedSlots(pv);
-  expect(pv.pinButtonRows(pv.rows(), a.slots).length).toBeGreaterThan(0);
-  expect(a.n.walks).toBe(1);
-  // A long Chat, a list taller than its box or not: no buttons, and no walk over its rows.
-  const { v, cx } = await pinPane("--extra", "400");
-  expect(v.view).toBe("all");
-  expect(v.rows().length).toBeGreaterThan(400);
-  for (const listH of [700, 1e9]) {
-    v.listH = listH;
-    const b = walkedSlots(v);
-    expect(v.pinButtonRows(v.rows(), b.slots)).toEqual([]);
-    expect(b.n.walks).toBe(0);
-    expect(unpinLayer(v, cx).has).toBe(false);
-  }
-  // Back from the Pinned view in the same pane, the same.
-  pv.key(keyEv("v"), pcx);
-  expect(pv.view).toBe("all");
-  const c = walkedSlots(pv);
-  expect(pv.pinButtonRows(pv.rows(), c.slots)).toEqual([]);
-  expect(c.n.walks).toBe(0);
-});
-
-// The pointer rests on a row (n), a key moves the rows under it (go), and a press with no move:
-// its press-down lands on the frame drawn after the key, then gpui (back in pointer mode)
-// repaints and the row now under the pointer gets an enter, then the release.
-function pressAfterShift(v, cx, n, go) {
-  hoverRow(v, cx, n);
-  go();
-  const c = frame(v, cx);
-  downButton(cx, n, c);
-  hoverRow(v, cx, n, true, frame(v, cx));
-  // The release lands on the frame gpui draws after that enter.
-  const h = ownOf(frame(v, cx), `th-unpin-${n}`).find((e) => e[0] === "on_click")?.at(-1);
-  let stopped = 0;
-  h({ position: { x: 0, y: 0 }, click_count: 1 }, { ...cx, stop_propagation() { stopped++; } });
-  return stopped;
-}
-
-test("the Pinned column: p unpins the selected pin above a resting pointer and the rows move up: a press there, with no move, selects the pin now under it and keeps it, though the repaint after the press-down gives that row an enter", async () => {
-  const { v, cx, keyOf } = await threePins(390);
-  const [a, b, c] = [0, 1, 2].map(keyOf);
-  v.sel = a;
-  expect(pressAfterShift(v, cx, 2, () => {
-    v.key(keyEv("p"), cx);
-    expect(v.isPinned(a)).toBe(false);
-    // b moved up under no pointer and is still the hovered pin; c is under the pointer.
-    expect(compactPins(v).map((r) => r.key)).toEqual([b, c]);
-    expect(drawnRows(v, cx)).toEqual([1]);
-  })).toBe(1);
-  expect(v.isPinned(c)).toBe(true);
-  expect(v.sel).toBe(c);
-  expect(toastText(v)).toMatch(/^Unpinned #/);
-  expect(v.isPinned(b)).toBe(true);
-});
-
-test("the Pinned column: u puts a pin back above a resting pointer and the rows move down: a press there, with no move, selects the pin now under it and keeps it, though the repaint after the press-down gives that row an enter", async () => {
-  const { v, cx, keyOf } = await threePins(390);
-  const [a, b, c] = [0, 1, 2].map(keyOf);
-  v.sel = a;
-  v.key(keyEv("p"), cx);
-  expect(compactPins(v).map((r) => r.key)).toEqual([b, c]);
-  v.sel = c;
-  expect(pressAfterShift(v, cx, 1, () => {
-    v.key(keyEv("u"), cx);
-    expect(v.isPinned(a)).toBe(true);
-    // a is back under the pointer with no enter of its own; b, still the hovered pin, moved down.
-    expect(compactPins(v).map((r) => r.key)).toEqual([a, b, c]);
-    expect(v.sel).not.toBe(a);
-    expect(drawnRows(v, cx)).not.toContain(1);
-  })).toBe(1);
-  expect(v.isPinned(a)).toBe(true);
-  expect(v.sel).toBe(a);
-  expect(toastText(v) ?? "").not.toMatch(/^Unpinned/);
-});
-
-// The header's unpin button in a frame of the header: its own calls, and its click as gpui
-// delivers it (the number of times it kept the press, or null with no click).
-const headerUnpin = (v, cx) => {
-  rec = []; v.header(theme); const h = rec; rec = null;
-  const own = h.some((e) => e[0] === "id" && e[1] === "th-pin") ? ownOf(h, "th-pin") : null;
-  const click = () => {
-    const f = own?.find((e) => e[0] === "on_click")?.at(-1);
-    if (!f) return null;
-    let stopped = 0;
-    f({ position: { x: 0, y: 0 }, click_count: 1 }, { ...cx, stop_propagation() { stopped++; } });
-    return stopped;
-  };
-  return { own, click, data: v.headerButtons().find((b) => b[0] === "th-pin") ?? null };
-};
-
-test("the Pinned view's header unpin: shown while the Pinned view is up, it unpins the selected pin with one click even while the list scrolls and the rows' buttons hide; with none selected it stays, dimmed and inert", async () => {
-  const { v, cx } = await pinsShown(["--only", "7", "--gap", "86400"], [0, 1, 2, 3, 4, 5, 6], 390);
-  const pins = compactPins(v);
-  expect(pins.map((r) => r.pinNo)).toEqual([1, 2, 3, 4, 5, 6, 7]);
-  // A short window: the list scrolls, so the rows have no unpin buttons.
-  v.listH = 200;
-  expect(unpinLayer(v, cx).has).toBe(false);
-  const [a, b] = [pins[1].key, pins[4].key];
-  v.sel = a;
-  const n = v.findTurn(a).n;
-  let u = headerUnpin(v, cx);
-  expect(u.data.slice(1, 9)).toEqual(["pin-off", `Unpin #${n} (p)`, "unpinSel", false, null, null, false, false]);
-  expect(svgs(u.own)).toEqual(["pin-off.svg"]);
-  expect(u.own.filter((e) => e[0] === "tooltip").map((e) => e[1])).toEqual([`Unpin #${n} (p)`]);
-  expect(u.own.some((e) => e[0] === "cursor_pointer")).toBe(true);
-  expect(u.own.some((e) => e[0] === "opacity")).toBe(false);
-  // Its own unpin, not p's action: a rail card the pointer rests on is not what it unpins.
-  v.railHover = b;
-  v.railShown = () => true;
-  expect(u.click()).toBe(1);
-  expect(v.isPinned(a)).toBe(false);
-  expect(v.isPinned(b)).toBe(true);
-  expect(toastText(v)).toBe(`Unpinned #${n} · u to undo`);
-  v.railHover = null;
-  v.key(keyEv("u"), cx);
-  expect(v.isPinned(a)).toBe(true);
-  // None selected (nothing, a key gone from the list, or a turn that is not a pin): in its
-  // place, dimmed, with no hover fill or pointer, and a press does nothing.
-  for (const sel of [null, "9:9:9", `${pins[0].key.split(":")[0]}:999`]) {
-    v.sel = sel;
-    u = headerUnpin(v, cx);
-    expect(u.data.slice(1, 9)).toEqual(["pin-off", "Select a pin to unpin it (p)", "unpinSel", false, null, null, false, true]);
-    expect(u.own.filter((e) => e[0] === "tooltip").map((e) => e[1])).toEqual(["Select a pin to unpin it (p)"]);
-    expect(u.own.some((e) => e[0] === "opacity")).toBe(true);
-    expect(u.own.some((e) => e[0] === "cursor_pointer")).toBe(false);
-    expect(u.own.some((e) => e[0] === "bg" && e[1] === theme.hover)).toBe(false);
-    v.toast = null;
-    expect(u.click()).toBe(1);
-    expect(compactPins(v).length).toBe(7);
-    expect(toastText(v)).toBe(null);
-  }
-  // Under the settings card or the key sheet it does nothing.
-  v.sel = a;
-  u = headerUnpin(v, cx);
-  for (const open of ["settingsOpen", "keysOpen"]) {
-    v[open] = true;
-    expect(u.click()).toBe(1);
-    expect(v.isPinned(a)).toBe(true);
-    v[open] = false;
-  }
-  // Under the Turn card, a press closes the card and does nothing else, as one in the list does.
-  v.detailsOpen = true;
-  expect(u.click()).toBe(1);
-  expect(v.detailsOpen).toBe(false);
-  expect(v.isPinned(a)).toBe(true);
-  // With p as the quote key, its tooltips name no key.
-  v.quoteKey = "p";
-  expect(headerUnpin(v, cx).data[2]).toBe(`Unpin #${n}`);
-  v.sel = null;
-  expect(headerUnpin(v, cx).data[2]).toBe("Select a pin to unpin it");
-  v.quoteKey = "q";
-  // The Pinned view in the same pane under 300 px keeps its room for the count: no unpin
-  // there (p unpins), and the count in full.
-  v.width = 260;
-  expect(headerUnpin(v, cx).own).toBe(null);
-  expect(v.headerText()).toBe("7 of 7");
-  // The Pinned pane under 300 px keeps it, with the count shortened to fit beside it.
-  v.pinnedPane = true;
-  v.sel = a;
-  for (const width of [240, 260, 299]) {
-    v.width = width;
-    expect(v.headerButtons().map((b) => b[0])).toEqual(["th-pin", "th-pinned"]);
-    expect(v.headerText()).toBe("7/7");
-    expect(headerUnpin(v, cx).click()).toBe(1);
-    expect(v.isPinned(a)).toBe(false);
-    v.key(keyEv("u"), cx);
-    expect(v.isPinned(a)).toBe(true);
-  }
-  v.width = 300;
-  expect(v.headerText()).toBe("7 of 7");
-  v.pinnedPane = false;
 });
 
 test("a digit returns: the turn opens, stays selected, and shows from its head", async () => {
@@ -5610,7 +4585,7 @@ test("with a quote key of p, an open turn's pin pins and the Pinned view's heade
   // In the Pinned view the header's pin button unpins the selected pin with the mouse.
   v.setView("pinned");
   v.sel = a;
-  rec = []; v.header(theme); const h = rec; rec = null;
+  H.rec = []; v.header(theme); const h = rec; H.rec = null;
   const at = h.findIndex((e) => e[0] === "id" && e[1] === "th-pin");
   expect(at).toBeGreaterThanOrEqual(0);
   const end = h.findIndex((e, i) => i > at && e[0] === "id");
@@ -5690,18 +4665,18 @@ test("v in a pane under 480 px shows Pinned in the same pane: pins oldest first,
   const k = keys();
   for (const i of [3, 0, 5]) { v.sel = k[i]; v.action("pin", cx); }
   v.width = 380;
-  log = [];
+  H.log = [];
   v.key(keyEv("v"), cx);
   expect(v.view).toBe("pinned");
   expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
   expect(toastText(v)).toBe("Pinned shows here: the Pinned column needs Threads 480 px wide");
   expect(v.headerText()).toBe("3 of 7");
   // The heading leads: the pin and "Pinned", then the agent badge, then the count.
-  const head = (x) => { rec = []; x.header(theme); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  const head = (x) => { H.rec = []; x.header(theme); const c = rec; H.rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
   const hv = head(v);
   expect(hv.indexOf("Pinned")).toBeGreaterThanOrEqual(0);
   expect(hv.indexOf("Pinned")).toBeLessThan(hv.indexOf("3 of 7"));
-  rec = []; v.header(theme); const ids = rec.filter((e) => e[0] === "id").map((e) => e[1]); rec = null;
+  H.rec = []; v.header(theme); const ids = rec.filter((e) => e[0] === "id").map((e) => e[1]); H.rec = null;
   expect(ids.indexOf("th-pinned-heading")).toBeGreaterThanOrEqual(0);
   expect(ids.indexOf("th-pinned-heading")).toBeLessThan(ids.indexOf("th-badge"));
   expect(v.headerLayout().heading).toBeGreaterThan(0);
@@ -5743,7 +4718,7 @@ test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700,
   draw(v, cx); // no pins yet, so the column does not open by itself
   expect(v.me().pane).toBe("p2");
   expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
-  log = [];
+  H.log = [];
   v.key(keyEv("v"), cx);
   expect(v.view).toBe("all");
   const split = log.find(([, n]) => n === "pane.split");
@@ -5758,7 +4733,7 @@ test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700,
   expect(log.filter(([, n]) => n === "layout.resize" || n === "pane.focus").map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p2", px: 702 }], ["layout.resize", { id: "p3", px: 380 }]]);
   // The header's Pinned button says the column is open, and v or a click focuses it.
   expect(v.headerButtons().find((b) => b[0] === "th-pinned").slice(2, 7)).toEqual(["Go to the Pinned column (v)", "pinned", true, null, "Pinned"]);
-  log = [];
+  H.log = [];
   v.key(keyEv("v"), cx);
   expect(log).toEqual([["run", "pane.focus", { pane: "p3" }]]);
   // The Pinned pane: a second panel with view "pinned", which finds its own pane and shows the pins.
@@ -5797,7 +4772,7 @@ test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700,
   expect(w.headerLayout().text).toBe(240 - 20 - 74 - 32 - 84);
   expect(w.headerLayout().text).toBeGreaterThanOrEqual(Math.ceil("1/7".length * 6.6));
   expect(w.headerLayout().text).toBeLessThan(Math.ceil("1 of 7".length * 6.6));
-  rec = []; w.header(theme); const wh = rec; rec = null;
+  H.rec = []; w.header(theme); const wh = rec; H.rec = null;
   const ws = wh.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
   expect(ws.slice(0, 2)).toEqual(["Pinned", "1/7"]);
   w.width = 320;
@@ -5808,12 +4783,12 @@ test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700,
   // The accent: the header's tint, and its bar along the top.
   expect(wh.some((e) => e[0] === "bg" && e[1] === alphaForTest(theme.accent, 0.08))).toBe(true);
   // Threads itself keeps a plain header.
-  rec = []; w.view = "all"; w.pinnedPane = false; w.header(theme); const plainHead = rec; rec = null; w.view = "pinned"; w.pinnedPane = true;
+  H.rec = []; w.view = "all"; w.pinnedPane = false; w.header(theme); const plainHead = rec; H.rec = null; w.view = "pinned"; w.pinnedPane = true;
   expect(plainHead.some((e) => e[0] === "bg" && e[1] === alphaForTest(theme.accent, 0.08))).toBe(false);
   draw(w, cx2);
   expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
   // v in the Pinned pane goes back to the main pane; Esc does not leave the Pinned view there.
-  log = [];
+  H.log = [];
   w.key(keyEv("v"), cx2);
   expect(log).toEqual([["run", "pane.focus", { pane: "p2" }]]);
   w.key(keyEv("escape"), cx2);
@@ -5821,21 +4796,21 @@ test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700,
   // = and - in the column: the column 40 px wider or narrower and Threads the other way, so
   // the terminal keeps its width (a drag on the divider between them resizes Threads alone).
   state.shared["threads.width"] = { p2: 698, p3: 250 }; // measured: the px sizes less the 2 px frame
-  log = [];
+  H.log = [];
   w.key(keyEv("="), cx2);
   expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 292 }, { id: "p2", px: 660 }]);
-  log = [];
+  H.log = [];
   v.key(keyEv("-"), cx);
   expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 252 }, { id: "p2", px: 700 }]);
   // No cap at the reading width: Threads takes all 40 px however narrow its column is.
   state.shared["threads.width"] = { p2: 543, p3: 290 };
-  log = [];
+  H.log = [];
   v.key(keyEv("-"), cx);
   expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 252 }, { id: "p2", px: 585 }]);
   // The column's footer: the same one row, ? keys last (- and = are on the sheet).
   expect(w.footerHints().map((x) => x.join(" "))).toEqual(["↑↓ next pin", "↵ open", "? keys"]);
   // Threads closes: the column closes too, once.
-  log = [];
+  H.log = [];
   state.panes = state.panes.filter((p) => p.pane !== "p2");
   w.poll(cx2);
   w.poll(cx2);
@@ -5845,16 +4820,6 @@ test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700,
 
 // ---- day headers in the Pinned view ----------------------------------------------------
 
-// Pins the turns at these indexes, in this order, then shows the Pinned view in this pane.
-async function pinsShown(fixtureFlags, order, width = 400) {
-  const { v, cx, keys } = await pinPane(...fixtureFlags);
-  const k = keys();
-  for (const i of order) { v.sel = k[i]; v.action("pin", cx); }
-  v.width = width;
-  v.key(keyEv("v"), cx); // under 480 px, v shows Pinned in this pane
-  expect(v.view).toBe("pinned");
-  return { v, cx, k };
-}
 const headsAndPins = (v) => v.rows().filter((r) => r.kind === "pday" || r.kind === "turn")
   .map((r) => (r.kind === "pday" ? `day ${r.name}` : `pin ${r.pinNo}`));
 
@@ -5970,7 +4935,7 @@ test("Pinned column: the same day headers as the narrow view, drawn as a compact
   v.width = 252; v.rowsKey = null;
   expect(headsAndPins(v)).toEqual(narrow);
   const head = v.rows().find((r) => r.kind === "pday");
-  rec = []; v.item(theme, head, true, 30); const calls = rec; rec = null;
+  H.rec = []; v.item(theme, head, true, 30); const calls = rec; H.rec = null;
   const words = calls.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
   expect(words[0]).toBe(head.name);
   expect(words.join(" ")).not.toMatch(/turn/);
@@ -5983,8 +4948,6 @@ test("Pinned column: the same day headers as the narrow view, drawn as a compact
 // The Pinned column's list at a 1150 px window, measured on a test window (debug listH): the
 // pane is 1032 px, less the header, the footer and the day strip.
 const PIN_LIST_H = 926;
-const compactPins = (v) => v.rows().filter((r) => r.kind === "turn");
-const itemWords = (v, r) => { rec = []; v.item(theme, r, true, v.height(r)); const c = rec; rec = null; return c; };
 
 test("Pinned view: each closed pin is a compact row, its digit, number, time, two prompt lines and one reply line", async () => {
   const { v, cx } = await pinsShown(["--extra", "6"], [7, 3, 5]);
@@ -6134,7 +5097,7 @@ test("the first pin opens the Pinned column when there is room and keeps the key
   v.width = 960;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
   draw(v, cx);
-  log = [];
+  H.log = [];
   v.sel = k[2];
   v.key(keyEv("p"), cx);
   expect(toastText(v)).toMatch(/^Pinned #\d+ · in the Pinned column · press 1 to come back$/);
@@ -6144,14 +5107,14 @@ test("the first pin opens the Pinned column when there is room and keeps the key
   v.key(keyEv("p"), cx);
   expect(log.filter(([, n]) => n === "pane.split").length).toBe(1);
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
-  log = [];
+  H.log = [];
   v.settleSplit();
   expect(log.map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 424 }], ["pane.focus", { pane: "p2" }]]);
   draw(v, cx);
   // The owner closes the column: the next pin does not open it again, and v still does.
   state.panes = state.panes.filter((p) => p.pane !== "p3");
   draw(v, cx);
-  log = [];
+  H.log = [];
   v.sel = k[4];
   v.key(keyEv("p"), cx);
   expect(toastText(v)).toMatch(/^Pinned #\d+ · press 3 to come back$/);
@@ -6180,7 +5143,7 @@ test("the Pinned column keeps the width the owner leaves it at, not the split's 
   col.shareWidth();
   expect(state.shared["threads.pinWidth"]).toEqual({ px: 300 });
   // The next column opens at that width.
-  log = [];
+  H.log = [];
   v.key(keyEv("v"), cx);
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
   v.settleSplit();
@@ -6195,13 +5158,13 @@ test("the Pinned column keeps the width the owner leaves it at, not the split's 
 
 test("Threads opening with pins opens the Pinned column once, from 480 px, and not under it", async () => {
   const first = await pinPane("--extra", "6");
-  log = [];
+  H.log = [];
   first.v.sel = first.keys()[1];
   first.v.action("pin", first.cx); // at 380 px: no column
   expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
   const file = await saved();
   for (const [width, px] of [[479, null], [498, 298]]) {
-    log = [];
+    H.log = [];
     recordFiles[PINS] = JSON.stringify(file);
     const w = new Threads();
     const cx2 = makeCx();
@@ -6387,10 +5350,10 @@ test("a selected turn has no bar on its left: closed, open, or in the outline", 
   draw(v, cx);
   // The bar was a 2 px element down the left edge: absolute, top(0), bottom(0), w(2).
   const bars = () => {
-    rec = [];
+    H.rec = [];
     v.render(cx);
     const c = rec;
-    rec = null;
+    H.rec = null;
     let n = 0;
     for (let i = 1; i < c.length; i++) if (c[i][0] === "w" && c[i][1] === 2 && c[i - 1][0] === "bottom" && c[i - 1][1] === 0) n++;
     return n;
@@ -6408,8 +5371,8 @@ test("a selected turn has no bar on its left: closed, open, or in the outline", 
 
 test("the quiet turn: no meta line over the bubble; the strip under it shows #n and the time on the selected turn, the time on all with alwaysShowTime", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
-  const strings = (el) => { rec = []; el(); const c = rec; rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
-  const calls = (el) => { rec = []; el(); const c = rec; rec = null; return c; };
+  const strings = (el) => { H.rec = []; el(); const c = rec; H.rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
+  const calls = (el) => { H.rec = []; el(); const c = rec; H.rec = null; return c; };
   const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
   const turn = row.turn;
   const time = fmtTimeForTest(turn.ts);
@@ -6476,7 +5439,7 @@ test("the quiet turn: no meta line over the bubble; the strip under it shows #n 
 test("names: none over your message, none over a reply (one agent), who replied in a mixed session, Agent when the session records none", async () => {
   const { v } = await pane(fixture("--extra", "2"));
   const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
-  const drawn = (r) => { rec = []; v.rowItem(theme, r, true); const c = rec; rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
+  const drawn = (r) => { H.rec = []; v.rowItem(theme, r, true); const c = rec; H.rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
   expect(v.current().agentName).toBe("shop-agent");
   // No name over your message (the bubble on the right says it is yours), and none over
   // the reply in a session with one agent.
@@ -6512,7 +5475,7 @@ test("names: none over your message, none over a reply (one agent), who replied 
   // There is no name setting: the settings panel has no name field, and the image viewer
   // heads the user's turn "User".
   v.setSettings(true);
-  rec = []; v.settingsCard(theme); const panel = rec; rec = null;
+  H.rec = []; v.settingsCard(theme); const panel = rec; H.rec = null;
   expect(panel).not.toContainEqual(["child", "Your name"]);
   expect(v.viewerTurn(row.turn).who).toBe("User");
 });
@@ -6522,7 +5485,7 @@ test("an agent message keeps its sender's name over the bubble, and a reply row 
   const { v, cx } = await pane(fixture("--only", "2", "--agents"));
   v.setAgents(true, cx);
   draw(v, cx);
-  const drawn = (r) => { rec = []; v.rowItem(theme, r, true); const c = rec; rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
+  const drawn = (r) => { H.rec = []; v.rowItem(theme, r, true); const c = rec; H.rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
   const msgs = v.rows().filter((r) => r.kind === "turn" && r.turn.agent && r.turn.sender?.name);
   expect(msgs.length).toBeGreaterThan(0);
   for (const r of msgs) expect(drawn(r).some((s) => s.includes(senderLabel(r.turn.sender, v.width)) || s === r.turn.sender.name)).toBe(true);
@@ -6546,7 +5509,7 @@ test("round 6: on macOS, messages and replies take the system face while Herdr's
   const { v } = await pane(fixture("--extra", "2"));
   // Other test files mock "herdr" without window(), and the last mock wins in a full run.
   v.platform = () => hostPlatform;
-  const calls = (fn) => { rec = []; fn(); const c = rec; rec = null; return c; };
+  const calls = (fn) => { H.rec = []; fn(); const c = rec; H.rec = null; return c; };
   const faces = (c) => c.filter((x) => x[0] === "font_family").map((x) => x[1]);
   const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
   const open = () => { v.open = new Set([row.key]); const rows = v.rows(); v.open = new Set(); return rows; };
@@ -6563,15 +5526,15 @@ test("round 6: on macOS, messages and replies take the system face while Herdr's
   const saved = { ...herdrSettings };
   try {
     // Not macOS: Herdr's interface font stays; the reply is still at 86%.
-    hostPlatform = "linux";
+    H.hostPlatform = "linux";
     let d = draw();
     for (const c of Object.values(d)) expect(faces(c)).not.toContain(".SystemUIFont");
     expect(d.md).toContainEqual(["opacity", 0.86]);
     // macOS with Herdr's own Geist (unset or named): the system face on the closed row's
     // bubble and reply, the open message and the open reply.
-    hostPlatform = "macos";
+    H.hostPlatform = "macos";
     for (const ui of [undefined, "Geist"]) {
-      herdrSettings = { ...saved, ui_font: ui };
+      H.herdrSettings = { ...saved, ui_font: ui };
       d = draw();
       for (const c of Object.values(d)) expect(faces(c)).toContain(".SystemUIFont");
       expect(d.md).toContainEqual(["opacity", 0.86]);
@@ -6579,18 +5542,18 @@ test("round 6: on macOS, messages and replies take the system face while Herdr's
       expect(d.you).not.toContainEqual(["opacity", 0.86]);
     }
     // A font the person set is followed: no face of ours.
-    herdrSettings = { ...saved, ui_font: "Inter" };
+    H.herdrSettings = { ...saved, ui_font: "Inter" };
     d = draw();
     for (const c of Object.values(d)) expect(faces(c)).not.toContain(".SystemUIFont");
   } finally {
-    herdrSettings = saved;
-    hostPlatform = "linux";
+    H.herdrSettings = saved;
+    H.hostPlatform = "linux";
   }
 });
 
 test("reading type: message and reply text at the Text size on 1.57 lines, a reading line wide at 960 px, labels unchanged", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
-  const calls = (fn) => { rec = []; fn(); const c = rec; rec = null; return c; };
+  const calls = (fn) => { H.rec = []; fn(); const c = rec; H.rec = null; return c; };
   const sizes = (c) => c.filter((x) => x[0] === "text_size").map((x) => x[1]);
   v.forcedWidth = 960; v.width = 960;
   const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
@@ -6632,7 +5595,7 @@ test("Cmd-Shift-T opens Threads at its step's width: a wider pane shrinks to it 
     state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
     state.shared["threads.fit"] = { p2: true, p9: true };
     v.paneW = measured;
-    log = [];
+    H.log = [];
     v.poll(cx);
     v.poll(cx);
     const resized = log.filter(([, n]) => n === "layout.resize").map((x) => x[2]);
@@ -6648,7 +5611,7 @@ test("Cmd-Shift-T opens Threads at its step's width: a wider pane shrinks to it 
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
   for (const w of [900, 960, 1400, 600]) {
     v.paneW = w;
-    log = [];
+    H.log = [];
     v.poll(cx);
     v.poll(cx);
     expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
@@ -6658,7 +5621,7 @@ test("Cmd-Shift-T opens Threads at its step's width: a wider pane shrinks to it 
   draw(v, cx);
   expect(v.chars()).toBe(120);
   expect(v.headerButtons().map((b) => b[0])).toContain("th-fit");
-  log = [];
+  H.log = [];
   v.key(keyEv("w"), cx);
   expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 902 }]);
   v.paneW = 900;
@@ -6668,7 +5631,7 @@ test("Cmd-Shift-T opens Threads at its step's width: a wider pane shrinks to it 
   v.paneW = 798;
   draw(v, cx);
   expect(v.headerButtons().map((b) => b[0])).toContain("th-fit");
-  log = [];
+  H.log = [];
   v.key(keyEv("w"), cx);
   expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 704 }]);
 });
@@ -6704,7 +5667,7 @@ async function colPane(px) {
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
   const at = (w) => { v.paneW = w - 2; v.sizeAt = Date.now() - 1000; draw(v, cx); };
   at(px);
-  log = [];
+  H.log = [];
   return { v, cx, at };
 }
 // The characters a line holds: the text's px over the width readType gives a character.
@@ -6826,11 +5789,11 @@ test("scenario: a 500 px pane wraps the text to its own width with 24 px each si
   expect(v.side()).toBe(24);
   expect(v.colLeft() + v.width).toBeLessThanOrEqual(v.pw());
   // Every list item fits the column: none is wider than the pane.
-  rec = [];
+  H.rec = [];
   const rows = v.rows();
   v.listItems(theme, rows, rows.map(() => 400), { start: 0, end: rows.length }, true, false);
   const ws = rec.filter((e) => e[0] === "w" || e[0] === "max_w").map((e) => e[1]).filter((x) => typeof x === "number");
-  rec = null;
+  H.rec = null;
   expect(Math.max(...ws)).toBeLessThanOrEqual(v.pw());
   // No pane resize asked: no snap-back at any width.
   for (const w of [480, 520, 560]) { v.paneW = w; v.poll(cx); }
@@ -6853,7 +5816,7 @@ test("scenario: a settings file with the old width and keep-width switch opens w
   const shiftW = keyEv("w", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } });
   const before = [lineChars(v), v.width, JSON.stringify(v.prefs)];
   v.toast = null;
-  log = [];
+  H.log = [];
   v.key(shiftW, cx);
   v.key(keyEv("W"), cx);
   draw(v, cx);
@@ -6901,7 +5864,7 @@ async function weightPane(prefs, paneW = 700) {
   v.fitColumn();
   // The fixture has pins: the column would open by itself (its split never comes here).
   v.pinAutoDone = true;
-  log = [];
+  H.log = [];
   return { v, cx };
 }
 
@@ -6942,7 +5905,7 @@ test("toWeight puts the main Threads pane on a weight that keeps its width: weig
   expect(Math.abs(v.paneW - 560)).toBeLessThanOrEqual(1);
   expect(v.weighing).toBe(null);
   // At its weight now: asked again, nothing.
-  log = [];
+  H.log = [];
   v.toWeight();
   expect(resized()).toEqual([]);
   // The window 450 px wider: the pane at its weight grows with it, and nothing asks it back.
@@ -7221,7 +6184,7 @@ test("a drag past the step's width on a weight: no snap-back, no new weight, the
   expect(v.weighing).toBe(null);
   const w = v.weightNow;
   expect(w).toBeGreaterThan(0);
-  log = [];
+  H.log = [];
   // 1100 is past 902, the widest step's width; 650 is under 704; then 980. Each still past
   // the 1.2 s pause, polled and drawn.
   for (const [px, step] of [[1100, 120], [650, 70], [980, 120]]) {
@@ -7261,7 +6224,7 @@ test("a weight probe whose answer lands past the step's width asks only weights:
 test("the Width setting's old actions resize nothing: no width choice, Shift w or keep-width switch sizes the pane", async () => {
   const { v, cx } = await weightPane({}, 1100);
   for (const a of ["widthStep", "keepWidth", "width:wide", "width:comfortable", "width:full"]) {
-    log = [];
+    H.log = [];
     v.action(a, cx);
     v.poll(cx);
     expect(resized()).toEqual([]);
@@ -7354,7 +6317,7 @@ test("the Pinned column opened mid-probe keeps the width the probe keeps; a pane
   v.toWeight();
   // The trial weight laid it out 650 wide; 702 is the width being kept.
   v.paneW = 650;
-  log = [];
+  H.log = [];
   v.openPinned(cx);
   expect(resized()).toEqual([{ id: "p2", px: 702 }]);
   expect(v.weighing).toBe(null);
@@ -7424,10 +6387,10 @@ test("the sticky day: the day of the item at the top of the pane, in its own str
   // The drawn pane carries it while the person scrolls (the floating top's pill).
   v.topKey = inside.key;
   v.scrollSeenAt = Date.now();
-  rec = [];
+  H.rec = [];
   v.render(cx);
   const ids = rec.filter(([n]) => n === "id").map(([, x]) => x);
-  rec = null;
+  H.rec = null;
   expect(ids).toContain("th-sticky-day");
 });
 
@@ -7450,11 +6413,11 @@ test("a done turn during a background wake-up keeps its reply, with an Updating 
   expect(rows[last].kind).toBe("turn");
   expect(rows[last + 1].kind).toBe("wake");
   expect(v.height(rows[last + 1])).toBe(24);
-  rec = []; v.item(theme, rows[last + 1], false, 13); const wake = rec; rec = null;
+  H.rec = []; v.item(theme, rows[last + 1], false, 13); const wake = rec; H.rec = null;
   const text = wake.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" ");
   expect(text).toMatch(/^Updating · 1:3\d · 3 tool calls · Checking the job's output\.$/);
   // The turn's own row still has its reply, and nothing on screen says "no reply yet".
-  rec = []; v.rowItem(theme, rows[last], false); const row = rec; rec = null;
+  H.rec = []; v.rowItem(theme, rows[last], false); const row = rec; H.rec = null;
   expect(JSON.stringify(row)).not.toContain("no reply yet");
   expect(v.liveShown).toBe(true);
   draw(v, cx);
@@ -7498,7 +6461,7 @@ test("a reply longer than Herdr draws in one Markdown view opens whole: list ite
   expect(v.mdBroken.has(last.key)).toBe(true);
   expect(v.rowDetail(last)).toMatch(/ plain /);
   mdSources.length = 0;
-  rec = []; v.partContent(theme, last, false); const plain = rec; rec = null;
+  H.rec = []; v.partContent(theme, last, false); const plain = rec; H.rec = null;
   expect(mdSources.length).toBe(0);
   const text = plain.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" ");
   expect(text).toContain("Herdr could not draw this part as Markdown, so it shows as plain text.");
@@ -7559,7 +6522,7 @@ test("a 10,000-word reply with no code fence opens whole as Markdown, lands on i
   // It ends in a quiet Collapse (Esc) row, with nothing left out.
   const fold = rows.find((r) => r.kind === "fold");
   expect(fold).toMatchObject({ key: `fold:${key}`, left: 0 });
-  rec = []; v.partContent(theme, fold, false); const ft = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); rec = null;
+  H.rec = []; v.partContent(theme, fold, false); const ft = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); H.rec = null;
   expect(ft).toEqual(["Collapse", "Esc"]);
   // Opening lands on the turn's head: the card's end first, then its head at the top.
   const head = rows.findIndex((r) => r.key === key);
@@ -7595,7 +6558,7 @@ test("an open reply past 200,000 characters stops there and says how much is lef
   const fold = rows.find((r) => r.kind === "fold");
   // What the cap leaves out: the reply past 200,000 characters, give or take the cut at a word.
   expect(Math.abs(fold.left - (reply(turn).length - 200000))).toBeLessThan(400);
-  rec = []; v.partContent(theme, fold, false); const ft = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); rec = null;
+  H.rec = []; v.partContent(theme, fold, false); const ft = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); H.rec = null;
   expect(ft[0]).toBe(`${fold.left.toLocaleString()} more characters are left out here. c copies the whole reply.`);
   expect(v.height(fold)).toBe(8 + 26 + 18);
   // A short reply: nothing after it but the stats.
@@ -7607,8 +6570,8 @@ test("an open reply past 200,000 characters stops there and says how much is lef
 });
 test("an Amp terminal: Amp isn't supported, why in one line, and a button to the README section", async () => {
   const { UNREAD } = await import("../mods/agent-threads/harness.js");
-  hcOut = JSON.stringify({ foreground: { name: "amp", argv: ["amp"], pid: 77 } });
-  state = {
+  H.hcOut = JSON.stringify({ foreground: { name: "amp", argv: ["amp"], pid: 77 } });
+  H.state = {
     terminals: [{ address: "t4", status: "idle", name: "amp" }],
     panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "amp", name: "Amp", agent: true } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
     props: { terminal: "t4", debug: true }, shared: {},
@@ -7617,10 +6580,10 @@ test("an Amp terminal: Amp isn't supported, why in one line, and a button to the
   const cx = makeCx();
   v.init(state.props, cx);
   for (let i = 0; i < 200 && v.res?.kind !== "unsupported"; i++) await new Promise((r) => setTimeout(r, 25));
-  hcOut = JSON.stringify({ foreground: { name: "claude", argv: ["claude"], pid: 42 } });
+  H.hcOut = JSON.stringify({ foreground: { name: "claude", argv: ["claude"], pid: 42 } });
   expect(v.res).toMatchObject({ kind: "unsupported", name: "Amp", key: "amp" });
   expect(v.headerText()).toBe("Not readable");
-  rec = []; v.body(theme, true, cx); const drawn = rec; rec = null;
+  H.rec = []; v.body(theme, true, cx); const drawn = rec; H.rec = null;
   const strings = drawn.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
   expect(strings).toEqual(expect.arrayContaining(["Amp isn't supported", UNREAD.amp.why, "Why Amp isn't supported"]));
   // Amp is not offered among the agents Threads reads.
@@ -7628,7 +6591,7 @@ test("an Amp terminal: Amp isn't supported, why in one line, and a button to the
   // The button opens the README section, and does nothing else.
   const at = drawn.findIndex((e) => e[0] === "id" && e[1] === "th-why-unread");
   const click = drawn.slice(at).find((e) => e[0] === "on_click")[1];
-  log = [];
+  H.log = [];
   click({}, cx);
   await new Promise((r) => setTimeout(r, 10));
   expect(log).toEqual([["open", "https://github.com/ryanrozich/herdr-agent-threads#why-amp-isnt-supported"]]);
@@ -7651,7 +6614,7 @@ const VIEW_TURN = {
   stats: "58s · 7.9k tokens · opus 5.5 · 3 tool calls", size: 14, fill: "#47648F", outline: false, ink: "#ffffff", sub: "#dce3ee",
 };
 function viewer(over = {}) {
-  state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov7", gallery: { title: "#4", at: 1, panel: true, turn: VIEW_TURN, images: [
+  H.state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov7", gallery: { title: "#4", at: 1, panel: true, turn: VIEW_TURN, images: [
     { path: "data/agent-threads/images/f/a-0.png", w: 2000, h: 1247, n: 41 },
     { path: "data/agent-threads/images/f/a-1.png", w: 300, h: 600, n: 42 },
     { path: "data/agent-threads/images/f/a-2.png", w: 0, h: 0, n: 43 },
@@ -7659,7 +6622,7 @@ function viewer(over = {}) {
   const g = new Threads();
   const cx = makeCx();
   g.init(state.props, cx);
-  const calls = () => { rec = []; g.render(cx); const r = rec; rec = null; return r; };
+  const calls = () => { H.rec = []; g.render(cx); const r = rec; H.rec = null; return r; };
   const text = () => calls().filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" | ");
   return { g, cx, calls, text, size: (width, height) => handlerAfterId(calls(), "th-gallery", "on_size_change")({ width, height }, cx) };
 }
@@ -7940,14 +6903,14 @@ test("the list's day pill floats over the top while scrolling and goes 1.5 s aft
   const rows = v.rows();
   expect(rows.some((r) => r.kind === "day")).toBe(true);
   const idsOf = (calls) => calls.filter((e) => e[0] === "id").map((e) => e[1]);
-  rec = []; draw(v, cx); let calls = rec; rec = null;
+  H.rec = []; draw(v, cx); let calls = rec; H.rec = null;
   // No strip above the list: the list's box is the first thing under the root.
   expect(idsOf(calls)).not.toContain("th-day-strip");
   // Scrolled into a day: the pill shows only while the person scrolls.
   const inDay = rows.find((r, i) => i > 0 && rows[i - 1].kind !== "day" && r.kind !== "day" && rows[i + 1]?.kind !== "day" && rows.slice(0, i).some((x) => x.kind === "day"));
   v.topKey = inDay.key;
   expect(v.stickyDay()).not.toBe(null);
-  rec = []; draw(v, cx); calls = rec; rec = null;
+  H.rec = []; draw(v, cx); calls = rec; H.rec = null;
   expect(idsOf(calls)).not.toContain("th-sticky-day");
   v.topKey = inDay.key;
   v.listWheel({ delta: { y: 40 } });
@@ -7955,7 +6918,7 @@ test("the list's day pill floats over the top while scrolling and goes 1.5 s aft
   // (The stub list draws every item, which moves topKey to the first; the pane reads the day
   // before the list draws.)
   v.topKey = inDay.key;
-  rec = []; draw(v, cx); calls = rec; rec = null;
+  H.rec = []; draw(v, cx); calls = rec; H.rec = null;
   const ids = idsOf(calls);
   // In the floating top, drawn after the list's box, so it sits over the list.
   expect(ids.indexOf("th-sticky-day")).toBeGreaterThan(ids.indexOf("threads-listbox"));
@@ -7975,7 +6938,7 @@ test("a pinned turn shows its pin number at the end of its line, as in the Pinne
   const k = keys();
   for (const i of [3, 1]) { v.sel = k[i]; v.action("pin", cx); }
   v.width = 545;
-  const texts = (r) => { rec = []; v.item(theme, r, true, 200); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  const texts = (r) => { H.rec = []; v.item(theme, r, true, 200); const c = rec; H.rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
   const row = (key) => v.rows().find((r) => r.key === key && r.kind === "turn");
   // Pinned 3 then 1: numbered oldest first, so the list shows 1 and 2 beside the pin, like the column.
   expect(v.pinNumber(row(k[1]).turn)).toBe(1);
@@ -7986,7 +6949,7 @@ test("a pinned turn shows its pin number at the end of its line, as in the Pinne
   // The open turn's line carries it too, and unpinning drops it.
   v.toggle(k[1], cx);
   const line = v.rows().find((r) => r.kind === "rhead" && r.key === `rhead:${k[1]}`);
-  rec = []; v.partContent(theme, line, false); const hs = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); rec = null;
+  H.rec = []; v.partContent(theme, line, false); const hs = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); H.rec = null;
   expect(hs).toContain("1");
   expect(v.lineText(line.turn)).toContain("[pin 1]");
   // Unpinning the first renumbers the other.
@@ -7999,9 +6962,9 @@ test("a pinned turn shows its pin number at the end of its line, as in the Pinne
 test("the first-run notice and the unsupported note name every agent Threads reads, Antigravity included", async () => {
   const g = new Threads();
   const cx = makeCx();
-  state = { terminals: [], panes: [{ pane: "p9", tab: "A", terminal: null }], props: { overlay: "ov9" }, shared: {} };
-  focusNow = { pane: "p9" };
-  log = [];
+  H.state = { terminals: [], panes: [{ pane: "p9", tab: "A", terminal: null }], props: { overlay: "ov9" }, shared: {} };
+  H.focusNow = { pane: "p9" };
+  H.log = [];
   g.init(state.props, cx);
   cx.flush(10);
   const n = log.find((x) => x[0] === "notify")?.[1];
@@ -8017,8 +6980,8 @@ test("the header shows the agent's state beside the badge: Working, Needs you, D
   const { v, cx } = await pane(fixture("--only", "3"));
   v.width = 545;
   const word = () => v.agentStateNow()?.word ?? null;
-  const ids = () => { rec = []; v.header(theme); const c = rec; rec = null; return c.filter((e) => e[0] === "id").map((e) => e[1]); };
-  const strs = () => { rec = []; v.header(theme); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  const ids = () => { H.rec = []; v.header(theme); const c = rec; H.rec = null; return c.filter((e) => e[0] === "id").map((e) => e[1]); };
+  const strs = () => { H.rec = []; v.header(theme); const c = rec; H.rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
   // Claude Code reports its status to Herdr.
   expect(v.current().turns.at(-1).done).toBe(true);
   state.terminals[0].status = "idle";
@@ -8066,7 +7029,7 @@ test("a click on the header's state goes to the terminal as t does, and its tool
   v.width = 545;
   state.terminals[0].status = "blocked";
   expect(v.agentStateNow().word).toBe("Needs you");
-  const head = () => { rec = []; v.header(theme); const c = rec; rec = null; return c; };
+  const head = () => { H.rec = []; v.header(theme); const c = rec; H.rec = null; return c; };
   // The handler and tooltip a chain set after .id(id), before the next element's id.
   const after = (calls, id, name) => {
     const at = calls.findIndex((e) => e[0] === "id" && e[1] === id);
@@ -8084,7 +7047,7 @@ test("a click on the header's state goes to the terminal as t does, and its tool
   expect(h.slice(h.findIndex((e) => e[0] === "id" && e[1] === "th-state")).slice(0, 14).some((e) => e[0] === "cursor_pointer")).toBe(true);
   const click = chip(h, "on_click");
   expect(typeof click).toBe("function");
-  log = [];
+  H.log = [];
   v.lastFocus = null;
   click({}, cx);
   expect(log.filter((e) => e[1] === "pane.focus")).toEqual([["run", "pane.focus", { pane: "p1" }]]);
@@ -8103,7 +7066,7 @@ test("a click on the header's state goes to the terminal as t does, and its tool
   expect(v.badgeTip()).toMatch(/^Needs you: Claude is waiting for you in the terminal · click to go to the terminal \(t\) · Reading t4/);
   const badgeClick = after(h, "th-badge", "on_click");
   expect(typeof badgeClick).toBe("function");
-  log = [];
+  H.log = [];
   badgeClick({}, cx);
   expect(log.filter((e) => e[1] === "pane.focus")).toEqual([["run", "pane.focus", { pane: "p1" }]]);
   // With no state to show, the badge is only its tooltip.
@@ -8120,7 +7083,7 @@ test("the list's header has no pin button, so the session's title gets its room;
   for (const width of [260, 300, 380, 440, 545, 640]) {
     v.width = width;
     expect(v.headerButtons().map((b) => b[0])).not.toContain("th-pin");
-    rec = []; v.header(theme); const h = rec; rec = null;
+    H.rec = []; v.header(theme); const h = rec; H.rec = null;
     expect(h.some((e) => e[0] === "id" && e[1] === "th-pin")).toBe(false);
     draw(v, cx);
     expect(state.shared["threads.debug"].t4.headerButtons.some((b) => b.startsWith("th-pin|") || b.startsWith("th-pin:"))).toBe(false);
@@ -8160,11 +7123,6 @@ function grownFixture() {
   return { file, rest: `${lines.slice(cut).join("\n")}\n` };
 }
 
-// The list as gpui draws it with only the rows from start to end on screen.
-function drawRange(v, start, end) {
-  const rows = v.rows();
-  v.listItems(theme, rows, v.slotsMemo ?? rows.map(() => 40), { start, end: end ?? rows.length }, true, false);
-}
 
 test("mdParts keeps the texts used last: a long reply on screen is not split again while the probe walks hundreds of others", async () => {
   const { v } = await pane(fixture());
@@ -8407,12 +7365,6 @@ test("the jump to the newest turn goes to the end every frame while the rows set
 });
 
 const rowSig = (v) => v.baseRows.map((r, i) => `${r.kind}|${r.key}|${r.count ?? ""}|${v.baseSizes[i]}`);
-// Drops the queued timers and the marks that say a frame is queued: a timer dropped with its
-// mark still set would never be asked for again, and the rows would stop where they are.
-function dropTimers(v, cx) { cx.timers = []; v.shapeNext = false; v.buildNext = false; v.probeNext = false; }
-// Draws until the rows are built and shaped. Rows left waiting are reshaped in the frame the
-// 0 ms timer asks for (reshapeDue), as Herdr runs it: a draw alone never takes them up.
-function settleRows(v, cx) { draw(v, cx); for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || v.shapeLeft > 0); k++) { cx.flush(0); draw(v, cx); } }
 
 test("a long session's rows are built over several frames, the old rows shown till then, and come out as one build would make them", async () => {
   const { v, cx } = await longSession(450);
@@ -8447,10 +7399,10 @@ test("a width that changes while the pane is resized keeps the column until the 
   // Its last full re-wrap was slow (HOLD_WORK_MS): the column is held.
   v.rewrapMs = 400;
   const size = (w) => {
-    rec = [];
+    H.rec = [];
     v.render(cx);
     const calls = rec;
-    rec = null;
+    H.rec = null;
     handlerAfterId(calls, "threads-root", "on_size_change")({ width: w, height: 800 }, cx);
   };
   const col = (w) => columnWidth(w, v.prefs.textSize, v.chars());
@@ -8492,10 +7444,10 @@ test("a second drag holds the column too: the draw asked for once the pane is st
   v.debug = false;
   v.rewrapMs = 400;
   const size = (w) => {
-    rec = [];
+    H.rec = [];
     v.render(cx);
     const calls = rec;
-    rec = null;
+    H.rec = null;
     handlerAfterId(calls, "threads-root", "on_size_change")({ width: w, height: 800 }, cx);
   };
   const col = (w) => columnWidth(w, v.prefs.textSize, v.chars());
@@ -8543,10 +7495,10 @@ test("the hold is for a conversation whose last full re-wrap took over 150 ms, o
   const { v, cx } = await longSession(60);
   v.debug = false;
   const size = (w) => {
-    rec = [];
+    H.rec = [];
     v.render(cx);
     const calls = rec;
-    rec = null;
+    H.rec = null;
     handlerAfterId(calls, "threads-root", "on_size_change")({ width: w, height: 800 }, cx);
     draw(v, cx);
   };
@@ -8859,7 +7811,7 @@ test("the Jump to latest pill floats while the end of the list is off screen, wi
   const { v, cx } = await pane(file);
   expect(v.current().turns.length).toBe(2);
   v.width = 380;
-  const pillIds = () => { rec = []; v.pillView(theme); const ids = rec.filter((e) => e[0] === "id").map((e) => e[1]); rec = null; return ids; };
+  const pillIds = () => { H.rec = []; v.pillView(theme); const ids = rec.filter((e) => e[0] === "id").map((e) => e[1]); H.rec = null; return ids; };
   // Reading the first turn, with the old last row still in view (as on the rig): no pill.
   v.sel = v.turnKeys(v.rows())[0];
   v.follow = false;
@@ -8878,10 +7830,10 @@ test("the Jump to latest pill floats while the end of the list is off screen, wi
   // The end is off screen: the pill shows, with its dot, and the toast sits above it.
   expect(v.pillShown()).toBe(true);
   expect(pillIds()).toEqual(expect.arrayContaining(["th-latest-pill", "th-latest-pill-dot"]));
-  rec = []; v.pillView(theme); const tip = rec.find((e) => e[0] === "tooltip")?.[1]; rec = null;
+  H.rec = []; v.pillView(theme); const tip = rec.find((e) => e[0] === "tooltip")?.[1]; H.rec = null;
   expect(tip).toBe("New below · jump to latest (End)");
   // Left to right: the dot, a down arrow, then the label.
-  rec = []; v.pillView(theme); const order = rec; rec = null;
+  H.rec = []; v.pillView(theme); const order = rec; H.rec = null;
   const at = (f) => order.findIndex(f);
   const dotAt = at((e) => e[0] === "id" && e[1] === "th-latest-pill-dot");
   const arrowAt = at((e) => e[0] === "svg" && String(e[1]).endsWith("/arrow-down.svg"));
@@ -8890,10 +7842,10 @@ test("the Jump to latest pill floats while the end of the list is off screen, wi
   expect(arrowAt).toBeGreaterThan(dotAt);
   expect(labelAt).toBeGreaterThan(arrowAt);
   v.toast = { text: "x", at: 1 };
-  rec = []; v.toastView(theme); const tb = rec.find((e) => e[0] === "bottom")?.[1]; rec = null;
+  H.rec = []; v.toastView(theme); const tb = rec.find((e) => e[0] === "bottom")?.[1]; H.rec = null;
   v.prefs = { ...v.prefs, keyHints: true };
   v.footerH = 38;
-  rec = []; v.toastView(theme); const tb2 = rec.find((e) => e[0] === "bottom")?.[1]; rec = null;
+  H.rec = []; v.toastView(theme); const tb2 = rec.find((e) => e[0] === "bottom")?.[1]; H.rec = null;
   // Above the key hints and the status line (24 px).
   expect(tb2).toBe(38 + 24 + 6 + 28 + 10);
   expect(tb).toBeGreaterThan(38);
@@ -8961,8 +7913,6 @@ function runningFixture() {
   return { file, rest: `${lines.slice(cut).join("\n")}\n` };
 }
 
-// A frame with the person's scroll before it: the same rows, the top row moved.
-function scrolled(v, start, end) { drawRange(v, start, end); }
 function atBottom(v, cx) {
   draw(v, cx);
   v.toBottom = false;
@@ -9456,7 +8406,7 @@ test("the selected turn has its bar and no fill, so Herdr's highlight always sho
 
 test("before Herdr 0.1.13, where the formatted reply cannot be selected, a drag notes no text selection and draws no fill", async () => {
   const was = herdrVersion;
-  herdrVersion = "0.1.12";
+  H.herdrVersion = "0.1.12";
   try {
     const { v, cx } = await pane(fixture("--extra", "1"));
     const key = `0:${v.current().turns.at(-1).n}`;
@@ -9465,7 +8415,7 @@ test("before Herdr 0.1.13, where the formatted reply cannot be selected, a drag 
     gesture(v, cx, key, { from: { x: 120, y: 600 }, to: { x: 300, y: 450 } });
     expect(v.textSel ?? null).toBe(null);
     expect(fillAndBar(frame(v, cx)).fill).toBe(0);
-  } finally { herdrVersion = was; }
+  } finally { H.herdrVersion = was; }
 });
 
 // ---- the outline (o) ---------------------------------------------------------------------
@@ -9676,7 +8626,7 @@ test("a settings change in a long session reshapes rows over several frames, the
   Date.now = () => today;
   // The list draws the rows of one screen at its end, as Herdr does: drawing all 1,305 rows in
   // each of the 40 frames below took 3 s on one CPU, and the same frames run either way.
-  listWindow = (n) => ({ start: Math.max(0, n - 24), end: n });
+  H.listWindow = (n) => ({ start: Math.max(0, n - 24), end: n });
   try {
     // The pane shows the turns from 20 rows above the end.
     const before = shown();
@@ -9728,7 +8678,7 @@ test("a settings change in a long session reshapes rows over several frames, the
     for (let k = 0; k < 400 && v.shapeLeft > 0; k++) { cx.flush(0); draw(v, cx); }
     expect(v.shapeLeft).toBe(0);
     expect(shown().some((r) => r.shape.blank || r.shape !== r.turn.shapeMemo)).toBe(false);
-  } finally { performance.now = realPerf; Date.now = realDate; listWindow = null; }
+  } finally { performance.now = realPerf; Date.now = realDate; H.listWindow = null; }
   // The heights match a reshape done in one go, with no budget.
   const keep = shown().map((r) => r.shape.height);
   for (const t of v.current().turns) { t.shapeKey = null; t.shapeMemo = null; }
@@ -9747,7 +8697,7 @@ test("the rail card: a hovered tick shows the day, time and number, two lines of
   const ks = keys();
   let { ticks } = v.railTicks();
   // Each tick is the trigger of a Popup anchored on its right centre, so the card sits to its left.
-  rec = []; v.railView(theme); let r = rec; rec = null;
+  H.rec = []; v.railView(theme); let r = rec; H.rec = null;
   expect(r.filter((e) => e[0] === "Popup").length).toBe(ticks.length);
   expect(r.some((e) => e[0] === "anchor" && e[1] === "right_center")).toBe(true);
   expect(r.some((e) => e[0] === "id" && e[1] === "th-rail-card")).toBe(false);
@@ -9763,7 +8713,7 @@ test("the rail card: a hovered tick shows the day, time and number, two lines of
   expect(v.railOn).toBe(false);
   hovers[1](true, cx);
   expect(v.railHover).toBe(ks[1]);
-  rec = []; v.railView(theme); r = rec; rec = null;
+  H.rec = []; v.railView(theme); r = rec; H.rec = null;
   expect(r.some((e) => e[0] === "id" && e[1] === "th-rail-card")).toBe(true);
   const turn = v.findTurn(ks[1]);
   const c = v.railCard(ticks[1]);
@@ -9811,7 +8761,7 @@ test("the rail card: a hovered tick shows the day, time and number, two lines of
   expect(cx.timers.length).toBe(0);
   expect(v.railHover).toBe(ks[1]);
   // The card's pin pins its turn; a second press unpins it.
-  rec = []; v.railView(theme); const rc = rec; rec = null;
+  H.rec = []; v.railView(theme); const rc = rec; H.rec = null;
   const at = rc.findIndex((e) => e[0] === "id" && e[1] === "th-rail-card-pin");
   expect(at).toBeGreaterThan(-1);
   expect(rc.slice(at).find((e) => e[0] === "tooltip")[1]).toBe(`Pin #${turn.n} (p)`);
@@ -9844,7 +8794,7 @@ test("the rail card: a hovered tick shows the day, time and number, two lines of
   // Rail side Left: the lane on the left edge, the card anchored on its left centre.
   v.prefs = { ...v.prefs, railSide: "left" };
   v.railHover = ks[1];
-  rec = []; v.railView(theme); r = rec; rec = null;
+  H.rec = []; v.railView(theme); r = rec; H.rec = null;
   expect(r.some((e) => e[0] === "anchor" && e[1] === "left_center")).toBe(true);
   const lk = railLook(v.side());
   expect(r.some((e) => e[0] === "pl" && e[1] === RAIL.CARD_GAP + Math.max(0, lk.peak + lk.right - lk.lane))).toBe(true);
@@ -9870,7 +8820,7 @@ test("the rail replaces the scrollbar: a tick per turn, on screen brighter, sele
   expect(L.pitch).toBe(9);
   expect(ticks.map((k) => k.key)).toEqual(ks);
   // No scrollbar in the body any more, and the rail is drawn in it.
-  rec = []; v.render(cx); const drawn = rec; rec = null;
+  H.rec = []; v.render(cx); const drawn = rec; H.rec = null;
   expect(drawn.some((e) => e[0] === "id" && e[1] === "th-rail")).toBe(true);
   expect(drawn.some((e) => e[0] === "id" && e[1] === "th-tick-0")).toBe(true);
   // The turns the list drew are on screen; the selected tick is longer, a pinned one accent.
@@ -9884,14 +8834,14 @@ test("the rail replaces the scrollbar: a tick per turn, on screen brighter, sele
   ({ ticks } = v.railTicks());
   expect(ticks[1].pinned).toBe(true);
   expect(ticks[2].sel).toBe(true);
-  rec = []; v.railView(theme); const r = rec; rec = null;
+  H.rec = []; v.railView(theme); const r = rec; H.rec = null;
   expect(r.some((e) => e[0] === "w" && e[1] === railLook(v.side()).sel)).toBe(true);
   // The ticks take their size from the side gutter: in a 960 px pane the text sits well in,
   // so the ticks are 10 px (16 selected), 14 px in, in a 32 px lane.
   v.paneW = 960;
   draw(v, cx);
   expect(v.side()).toBeGreaterThan(56);
-  rec = []; v.railView(theme); const wide = rec; rec = null;
+  H.rec = []; v.railView(theme); const wide = rec; H.rec = null;
   expect(wide.filter((e) => e[0] === "w").map((e) => e[1])).toEqual(expect.arrayContaining([32, 10, 16]));
   expect(wide.some((e) => e[0] === "right" && e[1] === 14)).toBe(true);
   expect(r.some((e) => e[0] === "bg" && e[1] === theme.accent)).toBe(true);
@@ -9937,7 +8887,7 @@ test("subagents: their calls are a group of their own, Ran 3 subagents with the 
   v.click(`rhead:${a}`, cx);
   const grps = v.rows().filter((r) => r.kind === "grp" && r.key.startsWith(`gp:${a}:`));
   expect(grps.map((r) => v.rowDetail(r).replace(/^grp#\d+ /, ""))).toEqual(["Ran 1 command", "Ran 3 subagents", "Ran 1 command"]);
-  const icons = (r) => { rec = []; v.partContent(theme, r); const c = rec; rec = null; return c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop()); };
+  const icons = (r) => { H.rec = []; v.partContent(theme, r); const c = rec; H.rec = null; return c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop()); };
   expect(icons(grps[1])[0]).toBe("bot.svg");
   expect(icons(grps[0])[0]).toBe("wrench.svg");
   // Opened, one row per subagent with the bot icon.
@@ -9979,7 +8929,7 @@ test("subagent states: the group line says how many work and failed, and each ro
   expect(calls.map((r) => v.rowDetail(r).replace(/^call#\d+ /, "").replace(/ \[(open|closed)\]/, ""))).toEqual([
     "Agent · 48s [completed]", "Agent · 1m 01s [completed]", "Agent (sonnet 5.5) · 12s [failed]",
   ]);
-  const icons = (r) => { rec = []; v.partContent(theme, r); const c = rec; rec = null; return c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop()); };
+  const icons = (r) => { H.rec = []; v.partContent(theme, r); const c = rec; H.rec = null; return c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop()); };
   expect(icons(calls[0])[0]).toBe("check.svg");
   expect(icons(calls[2])[0]).toBe("circle-x.svg");
   expect(icons(grp)[0]).toBe("circle-x.svg");
@@ -10023,7 +8973,7 @@ test("level 1 and 2: a click on an open turn's line opens it to its steps; a gro
   expect(v.open.has(a)).toBe(true);
   // Closed line: no level 1 parts, a right chevron.
   expect(kinds()).not.toContain("grp");
-  const lineOf = () => { rec = []; v.partContent?.(theme, v.rows().find((r) => r.key === `rhead:${a}`)); const c = rec; rec = null; return c; };
+  const lineOf = () => { H.rec = []; v.partContent?.(theme, v.rows().find((r) => r.key === `rhead:${a}`)); const c = rec; H.rec = null; return c; };
   const svgs = (c) => c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
   if (v.partContent) expect(svgs(lineOf())).toContain("chevron-right.svg");
   // A click on the line opens it: the step group, then straight into the reply.
@@ -10064,7 +9014,7 @@ test("level 1 and 2: a click on an open turn's line opens it to its steps; a gro
   const stopped = v.findTurn("0:2");
   expect(stopped.interrupted).toBe(true);
   expect(v.workText(stopped)).toMatch(/^Stopped( after .+)?$/);
-  rec = []; v.workLine(theme, stopped); const w = rec; rec = null;
+  H.rec = []; v.workLine(theme, stopped); const w = rec; H.rec = null;
   const i = w.findIndex((e) => e[0] === "child" && e[1] === v.workText(stopped));
   expect(w.slice(Math.max(0, i - 4), i).some((e) => e[0] === "text_color" && e[1] === theme.blocked)).toBe(true);
   expect(svgs(w)).toEqual(["chevron-right.svg"]);
@@ -10076,7 +9026,7 @@ test("the running turn's line reads Working for and the clock, then what it has 
   v.statusNow = "working";
   const st = v.status;
   v.status = () => "working";
-  rec = []; v.liveLine(theme, v.findTurn("0:1")); const c = rec; rec = null;
+  H.rec = []; v.liveLine(theme, v.findTurn("0:1")); const c = rec; H.rec = null;
   v.status = st;
   const text = c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" ");
   expect(text).toMatch(/^Working for 0:4\d · 1 tool call so far$/);
@@ -10115,7 +9065,7 @@ test("steps: interim text between groups in order; → opens the turn, its line,
   expect(parts()).toContain("grp");
   // A closed group's line has the tool icon and no check: its calls are not read, so it
   // cannot know they passed.
-  rec = []; v.partContent(theme, v.rows().find((r) => r.key === `gp:${a}:1`), false); const gl = rec; rec = null;
+  H.rec = []; v.partContent(theme, v.rows().find((r) => r.key === `gp:${a}:1`), false); const gl = rec; H.rec = null;
   const glyphs = gl.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
   expect(glyphs).toContain("wrench.svg");
   expect(glyphs).not.toContain("check.svg");
@@ -10338,7 +9288,7 @@ test("level 3: an open group reads its calls from the transcript, in memory; a c
   expect(detail(`cl:${a}:0:1`)).toBe("call#1 bun run lint · 1s [failed] [closed]");
   // A failed call marks its group too, in the blocked colour.
   expect(detail(`gp:${a}:0`)).toBe("grp#1 Ran 2 commands · 1 failed [failed] [open]");
-  rec = []; v.partContent?.(theme, v.rows().find((r) => r.key === `cl:${a}:0:1`)); const c1 = rec; rec = null;
+  H.rec = []; v.partContent?.(theme, v.rows().find((r) => r.key === `cl:${a}:0:1`)); const c1 = rec; H.rec = null;
   if (v.partContent) {
     expect(c1.some((e) => e[0] === "svg" && String(e[1]).endsWith("circle-x.svg"))).toBe(true);
     expect(c1.some((e) => e[0] === "text_color" && e[1] === theme.blocked)).toBe(true);
@@ -10354,13 +9304,13 @@ test("level 3: an open group reads its calls from the transcript, in memory; a c
   const box = v.rows().find((r) => r.key === `co:${a}:0:0`);
   expect(box).toMatchObject({ rows: 30, shown: 12 });
   expect(v.height(box)).toBe(8 * 2 + 2 + 12 * 16 + 4);
-  rec = []; v.partContent(theme, box, false); const bc = rec; rec = null;
+  H.rec = []; v.partContent(theme, box, false); const bc = rec; H.rec = null;
   expect(bc.some((e) => ["overflow_scroll", "overflow_x_scroll", "overflow_y_scrollbar", "whitespace_nowrap"].includes(e[0]))).toBe(false);
   expect(bc.some((e) => e[0] === "h" && e[1] === 30 * 16)).toBe(true);
   const all = v.rows().find((r) => r.key === `oa:${a}:0:0`);
   expect(all).toMatchObject({ kind: "oall", left: 18, all: false });
   expect(v.height(all)).toBe(26);
-  rec = []; v.partContent(theme, all, false); const ac = rec; rec = null;
+  H.rec = []; v.partContent(theme, all, false); const ac = rec; H.rec = null;
   expect(ac.some((e) => e[0] === "child" && e[1] === "Show all · 18 more rows")).toBe(true);
   // A click on the box only selects its turn.
   v.click(`co:${a}:0:0`, cx);
@@ -10646,7 +9596,7 @@ test("level 3: a group claims no check or red mark until its calls are read; onc
   const settled = async () => { for (let i = 0; i < 6; i++) { draw(v, cx); cx.flush(0); await settleCx(cx); } };
   const detail = (k) => v.rowDetail(v.rows().find((r) => r.key === k));
   const icons = (k) => {
-    rec = []; v.partContent?.(theme, v.rows().find((r) => r.key === k)); const c = rec; rec = null;
+    H.rec = []; v.partContent?.(theme, v.rows().find((r) => r.key === k)); const c = rec; H.rec = null;
     return { svgs: c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop()), red: c.some((e) => e[0] === "text_color" && e[1] === theme.blocked), text: c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]) };
   };
   v.sel = a;
@@ -10740,7 +9690,7 @@ test("the floating top: no header row, the state top left at every width, icons 
   state.terminals[0].status = "idle";
   draw(v, cx);
   expect(v.floating()).toBe(true);
-  const drawn = () => { rec = []; v.render(cx); const c = rec; rec = null; return c; };
+  const drawn = () => { H.rec = []; v.render(cx); const c = rec; H.rec = null; return c; };
   const idsOf = (calls) => calls.filter((e) => e[0] === "id").map((e) => e[1]);
   let ids = idsOf(drawn());
   // No header row: no badge and no header text. The state is there, and no icons at rest.
@@ -10800,7 +9750,7 @@ test("the floating top: no header row, the state top left at every width, icons 
 
 test("the floating top's fade is painted as a gradient where Herdr can, and in steps of alpha before that", async () => {
   const { v } = await pane(fixture("--only", "3"));
-  const calls = () => { rec = []; v.fadeLayer(theme); const c = rec; rec = null; return c; };
+  const calls = () => { H.rec = []; v.fadeLayer(theme); const c = rec; H.rec = null; return c; };
   // The test stubs have no PathBuilder: the steps.
   expect(calls().some((e) => e[0] === "id" && e[1] === "th-fade-steps")).toBe(true);
   const src = readFileSync(new URL("../mods/agent-threads/main.js", import.meta.url), "utf8");
@@ -10881,11 +9831,11 @@ test("draw time: a session of 2,000 turns draws well inside Herdr's time, and re
   // under a fifth, a draw that rebuilds the rows under a half. bun runs this faster than
   // Herdr does, so these are generous; the reads above are the exact check.
   // The list draws the rows of one screen at its end, as Herdr does.
-  listWindow = (n) => ({ start: Math.max(0, n - 14), end: n });
+  H.listWindow = (n) => ({ start: Math.max(0, n - 14), end: n });
   const best = (fn) => { let b = Infinity; for (let i = 0; i < 5; i++) { const a = performance.now(); fn(); b = Math.min(b, performance.now() - a); } return b; };
   const still = best(() => v.render(cx));
   const rebuild = best(() => { v.rowsKey = null; v.render(cx); });
-  listWindow = null;
+  H.listWindow = null;
   expect(still).toBeLessThan(10);
   expect(rebuild).toBeLessThan(25);
 });
@@ -10922,10 +9872,10 @@ test("a reply's table may run wider than the reading line, centred on it, up to 
   expect(extra / 2).toBeLessThanOrEqual(v.colLeft() - lane);
   expect(v.colLeft() + ROW.PAD_X + v.prose() + extra / 2).toBeLessThanOrEqual(v.pw() - ROW.PAD_X - lane);
   let at = rows.indexOf(closed);
-  rec = [];
+  H.rec = [];
   v.listItems(theme, rows, rows.map(() => 400), { start: at, end: at + 1 }, true, false);
   let drawn = rec;
-  rec = null;
+  H.rec = null;
   expect(drawn).toContainEqual(["w", v.prose() + extra]);
   expect(drawn).toContainEqual(["ml", -extra / 2]);
   // The item is wider by extra and padded by half on each side, so its other parts stay put.
@@ -10942,10 +9892,10 @@ test("a reply's table may run wider than the reading line, centred on it, up to 
   expect(extraOf(md[1])).toBe(extra);
   expect(extraOf(md[0])).toBe(0);
   at = rows.indexOf(md[1]);
-  rec = [];
+  H.rec = [];
   v.listItems(theme, rows, rows.map(() => 400), { start: at, end: at + 1 }, true, false);
   drawn = rec;
-  rec = null;
+  H.rec = null;
   expect(drawn).toContainEqual(["w", v.prose() + extra]);
   expect(v.partSig(md[1])).toContain(`|t${extra}`);
   // A pane no wider than the column leaves the table on the reading line.
@@ -10976,7 +9926,7 @@ test("the rail's window: 9 px a tick in a long session, at most 540 px, followin
   expect(w.dotTop).toEqual({ i: 5, live: false });
   expect(w.dotBottom).toBe(null);
   // Only the window's ticks are drawn, with a row at each end.
-  rec = []; v.railView(theme); const r = rec; rec = null;
+  H.rec = []; v.railView(theme); const r = rec; H.rec = null;
   expect(r.filter((e) => e[0] === "id" && String(e[1]).startsWith("th-tick-") && !String(e[1]).startsWith("th-tick-card")).length).toBe(w.ticks.length);
   expect(r).toContainEqual(["id", "th-rail-up"]);
   // Each mark slides a change of width over 90 ms, natively (no timer in the mod).
@@ -11019,7 +9969,7 @@ test("the wheel on the rail moves its window a tick at a time and stops there, s
   let stopped = 0;
   const wcx = { ...cx, stop_propagation() { stopped++; }, notify() {} };
   // The rail's handler is the one after its hover report.
-  rec = []; v.railView(theme); const r = rec; rec = null;
+  H.rec = []; v.railView(theme); const r = rec; H.rec = null;
   const wheel = r.find((e) => e[0] === "on_scroll_wheel")[1];
   // 9 px of upward travel is one tick earlier; 4 px is not yet one, and the rest carries.
   wheel({ delta: { x: 0, y: 4 }, touch_phase: "moved" }, wcx);
@@ -11101,7 +10051,7 @@ test("no list row scrolls on its own: code and commands wrap, Show all opens the
   v.click(`cl:${a}:0:1`, cx);
   await settled();
   const rows = v.rows();
-  const drawn = (r) => { rec = []; v.partContent(theme, r, false); const d = rec; rec = null; return d; };
+  const drawn = (r) => { H.rec = []; v.partContent(theme, r, false); const d = rec; H.rec = null; return d; };
   const scrolling = (d) => d.some(([n, x]) => ["overflow_scroll", "overflow_x_scroll", "overflow_y_scroll", "overflow_y_scrollbar", "overflow_x_scrollbar"].includes(n) || (n === "scrollable" && x === true));
   // Every row, everything open: no scrolling box, and no handler.
   for (const r of rows) {
@@ -11149,13 +10099,13 @@ test("no list row scrolls on its own: code and commands wrap, Show all opens the
   expect(overlays[0].props.output.text).toBe(huge);
   // The viewer: the call, its line count, all of it in a read-only editor that wraps and numbers
   // its lines, in a box that holds the wheel; Esc closes it.
-  state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov9", output: overlays[0].props.output } };
+  H.state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov9", output: overlays[0].props.output } };
   const g = new Threads();
   const gcx = makeCx();
   const before = editors.length;
   g.init(state.props, gcx);
   expect(editors.slice(before).at(-1).opts).toMatchObject({ readonly: true, soft_wrap: true, line_numbers: true, value: huge });
-  rec = []; g.render(gcx); const gd = rec; rec = null;
+  H.rec = []; g.render(gcx); const gd = rec; H.rec = null;
   const texts = gd.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
   expect(texts).toContain("#1 · Bash");
   expect(texts).toContain("500 lines");
@@ -11416,11 +10366,11 @@ test("landExact: the nearest earlier item at least want above, lifted by the res
 test("Rail side lists Left on the left and Right on the right", async () => {
   const { v, cx } = await pinPane("--extra", "2");
   v.action("settings", cx);
-  rec = [];
+  H.rec = [];
   v.settingsCard(theme);
   const ids = rec.filter((e) => e[0] === "id" && /^th-rail-(left|right)$/.test(e[1])).map((e) => e[1]);
   const icons = rec.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
-  rec = null;
+  H.rec = null;
   expect(ids).toEqual(["th-rail-left", "th-rail-right"]);
   expect(icons).toEqual(expect.arrayContaining(["panel-left.svg", "panel-right.svg"]));
 });
@@ -11435,7 +10385,7 @@ test("a clicked rail tick grows, then shrinks back over the flash's fade, and bo
   const ks = keys();
   const look = railLook(v.side());
   const mark = () => {
-    rec = []; v.railView(theme); const r = rec; rec = null;
+    H.rec = []; v.railView(theme); const r = rec; H.rec = null;
     const at = r.findIndex((e) => e[0] === "id" && e[1] === "th-mark-1");
     const calls = r.slice(at, at + 12);
     return { r, w: calls.find((e) => e[0] === "w")[1], tr: calls.find((e) => e[0] === "transition") };
@@ -11489,7 +10439,7 @@ test("a click on a rail tick closes its card, and it stays closed while the poin
   draw(v, cx);
   const ks = keys();
   const handlers = () => {
-    rec = []; v.railView(theme); const r = rec; rec = null;
+    H.rec = []; v.railView(theme); const r = rec; H.rec = null;
     const hovers = r.filter((e) => e[0] === "on_hover").map((e) => e[1]).slice(1);
     const at = r.findIndex((e) => e[0] === "id" && e[1] === "th-tick-1");
     const click = r.slice(at).find((e) => e[0] === "on_click")[1];
@@ -11546,9 +10496,9 @@ test("a jump flashes the turn it lands on: an accent tint on its items, faded by
   const mine = rows.map((r, i) => [r, i]).filter(([r]) => r.turn && `${r.si}:${r.turn.n}` === key).map(([, i]) => i);
   expect(mine.length).toBeGreaterThan(3); // an open turn: several items
   const layers = () => {
-    rec = [];
+    H.rec = [];
     v.listItems(theme, rows, rows.map(() => 100), { start: 0, end: rows.length }, true, false);
-    const c = rec; rec = null;
+    const c = rec; H.rec = null;
     return c.map((e, i) => [e, i]).filter(([e]) => e[0] === "id" && String(e[1]).startsWith("th-flash-")).map(([e, i]) => ({ id: e[1], calls: c.slice(i, i + 12) }));
   };
   cx.flush(140);
@@ -11615,11 +10565,11 @@ test("a queued prompt that opens with a quote shows whole on the running turn's 
   const r = v.rows().find((x) => x.key === key);
   expect(r.kind).toBe("working");
   v.prefs = { ...v.prefs, bubbleColor: "plain" }; // Markdown in the bubble: the plain look
-  rec = [];
+  H.rec = [];
   views.length = 0;
   v.workingItem(theme, r);
   const drawn = rec;
-  rec = null;
+  H.rec = null;
   // The open turn's YOU part, whole, as Markdown: the quote in full as a blockquote, and the
   // owner's three paragraphs kept apart (the closed row's lines ran them together).
   expect(drawn).toContainEqual(["TextView", `th-you-wyou:${key}`]);
@@ -11921,7 +10871,7 @@ test("View diagram under a mermaid block opens it as text art; a kind it cannot 
   const at = (k) => rows.findIndex((r) => r.key === k);
   expect(at(`mv:${a}:1`)).toBe(at(`code:${a}:1`) + 1);
   expect(v.height(links[0])).toBe(26); // as tall as Show all
-  rec = []; v.partContent(theme, links[0], false); const d = rec; rec = null;
+  H.rec = []; v.partContent(theme, links[0], false); const d = rec; H.rec = null;
   expect(d.some(([n, x]) => n === "child" && x === "View diagram")).toBe(true);
   expect(d.filter(([n]) => /^on_/.test(n))).toEqual([]);
   // A press opens the drawing: the boxes and the arrow's label, no source, unwrapped.
@@ -11935,7 +10885,7 @@ test("View diagram under a mermaid block opens it as text art; a kind it cannot 
   // No line starts with a plain space, which the editor would draw indent guides in.
   expect(o.text).not.toMatch(/^ /m);
   expect(o.text).not.toContain("flowchart");
-  state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov7", output: o } };
+  H.state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov7", output: o } };
   const g = new Threads();
   const gcx = makeCx();
   const before = editors.length;
@@ -11947,11 +10897,11 @@ test("View diagram under a mermaid block opens it as text art; a kind it cannot 
   const p = overlays[0].props.output;
   expect(p).toMatchObject({ title: "#1 · Mermaid source", wrap: true, numbers: true, text: pie });
   expect(p.note).toBe('Threads can draw flowchart, state, sequence, class, ER and XY chart diagrams, not "pie". The source is below.');
-  state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov8", output: p } };
+  H.state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov8", output: p } };
   const h = new Threads();
   const hcx = makeCx();
   h.init(state.props, hcx);
-  rec = []; h.render(hcx); const hd = rec; rec = null;
+  H.rec = []; h.render(hcx); const hd = rec; H.rec = null;
   expect(hd.some(([n, x]) => n === "child" && x === p.note)).toBe(true);
 });
 
@@ -11966,7 +10916,7 @@ function onOf(calls, id, name) {
 }
 const strsOf = (calls) => calls.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
 const idsIn = (calls) => calls.filter((e) => e[0] === "id").map((e) => e[1]);
-const cardOf = (v) => { rec = []; v.settingsCard(theme); const c = rec; rec = null; return c; };
+const cardOf = (v) => { H.rec = []; v.settingsCard(theme); const c = rec; H.rec = null; return c; };
 
 test("the settings card: over the list, opens at the top with the keyboard, closes on a press outside, the x, Esc or the comma", async () => {
   const { v, cx } = await pane(fixture("--extra", "4"));
@@ -12158,7 +11108,7 @@ test("the file: its path with Copy path, which says Copied in its own place with
   const c = cardOf(v);
   expect(idsIn(c)).not.toContain("th-set-open");
   expect(strsOf(c)).not.toContain("Open");
-  log = [];
+  H.log = [];
   onOf(c, "th-set-copy", "on_click")({}, cx);
   expect(cx.clip).toBe(v.prefsPath());
   expect(v.toast).toBe(null);
@@ -12236,7 +11186,7 @@ test("the quote key field: a free letter becomes the key and is written; a taken
   const q = v.quoteInput;
   expect(q.value()).toBe("q");
   settingsWrites.length = 0;
-  keepSettings = true;
+  H.keepSettings = true;
   // Typed after the old letter: the field keeps the new one alone.
   q.set_value("qy"); q.handlers.change({}, cx);
   expect(q.value()).toBe("y");
@@ -12273,7 +11223,7 @@ test("the quote key field: a free letter becomes the key and is written; a taken
   // A file value Threads cannot use: the mod's note, under the field.
   v.applyPrefs(JSON.stringify({ quoteKey: "i" }));
   expect(v.quoteNote()).toMatch(/^quoteKey "i" is not a free letter/);
-  keepSettings = false;
+  H.keepSettings = false;
   delete recordFiles[v.prefsPath()];
 });
 
@@ -12603,7 +11553,7 @@ test("nothing under the settings card or the keys sheet reacts: the rail and its
   v.listH = 600;
   draw(v, cx);
   const ks = keys();
-  const rail = () => { rec = []; v.railView(theme); const r = rec; rec = null; return r; };
+  const rail = () => { H.rec = []; v.railView(theme); const r = rec; H.rec = null; return r; };
   const live = (r) => r.filter((e) => ["on_hover", "on_scroll_wheel", "on_click", "tooltip"].includes(e[0])).length;
   const hovers = () => rail().filter((e) => e[0] === "on_hover").map((e) => e[1]).slice(1);
   let hovered = 0;
@@ -12674,7 +11624,7 @@ test("the card's spacing: a 16 px inset on every band, 40 px head and foot, no t
   v.width = 545; v.paneW = 573; v.rootH = 700;
   v.action("settings", cx);
   const muted = theme.muted;
-  const of = (fn) => { rec = []; fn(); const c = rec; rec = null; return c; };
+  const of = (fn) => { H.rec = []; fn(); const c = rec; H.rec = null; return c; };
   // From an element's id to the next id.
   const own = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
   const head = of(() => v.cardHead(theme, false, () => {}, 16));
@@ -12790,7 +11740,7 @@ const RULES = [
 ];
 async function rulesPane(rules = RULES) {
   const r = await pane(fixture("--extra", "2"));
-  keepSettings = true;
+  H.keepSettings = true;
   settingsWrites.length = 0;
   r.v.applyPrefs(JSON.stringify({ textSize: 15, links: rules }));
   recordFiles[r.v.prefsPath()] = r.v.prefsRaw;
@@ -12802,11 +11752,11 @@ async function rulesPane(rules = RULES) {
 const settleAll = async (cx) => { for (let i = 0; i < 3; i++) { const p = cx.pending; cx.pending = []; await Promise.all(p); } };
 const lastLinks = () => JSON.parse(settingsWrites.at(-1)).links;
 function typeIn(v, k, text, cx) { v.ruleInputs[k].set_value(text); v.ruleInputs[k].handlers.change({}, cx); }
-function done(v) { keepSettings = false; settingsStale = false; delete recordFiles[v.prefsPath()]; }
+function done(v) { H.keepSettings = false; H.settingsStale = false; delete recordFiles[v.prefsPath()]; }
 
 test("a fresh install has the pull request rule, on; the first write records it, and a file without links has none", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
-  keepSettings = true;
+  H.keepSettings = true;
   cx.pending = [];
   try {
     v.applyPrefs(null);
@@ -12906,7 +11856,7 @@ test("Link rules spacing: 12 px cards, muted lines, a 32 px Undo line with a 24 
     expect(own("th-rule-undo")).toContainEqual(["h", 24]);
     expect(strsOf(c)).toContain("Undo");
     await settleAll(cx);
-    rec = []; v.miniButton(theme, "x", "Use", () => {}); const m = rec; rec = null;
+    H.rec = []; v.miniButton(theme, "x", "Use", () => {}); const m = rec; H.rec = null;
     expect(m).toContainEqual(["h", 24]);
   } finally { done(v); }
 });
@@ -12925,7 +11875,7 @@ test("a press on a row opens the rule in place with its fields; Keep rule writes
     expect(idsIn(c)).not.toContain("th-rule-1");
     expect(idsIn(c)).not.toContain("th-rule-add");
     // Open goes to the address, Reference to the pattern sheet, with Herdr's URL opener.
-    log = [];
+    H.log = [];
     onOf(c, "th-rule-open", "on_click")({}, cx);
     onOf(c, "th-rule-reference", "on_click")({}, cx);
     expect(log.filter((x) => x[0] === "open_url").map((x) => x[1])).toEqual(["https://tracker.example/ACME-412", "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_expressions/Cheatsheet"]);
@@ -13238,7 +12188,7 @@ test("a press that races the hand edit to a non-list \"links\" (the pane has not
   for (const which of ["delete", "switch", "undo"]) {
     const { v, cx } = await rulesPane();
     try {
-      settingsStale = true;
+      H.settingsStale = true;
       if (which === "undo") { v.removeRule(0, cx); await settleAll(cx); }
       const before = v.prefsRaw;
       const oops = JSON.stringify({ textSize: 15, links: "oops" });
@@ -13264,7 +12214,7 @@ test("a press that races the hand edit to a non-list \"links\" (the pane has not
 test("a rule change whose save finds the file's rules changed writes nothing over them; a change to other keys still merges", async () => {
   const { v, cx } = await rulesPane();
   try {
-    settingsStale = true;
+    H.settingsStale = true;
     // An editor adds a rule in the same moment as the switch is pressed.
     const X = { name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" };
     const edited = JSON.stringify({ textSize: 15, links: [X, ...RULES] });
@@ -13299,7 +12249,7 @@ test("a rule change whose save finds the file's rules changed writes nothing ove
 test("a Delete that is not saved because the file's rules changed offers no Undo", async () => {
   const { v, cx } = await rulesPane();
   try {
-    settingsStale = true;
+    H.settingsStale = true;
     const X = { name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" };
     const edited = JSON.stringify({ textSize: 15, links: [X, ...RULES] });
     recordFiles[v.prefsPath()] = edited; // an editor adds a rule as Delete is pressed
@@ -13315,7 +12265,7 @@ test("a Delete that is not saved because the file's rules changed offers no Undo
     expect(s.some((x) => String(x).startsWith("Deleted "))).toBe(false);
     expect(idsIn(cardOf(v))).not.toContain("th-rule-undo");
     // A Delete that is saved still offers Undo, and Undo puts the rule back once.
-    settingsStale = false;
+    H.settingsStale = false;
     onOf(cardOf(v), "th-rule-delete-btn-2", "on_click")({}, cx);
     await settleAll(cx);
     expect(lastLinks()).toEqual([X, RULES[1]]);
@@ -13379,7 +12329,7 @@ test("a Keep rule refused because \"links\" is not a list says why in the open r
 test("a Keep rule whose save finds the file's rules changed opens the rule again with what was typed, and says why in it", async () => {
   const { v, cx } = await rulesPane();
   try {
-    settingsStale = true;
+    H.settingsStale = true;
     onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
     typeIn(v, "example", "Fixed in ACME-7.", cx);
     const X = { name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" };
@@ -13439,7 +12389,7 @@ test("the settings card stays open and as it was when the pane's session changes
   const f = sharedFolder();
   f.record(5101, SESSION_A);
   f.record(5102, SESSION_B);
-  hcBy = { t3c: fg(5101, f.cwd), t3b: fg(5102, f.cwd) };
+  H.hcBy = { t3c: fg(5101, f.cwd), t3b: fg(5102, f.cwd) };
   const { v, cx } = sharedState(f, "t3c");
   try {
     await looked(v);
@@ -13465,8 +12415,8 @@ test("the settings card stays open and as it was when the pane's session changes
     v.key(keyEv("escape"), cx);
     expect(v.settingsOpen).toBe(false);
   } finally {
-    hcBy = {};
-    recordFiles = {};
+    H.hcBy = {};
+    H.recordFiles = {};
   }
 });
 
@@ -13539,7 +12489,7 @@ const SENDER_NOTE = "A sender rule names who sent a prompt that was typed into t
 const SENDERS_NOT_LIST = "\"senders\" in settings.json is not a list, so the rule change was not saved. Fix the file first.";
 async function sendersPane(senders = SENDS, file = null) {
   const r = await pane(file ?? fixture("--extra", "2"));
-  keepSettings = true;
+  H.keepSettings = true;
   settingsWrites.length = 0;
   r.v.applyPrefs(JSON.stringify({ textSize: 15, links: RULES, senders }));
   recordFiles[r.v.prefsPath()] = r.v.prefsRaw;
@@ -13551,7 +12501,6 @@ async function sendersPane(senders = SENDS, file = null) {
 const lastSenders = () => JSON.parse(settingsWrites.at(-1)).senders;
 function typeSender(v, k, text, cx) { v.senderInputs[k].set_value(text); v.senderInputs[k].handlers.change({}, cx); }
 const idsAt = (c, id) => c.findIndex((e) => e[0] === "id" && e[1] === id);
-const ownOf = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
 
 test("Agent messages ends with a Sender rules row, with its count and how many are not working; it opens the page, as the command does", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
@@ -14197,7 +13146,7 @@ test("a sender Keep rule refused because \"senders\" is not a list stays open wi
 test("a sender Keep rule whose save finds the file's rules changed opens again where its rule now is, with what was typed, and says why in it", async () => {
   const { v, cx } = await sendersPane();
   try {
-    settingsStale = true;
+    H.settingsStale = true;
     onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
     typeSender(v, "example", "From helper-a: done", cx);
     const X = { name: "Top", prefix: "[{name}] " };
@@ -14232,7 +13181,7 @@ test("a sender Keep rule whose save finds the file's rules changed opens again w
 test("link rules share the editor: a Keep rule whose save finds the file's rules changed opens again with what was typed, and says why in it", async () => {
   const { v, cx } = await rulesPane();
   try {
-    settingsStale = true;
+    H.settingsStale = true;
     onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
     typeIn(v, "example", "Fixed in ACME-7.", cx);
     const X = { name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" };
@@ -14707,10 +13656,10 @@ test("a skipped line shows as one dim note after its turn, or at the head", asyn
   expect(rows.slice(at).some((r) => r.key === next)).toBe(true);
   expect(rows.filter((r) => r.kind === "note").length).toBe(base + 1);
   // Drawn as the other notes are: dim text, and not a turn the keys stop on.
-  rec = [];
+  H.rec = [];
   v.item(theme, rows[at], false);
   const c = rec;
-  rec = null;
+  H.rec = null;
   expect(c).toContainEqual(["text_color", theme.dim]);
   expect(v.turnKeys(rows)).not.toContain(`skip:${keyOf}`);
   // Before the first turn: at the head.
@@ -14905,7 +13854,7 @@ test("the search field's two step buttons: up is older, down is newer, and the o
   const { v, cx } = await stepPane();
   v.setQuery("checkout test", cx);
   settleRows(v, cx);
-  const drawn = () => { rec = []; draw(v, cx); const c = rec; rec = null; return c; };
+  const drawn = () => { H.rec = []; draw(v, cx); const c = rec; H.rec = null; return c; };
   let c = drawn();
   const older = () => afterId(c, "th-match-older");
   const newer = () => afterId(c, "th-match-newer");
@@ -14956,10 +13905,10 @@ test("a match's fill on every surface it is drawn on, dark and light: 4.5:1 unro
   for (const T of [theme, LIGHT]) {
     const { v, cx } = await stepPane();
     const fills = (r) => {
-      rec = [];
+      H.rec = [];
       v.item(T, r, false, 100);
       const c = rec;
-      rec = null;
+      H.rec = null;
       return c.filter((e) => e[0] === "bg" && String(e[1]).startsWith(T.working)).map((e) => e[1]);
     };
     const row = (k, kind = "turn") => v.rows().find((r) => r.key === k && r.kind === kind);
@@ -15011,7 +13960,7 @@ test("a match's fill on every surface it is drawn on, dark and light: 4.5:1 unro
     settleRows(v, cx);
     const r = v.rows().find((x) => x.kind === "turn" && x.turn.cmd);
     expect(v.sel).toBe(r.key);
-    const fills = () => { rec = []; v.item(T, r, false, 100); const c = rec; rec = null; return c.filter((e) => e[0] === "bg" && String(e[1]).startsWith(T.working)).map((e) => e[1]); };
+    const fills = () => { H.rec = []; v.item(T, r, false, 100); const c = rec; H.rec = null; return c.filter((e) => e[0] === "bg" && String(e[1]).startsWith(T.working)).map((e) => e[1]); };
     check(T, "command name in the default blue bubble", fills(), "#ffffff", "#2563EB", true);
     v.applyPrefs(JSON.stringify({ bubbleColor: "plain" }));
     settleRows(v, cx);
@@ -15063,10 +14012,10 @@ test("a compact pin draws no search match fill, selected or not", async () => {
   expect(pins.map((r) => r.turn.n)).toEqual(expect.arrayContaining([5, 7]));
   expect(pins.some((r) => r.key === v.sel || r.turn === v.findTurn(v.sel))).toBe(true);
   for (const r of pins) {
-    rec = [];
+    H.rec = [];
     v.item(theme, r, false, 100);
     const c = rec;
-    rec = null;
+    H.rec = null;
     expect(c.filter((e) => e[0] === "bg" && String(e[1]).startsWith(theme.working))).toEqual([]);
   }
 });
@@ -15093,10 +14042,10 @@ test("an open coloured bubble draws a long hyphenated token with breaks, a plain
   expect(y.parts[0].draw).toContain(TOKEN.replaceAll("-", `-${B}`));
   expect(y.parts[0].draw.replaceAll(B, "")).toBe(PROMPT);
   expect(y.parts[0].rows).toBeNull();
-  rec = [];
+  H.rec = [];
   draw(v, cx);
   const drawn = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
-  rec = null;
+  H.rec = null;
   expect(drawn).toContain(y.parts[0].draw);
   expect(drawn).not.toContain(PROMPT);
   // The width and height estimates are those of the message: the same as for one with "_"
@@ -15113,10 +14062,10 @@ test("an open coloured bubble draws a long hyphenated token with breaks, a plain
   const hits = y.parts[0].rows.flat().filter((p) => p.hit);
   expect(hits.map((p) => p.t.replaceAll(B, ""))).toEqual(["merge-check"]);
   // Each word is an element that does not wrap inside: the long token is cut after its breaks.
-  rec = [];
+  H.rec = [];
   draw(v, cx);
   const words = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
-  rec = null;
+  H.rec = null;
   expect(words).toContain(`nightly-${B}`);
   expect(words).toContain(`totals-${B}`);
   expect(words.filter((w) => w.includes(B)).every((w) => w.endsWith(B) || w === `merge-${B}check`)).toBe(true);
@@ -15135,7 +14084,7 @@ test("an open coloured bubble draws a long hyphenated token with breaks, a plain
   expect(youMd.length).toBeGreaterThan(0);
   expect(youMd.some(([, md]) => md.includes(B))).toBe(false);
   // The copy icon under the message copies it as typed.
-  log = [];
+  H.log = [];
   v.copyPrompt(key, cx);
   expect(cx.clip).toBe(PROMPT);
   // ⌘C on the drawn Markdown: Herdr copies it as drawn, which is the message, and the panel
@@ -15143,7 +14092,7 @@ test("an open coloured bubble draws a long hyphenated token with breaks, a plain
   cx.clip = "older text";
   v.notePress(cx);
   cx.clip = `does ${TOKEN} see`;
-  log = [];
+  H.log = [];
   v.cmdUp({ modifiers: { platform: false } }, cx);
   cx.flush();
   expect(cx.clip).toBe(`does ${TOKEN} see`);
@@ -15236,7 +14185,7 @@ test("card keys: the Link rules page goes Back, Close, then each rule's Edit, De
 // at its column's path, a slash and its kid's place.
 // A section's heading is its first part.
 const cardLeaf = (p) => { const s = p.split("/"); return s.length === 3 && /^0\./.test(s[2]) ? 16 : 28; };
-const cardWithCx = (v, cx) => { rec = []; v.settingsCard(theme, cx); const c = rec; rec = null; return c; };
+const cardWithCx = (v, cx) => { H.rec = []; v.settingsCard(theme, cx); const c = rec; H.rec = null; return c; };
 const sizeHandlers = (c) => Object.fromEntries(c.filter((e) => e[0] === "on_size_change" && e[1]?.cardPath).map((e) => [e[1].cardPath, e[1]]));
 const parentOf = (p) => p.slice(0, p.lastIndexOf("/"));
 const rankOf = (p) => { const [n, j] = p.split("/").at(-1).split(":")[0].split("."); const [a, m] = n.split("-"); return Number(a) * 1000 + Number(m ?? 0) * 10 + Number(j ?? 0); };
@@ -15940,7 +14889,7 @@ test("card keys: a ring whose control went another way (a file change, a switch)
   // Drawn with a frame's context, the card asks for the next frame itself.
   v.cardRing = "gone";
   cx.timers = [];
-  rec = []; v.settingsCard(theme, cx); rec = null;
+  H.rec = []; v.settingsCard(theme, cx); H.rec = null;
   expect(cx.timers.length).toBe(1);
   cx.timers = [];
 });
@@ -16268,7 +15217,7 @@ const CARD_BOUND = [
   { keystroke: "tab", action: "agent-threads.ringNext", context: "ThreadsCard" },
   { keystroke: "shift-tab", action: "agent-threads.ringBack", context: "ThreadsCard" },
 ];
-const rootOf = (v, cx) => { rec = []; v.render(cx); const c = rec; rec = null; return c; };
+const rootOf = (v, cx) => { H.rec = []; v.render(cx); const c = rec; H.rec = null; return c; };
 const actionsOf = (c) => Object.fromEntries(c.filter((e) => e[0] === "on_action").map((e) => [e[1], e[2]]));
 
 test("card bound keys: Tab and Shift-Tab are bound once for every pane, to the ring's actions, in the card's key context", async () => {
@@ -16284,7 +15233,7 @@ test("card bound keys: Tab and Shift-Tab are bound once for every pane, to the r
 test("card bound keys: when init's call throws, a second pane's init asks nothing, the card's first opening installs the keys, and later openings ask nothing", async () => {
   // A fresh copy of the mod, so its keys have not been installed by another test's pane.
   const { default: Fresh } = await import("../mods/agent-threads/main.js?card-keys-retry");
-  state = {
+  H.state = {
     terminals: [{ address: "t4", status: "idle", name: "claude" }],
     panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
     props: { terminal: "t4", transcript: fixture("--extra", "2"), debug: true }, shared: {},
@@ -16409,12 +15358,12 @@ test("y from 480 px splits the Trajectory pane off the Chat, kept in its own map
   draw(v, cx);
   expect(v.floatButtons().map((b) => b[0])).toEqual(["th-search", "th-traj", "th-pinned", "th-settings"]);
   expect(v.floatButtons()[1].slice(1, 5)).toEqual(["list", "Open the Trajectory beside the Chat (y)", "trajectory", false]);
-  log = [];
+  H.log = [];
   v.key(keyEv("y"), cx);
   expect(v.traj).toBe(false);
   // The Chat at its px first, so the Trajectory's room comes from the terminal (pinPx).
   expect(resizes()).toEqual([{ id: "p2", px: 702 }]);
-  log = log.filter(([, n]) => n !== "layout.resize");
+  H.log = log.filter(([, n]) => n !== "layout.resize");
   const split = log.find(([, n]) => n === "pane.split");
   expect(split[2]).toMatchObject({ pane: "p2", direction: "right", mod: "agent-threads", props: { terminal: "t4", view: "trajectory" } });
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
@@ -16428,7 +15377,7 @@ test("y from 480 px splits the Trajectory pane off the Chat, kept in its own map
   // 560 px, held to what a 700 px Chat can give: it keeps 240 px.
   expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 700 + 2 - 240 }]);
   expect(v.floatButtons()[1].slice(2, 5)).toEqual(["Go to the Trajectory (y)", "trajectory", true]);
-  log = [];
+  H.log = [];
   v.key(keyEv("y"), cx);
   expect(log).toEqual([["run", "pane.focus", { pane: "p3" }]]);
   // No notice for any of it.
@@ -16480,11 +15429,11 @@ test("y from 480 px splits the Trajectory pane off the Chat, kept in its own map
   v.poll(cx);
   expect(v.sel).toBe(other);
   // y in the Trajectory pane goes to the Chat.
-  log = [];
+  H.log = [];
   w.key(keyEv("y"), cx2);
   expect(log).toEqual([["run", "pane.focus", { pane: "p2" }]]);
   // The Chat closes: the Trajectory pane closes with it.
-  log = [];
+  H.log = [];
   state.panes = state.panes.filter((p) => p.pane !== "p2");
   w.poll(cx2);
   expect(log.filter(([, n]) => n === "pane.close")).toEqual([["run", "pane.close", { pane: "p3" }]]);
@@ -16499,7 +15448,7 @@ test("under 480 px y shows the Trajectory in the Chat's own pane, with no notice
   expect(v.floatButtons()[1][2]).toBe("Show the Trajectory in this pane (y)");
   const k = v.turnKeys(v.rows());
   v.sel = k[0];
-  log = [];
+  H.log = [];
   v.key(keyEv("y"), cx);
   expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
   expect([v.traj, v.trajPane, v.toast]).toEqual([true, false, null]);
@@ -16662,10 +15611,10 @@ test("a running turn's total in the compact band is drawn in the working colour"
   const { v } = await pane(fixture("--extra", "3"));
   const t = { working: "#00aa00", muted: "#777777", blocked: "#aa0000", dim: "#555555", raised: "#333333", foreground: "#ffffff", hover: "#444444" };
   const ink = (going) => {
-    rec = [];
+    H.rec = [];
     v.ledgerCompact(t, { kind: "trh", key: "h1", n: 1, going, total: 5000, line: null }, false, {}, { mode: "line", num: "#1", dur: "5s", tip: "#1" });
     const c = rec;
-    rec = null;
+    H.rec = null;
     const i = c.findIndex((e) => e[0] === "child" && e[1] === "5s");
     return c.slice(0, i).filter((e) => e[0] === "text_color").at(-1)[1];
   };
@@ -16772,7 +15721,7 @@ test("the compact switch goes through the size handler by the rounded Herdr px: 
   v.enterTraj();
   try {
     for (const z of [1, 1.25]) {
-      herdrSettings = { font_family: "Mono", zoom: z };
+      H.herdrSettings = { font_family: "Mono", zoom: z };
       v.paneW = null;
       v.width = 400;
       let c = frame(v, cx);
@@ -16799,7 +15748,7 @@ test("the compact switch goes through the size handler by the rounded Herdr px: 
       size(62);
       expect([z, "62 again", nums()]).toEqual([z, "62 again", true]);
     }
-  } finally { herdrSettings = { font_family: "Mono" }; }
+  } finally { H.herdrSettings = { font_family: "Mono" }; }
 });
 
 test("the compact heading's icon goes through the size handler: 76 to 75 px inside the frame and back, by 1 px each way", async () => {
@@ -16807,7 +15756,7 @@ test("the compact heading's icon goes through the size handler: 76 to 75 px insi
   v.enterTraj();
   try {
     for (const z of [1, 1.25]) {
-      herdrSettings = { font_family: "Mono", zoom: z };
+      H.herdrSettings = { font_family: "Mono", zoom: z };
       v.paneW = null;
       v.width = 400;
       let c = frame(v, cx);
@@ -16821,7 +15770,7 @@ test("the compact heading's icon goes through the size handler: 76 to 75 px insi
       size(76);
       expect([z, "76 again", icon()]).toEqual([z, "76 again", true]);
     }
-  } finally { herdrSettings = { font_family: "Mono" }; }
+  } finally { H.herdrSettings = { font_family: "Mono" }; }
 });
 
 test("running rule in the pane: a turn with no end is running only while the agent works; idle, it says no result, never running", async () => {
@@ -16871,7 +15820,7 @@ test("- and = step the Trajectory pane 40 px and the Chat the other way, keep it
   v.settleSplit();
   state.shared["threads.width"] = { p2: 600, p3: 918 };
   // In the Chat, with no Pinned column: the Trajectory pane.
-  log = [];
+  H.log = [];
   v.key(keyEv("="), cx);
   expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 960 }, { id: "p2", px: 562 }]);
   expect(state.shared["threads.trajWidth"]).toEqual({ px: 960 });
@@ -16884,14 +15833,14 @@ test("- and = step the Trajectory pane 40 px and the Chat the other way, keep it
   w.init(state.props, cx2);
   await settle(w);
   state.props = props;
-  log = [];
+  H.log = [];
   w.key(keyEv("-"), cx2);
   // The Chat takes all 40 px: no cap at its reading width.
   expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 920 }, { id: "p2", px: 602 }]);
   expect(state.shared["threads.trajWidth"]).toEqual({ px: 920 });
   // The Chat at its 240 px: = does nothing, with no notice.
   state.shared["threads.width"] = { p2: 238, p3: 918 };
-  log = [];
+  H.log = [];
   w.key(keyEv("="), cx2);
   expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
   expect([w.toast, v.toast]).toEqual([null, null]);
@@ -16901,7 +15850,7 @@ test("- and = step the Trajectory pane 40 px and the Chat the other way, keep it
   v.splitAsk = null;
   v.width = 1400;
   v.paneW = 1400;
-  log = [];
+  H.log = [];
   v.key(keyEv("y"), cx);
   expect(v.splitAsk.px).toBe(920);
 });
@@ -16985,10 +15934,10 @@ test("the bars: an unfinished call's row bar is grey with a 5 px slant; the head
   // The heading's line: the unfinished stretch teal, ending in one 4 px slant; nothing grey.
   const head = { ...L.rows.find((r) => r.kind === "trh"), line: { tools: [[0, 0.3]], sub: [], model: [], red: [], open: [[0.5, 1]], openSub: [] } };
   slants.length = 0;
-  rec = [];
+  H.rec = [];
   v.ledgerHead(theme, head, false, inks);
   const bgs = rec.filter((e) => e[0] === "bg").map((e) => e[1]);
-  rec = null;
+  H.rec = null;
   expect(slants).toEqual([["end", teal, 4, 3]]);
   expect(bgs).toContain(teal);
   expect(bgs).not.toContain(grey);
@@ -17002,7 +15951,7 @@ test("y does nothing in the Chat's Pinned view or in the Pinned column: no Traje
   let stops = 0;
   cx.stop_propagation = () => { stops++; };
   const tryY = () => {
-    log = [];
+    H.log = [];
     stops = 0;
     v.key(keyEv("y"), cx);
     expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
@@ -17030,7 +15979,7 @@ test("in the Trajectory, a bound command the ledger does not mean does nothing: 
   v.sel = v.turnKeys(v.rows()).at(-1);
   v.enterTraj();
   const pins = v.pinnedList().length;
-  log = [];
+  H.log = [];
   for (const name of ["pin", "copy", "outline", "agents", "jump", "pinned"]) {
     expect(v.ledgerAction(name, cx)).toBe(false);
     v.command(name, cx);
@@ -17398,7 +16347,7 @@ test("in the Trajectory shown in the Chat's own pane, - and = do nothing and pas
   expect([v.traj, v.trajPane]).toEqual([true, false]);
   let stops = 0;
   cx.stop_propagation = () => { stops++; };
-  log = [];
+  H.log = [];
   v.key(keyEv("-"), cx);
   v.key(keyEv("="), cx);
   expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
@@ -17581,17 +16530,17 @@ async function trajSplit(chatW = 702, kept = 600) {
   r.v.paneW = chatW;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
   state.shared["threads.trajWidth"] = { px: kept };
-  log = [];
+  H.log = [];
   r.v.key(keyEv("y"), r.cx);
   // The Chat at its px first, so the split's room comes from the terminal (pinPx).
   expect(resizes()).toEqual([{ id: "p2", px: chatW + 2 }]);
-  log = [];
+  H.log = [];
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
   r.v.settleSplit(r.cx);
   expect(resizes()).toEqual([{ id: "p3", weight: 1000 }]);
   return r;
 }
-const closeTraj = (v, cx) => { state.panes = state.panes.filter((p) => p.pane !== "p3"); log = []; v.poll(cx); };
+const closeTraj = (v, cx) => { state.panes = state.panes.filter((p) => p.pane !== "p3"); H.log = []; v.poll(cx); };
 
 test("the Trajectory split where the terminal has the room: the Chat keeps its width, the Trajectory gets what it asked for, and closing it gives no width back but puts the Chat on a weight", async () => {
   const { v, cx } = await trajSplit();
@@ -17600,7 +16549,7 @@ test("the Trajectory split where the terminal has the room: the Chat keeps its w
   expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }]);
   expect(v.splitAsk).toBeNull();
   // Open: the Chat stays at its px.
-  log = [];
+  H.log = [];
   v.poll(cx);
   expect([resizes(), v.weighAt ?? null]).toEqual([[], null]);
   closeTraj(v, cx);
@@ -17623,7 +16572,7 @@ test("the Trajectory split where the terminal is short: the Chat gives the rest,
   expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }, { id: "p2", px: 475 }]);
   // Open, nothing is given back.
   v.paneW = 473;
-  log = [];
+  H.log = [];
   v.poll(cx);
   expect(resizes()).toEqual([]);
   closeTraj(v, cx);
@@ -17635,7 +16584,7 @@ test("the Trajectory split where the terminal is short: the Chat gives the rest,
   v.poll(cx);
   expect(resizes()).toEqual([{ id: "p2", px: 704 }, { id: "p2", weight: 1 }]);
   // Once.
-  log = [];
+  H.log = [];
   v.poll(cx);
   expect(resizes()).toEqual([]);
 });
@@ -17664,7 +16613,7 @@ function trajSteps(v, cx) {
 // still and even when asked to (toWeight). (Once it holds that width the row goes on weights
 // that keep every width: the three-pane tests.)
 function nothingWhileOpen(v, cx, still, w) {
-  log = [];
+  H.log = [];
   for (let i = 0; i < 3; i++) { still(w); v.toWeight(true); v.poll(cx); draw(v, cx); }
   expect(Boolean(v.trajPaneOpen())).toBe(true);
   expect([resizes(), v.weighing ?? null, v.weighAfter ?? null, v.weighAt ?? null]).toEqual([[], null, null, null]);
@@ -17725,7 +16674,7 @@ test("w while the Trajectory is open stands: closing it does not give the Chat i
   const { v, cx } = await trajSplit();
   roomIs(v, cx, "p3", 433);
   v.paneW = 473;
-  log = [];
+  H.log = [];
   v.fitToReading(cx);
   expect(resizes()).toEqual([{ id: "p2", px: v.readingPx() }]);
   closeTraj(v, cx);
@@ -17739,7 +16688,7 @@ test("w beside the Trajectory sizes the Chat by its own px (sizeTo), and it stay
     expect(v.trajChatBack).toEqual({ px: 704, pane: "p3" });
     v.paneW = 473;
     v.sizeAt = Date.now() - 1000;
-    log = [];
+    H.log = [];
     choose(v, cx);
     const px = v.readingPx();
     expect(v.trajChatBack).toBe(null);
@@ -17809,7 +16758,7 @@ test("a row with no room for the Trajectory at 200 px beside a 240 px Chat: the 
     state.panes = state.panes.filter((p) => p.pane !== "p3");
     v.paneW = chatW;
     v.sizeAt = Date.now() - 1000;
-    log = [];
+    H.log = [];
     v.poll(cx);
     expect(resizes()).toEqual([{ id: "p2", weight: 1 }]);
   }
@@ -17861,7 +16810,7 @@ test("no width the split passes through is kept as the owner's Trajectory width,
   v.paneW = 702;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
   state.shared["threads.trajWidth"] = { px: 600 };
-  log = [];
+  H.log = [];
   at(0, () => v.key(keyEv("y"), cx));
   // The new pane, drawing on its own before the Chat sees it.
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
@@ -18175,83 +17124,6 @@ async function wrapSession(n) {
   }
   return scripted(ev);
 }
-// Herdr's v_virtual_list as the pane meets it: an offset in px that new heights do not move,
-// held to the list at each layout; scroll_to_item to the near edge or the middle, and
-// scroll_to_bottom, each taken at the next layout; the rows on screen drawn. A wheel moves the
-// list first, then the pane hears of it. Each layout is kept in frames.
-function simList(v) {
-  const sim = { off: 0, ask: null, frames: [], asks: 0 };
-  v.scroll = { scroll_to_item(i, how) { sim.ask = { i, how }; sim.asks++; }, scroll_to_bottom() { sim.ask = { end: true }; sim.asks++; } };
-  const room = (s) => Math.max(0, s.reduce((x, y) => x + y, 0) - v.listH);
-  listWindow = (n) => {
-    const s = lastList.sizes;
-    const pre = [0];
-    for (const x of s) pre.push(pre[pre.length - 1] + x);
-    let off = sim.off;
-    const a = sim.ask;
-    sim.ask = null;
-    // As gpui-component's virtual_list.rs: scroll_to_bottom is the near edge for the last row.
-    const ai = a?.end ? n - 1 : a?.i;
-    if (a && ai >= 0 && ai < n) {
-      const top = pre[ai];
-      const bot = pre[ai + 1];
-      if (a.how === "center") off = (top + bot - v.listH) / 2;
-      else if (top < off) off = top;
-      else if (bot > off + v.listH) off = bot - v.listH;
-    }
-    off = Math.max(0, Math.min(off, room(s)));
-    sim.off = off;
-    // The rows drawn: from the first whose bottom is past the top edge, to two past the first
-    // whose bottom is past the bottom edge, or to the end.
-    const past = (edge) => { let k = 0; while (k < n && pre[k + 1] <= edge) k++; return k; };
-    const start = Math.min(past(off), n - 1);
-    const pe = past(off + v.listH);
-    const end = Math.max(start + 1, pe === n ? n : Math.min(pe + 2, n));
-    sim.frames.push({ key: lastList.keys[start], into: off - pre[start], share: (off - pre[start]) / s[start], end: end >= n, off, sizes: s, keys: lastList.keys, lift: v.anchorLift ?? 0, held: Boolean(v.anchor && !v.anchor.end) });
-    return { start, end };
-  };
-  sim.wheel = (dy) => {
-    sim.off = Math.max(0, Math.min(sim.off - dy, room(lastList.sizes)));
-    v.listWheel({ delta: { y: dy * v.zoom() } });
-  };
-  sim.last = () => sim.frames[sim.frames.length - 1];
-  return sim;
-}
-// A frame, then the probe's parts drawn in it answered with made-up heights, as the real probe
-// trickles measures in over the frames after a re-wrap.
-const fakeH = (p) => 30 + ((p.key.length * 37 + p.key.charCodeAt(p.key.length - 1) * 13) % 70);
-function probeFrame(v, cx) {
-  let due = [];
-  v.probeDue = function () { due = Threads.prototype.probeDue.call(this); return due; };
-  try { draw(v, cx); } finally { delete v.probeDue; }
-  // The timers due before the next frame run, as Herdr runs them between frames (a scroll
-  // asked 16 or 48 ms on); the frame marks they would clear are cleared.
-  cx.flush(120, 3);
-  dropTimers(v, cx);
-  for (const [p, sig] of due) v.probed(p.key, sig, { width: 300, height: fakeH(p) * v.zoom() }, cx);
-  return due.length;
-}
-// Frames until the rows are built and shaped, the probe has measured everything, and no
-// place is held; the frames each drew.
-function settleList(v, cx, sim, max = 900) {
-  const from = sim.frames.length;
-  for (let k = 0; k < max; k++) {
-    probeFrame(v, cx);
-    if (!v.rowJob && !v.staleRows?.length && !(v.shapeLeft > 0) && v.probeLeft === 0 && !v.anchor && !v.anchorLift) break;
-  }
-  probeFrame(v, cx);
-  return sim.frames.slice(from);
-}
-// A pane width through the column's steps, still for long enough that it re-wraps at once.
-const stillAt = (v, w) => { v.paneW = w - 2; v.sizeAt = Date.now() - 2000; };
-// The pane at w px with the rows built, measured and at the end, as a session opens.
-function openAt(v, cx, sim, w) {
-  stillAt(v, w);
-  settleList(v, cx, sim);
-  v.jumpLatest();
-  settleList(v, cx, sim);
-  expect([v.follow, sim.last().end]).toEqual([true, true]);
-}
 // Crosses a column step mid-chat and back, and checks the place held through each:
 // - the row at the top edge is the same in every frame, but for the one frame that lands
 //   the place again (its lift), which shows it at most lift px off;
@@ -18320,7 +17192,7 @@ test("a column step crossed mid-chat keeps the row at the top edge at the same s
     expect(seen.length).toBeGreaterThan(4);
     // Let go once the probe had measured the rows above, before the 2 s.
     expect(whys).toEqual(["settled", "settled"]);
-  } finally { listWindow = null; }
+  } finally { H.listWindow = null; }
 });
 
 test("the release frame: narrowing, every frame from the swap on shows the top row at the same px; widening, one frame at most off, by its lift", async () => {
@@ -18348,7 +17220,7 @@ test("the release frame: narrowing, every frame from the swap on shows the top r
         for (const f of off) expect(f.lift).not.toBe(0);
       }
     }
-  } finally { listWindow = null; }
+  } finally { H.listWindow = null; }
 });
 
 test("while a place is held the probe measures the rows above it and only a few below, so it is let go sooner; the rest below come after", async () => {
@@ -18386,7 +17258,7 @@ test("while a place is held the probe measures the rows above it and only a few 
     expect(below).toBe(0);
     // Once let go the probe goes on below.
     expect(v.probeLeft).toBe(1);
-  } finally { listWindow = null; }
+  } finally { H.listWindow = null; }
 });
 
 test("a held place ends with parts that never report and over 4,000 tries kept: the tries are not cleared while it is held, and are after", async () => {
@@ -18418,7 +17290,7 @@ test("a held place ends with parts that never report and over 4,000 tries kept: 
     // Let go, the next walk clears them.
     for (let k = 0; k < 5; k++) { draw(v, cx); cx.flush(120, 3); dropTimers(v, cx); }
     expect(v.probeTries.size).toBeLessThan(4000);
-  } finally { listWindow = null; }
+  } finally { H.listWindow = null; }
 });
 
 test("a column step crossed at the top of the chat keeps the start at the top, both ways", async () => {
@@ -18436,7 +17308,7 @@ test("a column step crossed at the top of the chat keeps the start at the top, b
       stillAt(v, w);
       for (const f of settleList(v, cx, sim)) expect([f.key, f.off]).toEqual([top, 0]);
     }
-  } finally { listWindow = null; }
+  } finally { H.listWindow = null; }
 });
 
 test("an end held through a re-wrap asks for the end once more as it is let go, when following and the reader did not scroll it away", async () => {
@@ -18468,7 +17340,7 @@ test("a reader at the end stays at the end through a column step, both ways: the
       // The pane knows where the list is: at its end.
       expect(Math.abs(v.listOff - sim.off)).toBeLessThan(1);
     }
-  } finally { listWindow = null; }
+  } finally { H.listWindow = null; }
 });
 
 test("the place is kept across a column step with the Trajectory open beside the Chat, and with the Pinned column open", async () => {
@@ -18498,7 +17370,7 @@ test("the place is kept across a column step with the Trajectory open beside the
       sim.wheel(23);
       probeFrame(v, cx);
       crossStep(v, cx, sim, 650, 750);
-    } finally { listWindow = null; }
+    } finally { H.listWindow = null; }
   }
 });
 
@@ -18561,7 +17433,7 @@ test("while the probe still measures, the place holds as long as that takes, pas
       expect(v.anchor?.end).toBe(true);
       expect(sim.last().end).toBe(true);
     }
-  } finally { Date.now = real; delete v.probeDue; listWindow = null; }
+  } finally { Date.now = real; delete v.probeDue; H.listWindow = null; }
 });
 
 test("a jump while a place is held lets it go and goes where it goes: End, a jump key, a rail click", async () => {
@@ -18602,7 +17474,7 @@ test("a jump while a place is held lets it go and goes where it goes: End, a jum
         // The turn on screen, not the place held before.
         expect(pre[i] >= f.off - 1 && pre[i] < f.off + v.listH).toBe(true);
       }
-    } finally { listWindow = null; }
+    } finally { H.listWindow = null; }
   }
 });
 
@@ -18636,11 +17508,11 @@ test("a held place whose row is gone (its reply parted anew) falls back to its t
     expect(sim.last().key).toBe(A.key);
     expect(Math.abs(sim.last().into)).toBeLessThan(1);
     expect(frames.length).toBeGreaterThan(0);
-  } finally { listWindow = null; }
+  } finally { H.listWindow = null; }
 });
 
 test("a column step crossed mid-chat at zoom 0.9 keeps the row at the top edge at the same share, both ways: the wheel is taken in the list's px", async () => {
-  herdrSettings = { font_family: "Mono", zoom: 0.9 };
+  H.herdrSettings = { font_family: "Mono", zoom: 0.9 };
   try {
     const { v, cx } = await wrapSession(400);
     v.debug = false;
@@ -18653,8 +17525,8 @@ test("a column step crossed mid-chat at zoom 0.9 keeps the row at the top edge a
       probeFrame(v, cx);
       expect(Math.abs(v.listOff - sim.off)).toBeLessThan(1);
       crossStep(v, cx, sim, 650, 750);
-    } finally { listWindow = null; }
-  } finally { herdrSettings = { font_family: "Mono" }; }
+    } finally { H.listWindow = null; }
+  } finally { H.herdrSettings = { font_family: "Mono" }; }
 });
 
 test("the sessions starting over drop a held place: a pick, and a session read again from the top", async () => {
@@ -18677,7 +17549,7 @@ test("the sessions starting over drop a held place: a pick, and a session read a
       expect(v.anchor).toBe(null);
       expect(v.anchorDue).toBe(false);
       delete v.probeDue;
-    } finally { listWindow = null; }
+    } finally { H.listWindow = null; }
   }
 });
 
@@ -18699,7 +17571,7 @@ test("a scroll the pane did not see: the rows drawn bound the offset it works ou
     stillAt(v, 750);
     settleList(v, cx, sim);
     expect(sim.last().key).toBe(f.key);
-  } finally { listWindow = null; }
+  } finally { H.listWindow = null; }
 });
 
 test("inside a step nothing is held or moved: 720 to 800 px and back takes no place and asks no scroll", async () => {
@@ -18718,7 +17590,7 @@ test("inside a step nothing is held or moved: 720 to 800 px and back takes no pl
       for (const f of settleList(v, cx, sim)) expect([f.key, f.off]).toEqual([before.key, before.off]);
       expect([v.anchor ?? null, v.anchorDue ?? false, sim.asks]).toEqual([null, false, asks]);
     }
-  } finally { listWindow = null; }
+  } finally { H.listWindow = null; }
 });
 
 // ---- the Pinned pair on weights (TRD-75) ------------------------------------------------
@@ -18812,7 +17684,7 @@ async function pairPanes(chat = 722, opts = {}) {
   }
   const panesSeen = [];
   const z = opts.zoom ?? 1;
-  if (z !== 1) herdrSettings = { font_family: "Mono", zoom: z };
+  if (z !== 1) H.herdrSettings = { font_family: "Mono", zoom: z };
   let heard = 0;
   const onSize = new Map();
   const hear = (x, c, id) => {
@@ -18821,12 +17693,12 @@ async function pairPanes(chat = 722, opts = {}) {
     const h = z !== 1 ? onSize.get(x) : null;
     if (h) { heard++; h({ width: wd * z, height: 800 * z }, c); }
     else if (Math.abs(wd - (x.paneW ?? -9)) > 1) { x.paneW = wd; x.sizeAt = now; x.fitColumn(); x.shareWidth(); }
-    if (z !== 1) rec = [];
+    if (z !== 1) H.rec = [];
     draw(x, c);
-    if (z !== 1) { onSize.set(x, handlerAfterId(rec, "threads-root", "on_size_change")); rec = null; }
+    if (z !== 1) { onSize.set(x, handlerAfterId(rec, "threads-root", "on_size_change")); H.rec = null; }
     c.flush(0);
   };
-  const t = { v, cx, row, w: null, cxw: null, frames: panesSeen, now: () => now, heard: () => heard, restore: () => { Date.now = real; herdrSettings = { font_family: "Mono" }; } };
+  const t = { v, cx, row, w: null, cxw: null, frames: panesSeen, now: () => now, heard: () => heard, restore: () => { Date.now = real; H.herdrSettings = { font_family: "Mono" }; } };
   t.step = (ms = 100) => {
     now += ms;
     row.apply();
@@ -18838,7 +17710,7 @@ async function pairPanes(chat = 722, opts = {}) {
   t.run = (ms, every = 100) => { for (let s = 0; s < ms; s += every) t.step(every); };
   hear(v, cx, "p2");
   // v opens the column: the split applies, the new pane goes in at the column's px.
-  log = [];
+  H.log = [];
   v.key(keyEv("v"), cx);
   row.apply();
   row.order.push("p3");
@@ -20066,7 +18938,7 @@ const rowWeightAsks = () => log.filter(([k, n, a]) => k === "run" && n === "layo
 for (const [name, version] of [["an unlisted version", "0.1.18"], ["a version that cannot be read", null], ["a garbled version", "0.1.17.1"]]) {
   test(`on ${name} the row with the Trajectory open stays at px through both openings, a drag, a key and a close, and asks no weight for the Trajectory or the column`, async () => {
     await withHerdr(version, async (said) => {
-      log = [];
+      H.log = [];
       const t = await threeOpen("traj");
       try {
         const w = t.row.widths();
@@ -20088,7 +18960,7 @@ test("the Herdr version changing under the row on weights puts every pane back t
     try {
       expect(rowRec().k).toBeGreaterThan(0);
       const was = t.row.widths();
-      herdrVersion = "0.1.18";
+      H.herdrVersion = "0.1.18";
       t.run(2000);
       const now = t.row.widths();
       expect(allPx(t, ["p2", "p4", "p3"])).toBe(true);
@@ -20110,7 +18982,7 @@ for (const [name, after] of [
 ]) {
   test(`Herdr pull request 1365's drag, then ${name}, on an unlisted version: the row with the Trajectory open stays at px, no weight for the Trajectory or the column, no pane collapses`, async () => {
     await withHerdr("0.1.18", async () => {
-      log = [];
+      H.log = [];
       const t = await threeOpen("traj");
       try {
         t.row.drag1365("p1", 80); t.run(1500);
@@ -20299,8 +19171,8 @@ const pairWeightAsks = () => log.filter(([k, n, a]) => k === "run" && n === "lay
 const withHerdr = async (version, fn) => {
   const was = herdrVersion;
   const said = spyOn(console, "log");
-  herdrVersion = version;
-  try { await fn(said); } finally { herdrVersion = was; said.mockRestore(); }
+  H.herdrVersion = version;
+  try { await fn(said); } finally { H.herdrVersion = was; said.mockRestore(); }
 };
 test("the version gate: only a listed Herdr version, exactly as written, takes weights", () => {
   expect(["0.1.16", "0.1.17"].map(weightHerdrOf)).toEqual([true, true]);
@@ -20350,7 +19222,7 @@ test("the Herdr version changing under a pair on weights puts it back to px wher
       t.run(4000);
       expect(state.shared["threads.pinPair"]?.t4?.k).toBeGreaterThan(0);
       const was = t.row.widths();
-      herdrVersion = "0.1.18";
+      H.herdrVersion = "0.1.18";
       t.run(3000);
       const now = t.row.widths();
       expect([t.row.size.p2.px, t.row.size.p3.px]).toEqual([now.p2, now.p3]);
@@ -20482,7 +19354,7 @@ test("- and = with the pair on weights move weight inside the pair with the sum 
   try {
     t.run(4000);
     const was = t.row.widths();
-    log = [];
+    H.log = [];
     t.row.seen = 0;
     t.v.key(keyEv("="), t.cx);
     expect(log.filter(([, n]) => n === "layout.resize").map((x) => Object.keys(x[2]).sort().join())).toEqual(["id,weight", "id,weight"]);
@@ -20492,7 +19364,7 @@ test("- and = with the pair on weights move weight inside the pair with the sum 
     expect(Math.abs(now.p2 - (was.p2 - 40))).toBeLessThanOrEqual(1);
     expect(Math.abs(now.p1 - was.p1)).toBeLessThanOrEqual(1);
     // - in the column's own pane takes it back.
-    log = [];
+    H.log = [];
     t.row.seen = 0;
     t.w.key(keyEv("-"), t.cxw);
     t.run(1000);
@@ -20586,7 +19458,7 @@ test("the probe stops when the Chat moves under it (the column left on its trial
   try {
     untilProbe(t);
     // The owner drags the Chat's left edge while the probe waits.
-    log = [];
+    H.log = [];
     t.row.seen = 0;
     t.row.size.p2 = { px: 680 };
     t.step(100);
@@ -20625,7 +19497,7 @@ test("three probes the Chat moves under end with the column back at its px and n
     expect(t.row.size.p3).toEqual({ px: 380 });
     expect(state.shared["threads.pinPair"].t4.probe ?? null).toBe(null);
     // Still for a long while: no fourth probe, nothing asked of either pane.
-    log = [];
+    H.log = [];
     t.row.seen = 0;
     t.run(6000);
     expect(t.w.pairing).toBe(null);
@@ -20661,7 +19533,7 @@ test("three probes whose final check finds the column moved end with both back a
     expect(state.shared["threads.pinPair"].t4.probe ?? null).toBe(null);
     expect(t.row.size.p3).toEqual({ px: 380 });
     expect(t.row.size.p2.px).toBeGreaterThan(0);
-    log = [];
+    H.log = [];
     t.row.seen = 0;
     t.run(6000);
     expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
@@ -20727,7 +19599,7 @@ test("three weights Herdr does not answer after a dropped probe put the column b
     expect(t.w.pairing).toBe(null);
     expect(t.row.size.p3).toEqual({ px: 380 });
     expect(state.shared["threads.pinPair"].t4.probe ?? null).toBe(null);
-    log = [];
+    H.log = [];
     t.row.seen = 0;
     t.v.openTraj();
     expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p3")).toBe(false);
@@ -20756,7 +19628,7 @@ test("a probe's record write from a column pane that closes in the same tick is 
 test("the probe waits for the row to be still: while the Chat's edge is being dragged no weight is asked, then one probe", async () => {
   const t = await pairPanes();
   try {
-    log = [];
+    H.log = [];
     t.row.seen = 0;
     // A drag of the terminal|Chat edge, 10 px every 200 ms for 4 s.
     for (let s = 0; s < 4000; s += 200) { t.row.drag("p1", -10); t.step(100); t.step(100); }
@@ -20807,7 +19679,7 @@ test("the column closing with the pair on weights: the Chat goes back to its wid
       // early: the pane list shows it gone a frame before the Chat hears its new width (as on
       // the rig), so the Chat's first frame after it is at its old width.
       state.panes = state.panes.filter((p) => p.pane !== "p3");
-      log = [];
+      H.log = [];
       t.row.seen = 0;
       if (early) {
         t.w = null;
@@ -20849,7 +19721,7 @@ test("the column closing with the pair on weights: the Chat goes back to its wid
     delete t.row.size.p3;
     t.row.size.p1 = { weight: t.row.size.p1.weight + wp };
     t.w = null;
-    log = [];
+    H.log = [];
     t.row.seen = 0;
     t.run(1500);
     expect(log.filter(([, n2]) => n2 === "layout.resize")).toEqual([]);
@@ -20863,7 +19735,7 @@ test("the Trajectory opened with the column open puts the pair back to px, where
   try {
     t.run(4000);
     const was = t.row.widths();
-    log = [];
+    H.log = [];
     t.row.seen = 0;
     t.v.openTraj();
     const resized = log.filter(([, n]) => n === "layout.resize").map((x) => x[2]);
@@ -20885,7 +19757,7 @@ test("the Trajectory opened with the column open puts the pair back to px, where
     delete state.shared["threads.trajByTerminal"].t4;
     const n = t.frames.length;
     // Not for 1.5 s: the Trajectory's close gives the Chat its width back first.
-    log = [];
+    H.log = [];
     t.row.seen = 0;
     t.run(1400);
     expect(log.some(([, n2, a]) => n2 === "layout.resize" && a.weight != null)).toBe(false);
@@ -20908,7 +19780,7 @@ test("y pressed while the column is on a probe's trial weight, or left on one by
     t.row.apply();
     expect(t.row.size.p3.weight).toBeGreaterThan(0);
     expect(state.shared["threads.pinPair"].t4.k ?? null).toBe(null);
-    log = [];
+    H.log = [];
     t.row.seen = 0;
     t.v.openTraj();
     t.row.apply();
@@ -20927,7 +19799,7 @@ test("y pressed while the column is on a probe's trial weight, or left on one by
     expect(u.w.pairing).toBe(null);
     u.row.apply();
     expect(u.row.size.p3.weight).toBeGreaterThan(0);
-    log = [];
+    H.log = [];
     u.row.seen = 0;
     u.v.openTraj();
     u.row.apply();
@@ -20943,7 +19815,7 @@ test("y pressed while the column is on a probe's trial weight, or left on one by
     x.v.key(keyEv("="), x.cx);
     x.row.apply();
     expect(state.shared["threads.pinPair"].t4.probe ?? null).toBe(null);
-    log = [];
+    H.log = [];
     x.row.seen = 0;
     x.v.openTraj();
     expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p3")).toBe(false);
@@ -20991,7 +19863,7 @@ test("the column's opening keeps the terminal's 200 px when the row's room is kn
   const fit = v.pinKeep(v.me(), 380);
   expect(fit.col).toBe(380);
   expect(fit.chat).toBeLessThan(722);
-  log = [];
+  H.log = [];
   v.key(keyEv("v"), cx);
   expect(log.filter(([, n]) => n === "layout.resize")[0][2]).toEqual({ id: "p2", px: fit.chat });
   // A Chat as wide as the Chat gives always fits (down to 240 and the column to 240 beside
@@ -21002,7 +19874,7 @@ test("the column's opening keeps the terminal's 200 px when the row's room is kn
   v.width = 480;
   v.weightNow = 1;
   v.weighLine = { a: 1 / 530, b: 0.1 / 530 };
-  log = [];
+  H.log = [];
   v.key(keyEv("v"), cx);
   expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
   expect(v.view).toBe("pinned");
@@ -21028,7 +19900,7 @@ test("with no terminal in the row the pair goes on weights in the ratio of their
     t.row.order = t.row.order.filter((id) => id !== "p1");
     delete t.row.size.p1;
     t.row.total = 722 + 380;
-    log = [];
+    H.log = [];
     t.row.seen = 0;
     untilProbe(t);
     const asks = log.filter(([, n]) => n === "layout.resize").map((x) => x[2]);
@@ -21201,7 +20073,7 @@ test("the opening: while the session is read there are no rows and no scrolling,
   expect(v.openInfo(s).working).toBe(false);
   // Within the quiet time, the background alone (the header says Reading…); then the loading
   // state. No list either way.
-  lastList = null;
+  H.lastList = null;
   const painted = v.opening.painted;
   v.opening.painted = false;
   v.opening.at = Date.now();
@@ -21230,7 +20102,7 @@ test("the opening: while the session is read there are no rows and no scrolling,
 });
 
 test("the opening: the list shows at its end, still, with every row shaped (no empty bubbles), and the end held while parts above are measured", async () => {
-  listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
   try {
     const { v, cx, go } = await openingPane(busy());
     v.opening.at -= 1000;
@@ -21310,11 +20182,11 @@ test("the opening: the list shows at its end, still, with every row shaped (no e
     draw(v, cx);
     expect(bottoms).toBe(1);
     expect(v.openHold).toBe(false);
-  } finally { listWindow = null; }
+  } finally { H.listWindow = null; }
 });
 
 test("the opening: a scroll up while parts above wait takes the place on screen and keeps it through the next wheels, until they are measured", async () => {
-  listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
   try {
     const { v, cx, go } = await openingPane(busy());
     v.opening.at -= 1000;
@@ -21345,7 +20217,7 @@ test("the opening: a scroll up while parts above wait takes the place on screen 
     expect(v.holdDone()).not.toBe("scroll");
     v.anchor.open = false;
     expect(v.holdDone()).toBe("scroll");
-  } finally { listWindow = null; }
+  } finally { H.listWindow = null; }
 });
 
 test("the opening: a list ready within the quiet time is shown at once, and the loading state never paints", async () => {
@@ -21475,7 +20347,7 @@ test("the opening ends when the session is read with no turns (No turns yet: a n
 test("the opening ends when the read fails before any turn (Couldn't read this session, with Retry)", async () => {
   let release;
   const gate = new Promise((r) => { release = r; });
-  extractHook = async () => { await gate; return { code: 3, stdout: "", stderr: "made-up failure" }; };
+  H.extractHook = async () => { await gate; return { code: 3, stdout: "", stderr: "made-up failure" }; };
   try {
     const { v, cx } = await openingPane(busy());
     expect(v.openActive()).toBe(true);
@@ -21483,7 +20355,7 @@ test("the opening ends when the read fails before any turn (Couldn't read this s
     await until(() => v.current()?.error && !v.reading, "the failed read");
     openEnded(v, cx, "Couldn't read this session");
     expect(v.headerText()).toBe("Read failed");
-  } finally { extractHook = null; }
+  } finally { H.extractHook = null; }
 });
 
 test("the opening ends when the sessions are dropped and resolving finds none", async () => {
