@@ -328,12 +328,6 @@ export async function paneWith(file, prep, tries = 200) {
   if (tries) await settle(v, tries);
   return { v, cx };
 }
-export async function until(f, what, n = 400) {
-  for (let i = 0; i < n; i++) { if (f()) return; await new Promise((r) => setTimeout(r, 10)); }
-  throw new Error(`timed out waiting for ${what}`);
-}
-
-export function frame(v, cx) { rec = []; v.render(cx); const c = rec; rec = null; return c; }
 // A pane armed by a draw before its session is read, whose read stops (each step waits) while
 // hold() says so. step(f) lets it go on until f() holds, then stops it again.
 export async function openingPane(file, holdAt = () => true) {
@@ -446,9 +440,6 @@ export function openAt(v, cx, sim, w) {
 }
 
 // The harness's settings a test changes (an importer cannot assign an imported binding).
-// A key event as Herdr sends one, no modifiers unless extra says.
-export const keyEv = (key, extra = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false }, ...extra });
-
 // A transcript whose first turn has its end in the second chunk: tool results of 100 KB each
 // fill the first 2 MiB, then the reply and the turn's end. Made-up words only.
 export function endInChunk2() {
@@ -510,3 +501,51 @@ export const H = {
   get settingsStale() { return settingsStale; },
   set settingsStale(x) { settingsStale = x; },
 };
+
+// Helpers the render tests share: render.test.js and the topic files on this harness.
+export const tooltips = (v, cx) => { H.rec = []; v.render(cx); const out = rec.filter(([n]) => n === "tooltip").map(([, x]) => x); H.rec = null; return out; };
+export const svgs = (c) => c.filter((e) => e[0] === "svg").map((e) => e[1].split("/").pop());
+export const keyEv = (key, extra = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false }, ...extra });
+export async function until(f, what, n = 400) {
+  for (let i = 0; i < n; i++) { if (f()) return; await new Promise((r) => setTimeout(r, 10)); }
+  throw new Error(`timed out waiting for ${what}`);
+}
+// The handler a recorded element chain set right after .id(id), or null.
+export function handlerAfterId(calls, id, name) {
+  for (let i = 0; i < calls.length; i++) {
+    if (calls[i][0] !== "id" || calls[i][1] !== id) continue;
+    for (let j = i + 1; j < calls.length && j < i + 8; j++) if (calls[j][0] === name) return calls[j].at(-1);
+  }
+  return null;
+}
+export function frame(v, cx) { H.rec = []; v.render(cx); const c = rec; H.rec = null; return c; }
+export const PINS = join(app, "data/agent-threads/pins.json");
+export async function pinPane(...flags) {
+  delete recordFiles[PINS];
+  const { v, cx } = await pane(fixture(...flags));
+  await new Promise((r) => setTimeout(r, 20)); // the first read of pins.json
+  return { v, cx, keys: () => v.turnKeys(v.rows()) };
+}
+export const saved = async () => { await new Promise((r) => setTimeout(r, 30)); return JSON.parse(recordFiles[PINS] ?? "{}"); };
+export const allPins = (j) => Object.values(j.sessions ?? {}).flatMap((x) => x.pins);
+export const toastText = (v) => v.toast?.text ?? null;
+// Pins the turns at these indexes, in this order, then shows the Pinned view in this pane.
+export async function pinsShown(fixtureFlags, order, width = 400) {
+  const { v, cx, keys } = await pinPane(...fixtureFlags);
+  const k = keys();
+  for (const i of order) { v.sel = k[i]; v.action("pin", cx); }
+  v.width = width;
+  v.key(keyEv("v"), cx); // under 480 px, v shows Pinned in this pane
+  expect(v.view).toBe("pinned");
+  return { v, cx, k };
+}
+export const compactPins = (v) => v.rows().filter((r) => r.kind === "turn");
+export const itemWords = (v, r) => { H.rec = []; v.item(theme, r, true, v.height(r)); const c = rec; H.rec = null; return c; };
+// The list as gpui draws it with only the rows from start to end on screen.
+export function drawRange(v, start, end) {
+  const rows = v.rows();
+  v.listItems(theme, rows, v.slotsMemo ?? rows.map(() => 40), { start, end: end ?? rows.length }, true, false);
+}
+// A frame with the person's scroll before it: the same rows, the top row moved.
+export function scrolled(v, start, end) { drawRange(v, start, end); }
+export const ownOf = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
