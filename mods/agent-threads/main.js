@@ -3251,7 +3251,11 @@ export default class Threads extends View {
       let z = at;
       while (a > 0 && this.baseRows[a - 1].turn === r.turn) a--;
       while (z + 1 < this.baseRows.length && this.baseRows[z + 1].turn === r.turn) z++;
-      runs.push({ k, a, z, r });
+      // Its place in its session, found before any row changes: a turn the session no longer
+      // holds gives the splice up with every row as it was.
+      const ti = r.s.turns[r.turn.n - 1] === r.turn ? r.turn.n - 1 : r.s.turns.indexOf(r.turn);
+      if (ti < 0) return false;
+      runs.push({ k, a, z, r, ti });
     }
     runs.sort((x, y) => y.a - x.a);
     this.shapeStart();
@@ -3260,10 +3264,8 @@ export default class Threads extends View {
     this.splicing = true;
     const stale = new Set(this.staleRows ?? []);
     let marks = b.marks;
-    for (const { k, a, z, r } of runs) {
+    for (const { k, a, z, r, ti } of runs) {
       const { turn, s, si } = r;
-      const ti = s.turns[turn.n - 1] === turn ? turn.n - 1 : s.turns.indexOf(turn);
-      if (ti < 0) return false;
       const out = [];
       this.buildStale = [];
       this.cachedH = new Map();
