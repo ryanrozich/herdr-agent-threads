@@ -29,6 +29,7 @@ import {
   svgs,
   theme,
   toastText,
+  until,
 } from "./render-harness.js";
 
 setup();
@@ -82,7 +83,7 @@ test("pins saved before seven load unchanged: the same pins, in the same order, 
   expect(ids.length).toBe(5);
   // A new pane on the same session reads that file.
   const { v } = await pane(fixture("--extra", "6"));
-  await new Promise((r) => setTimeout(r, 40));
+  await until(() => v.pinsRead, "the first read of pins.json");
   expect(v.pinnedList().map((p) => p.pin.id).sort()).toEqual([...ids].sort());
   expect(v.pinnedList().map((p) => p.key)).toEqual([0, 1, 2, 4, 5].map((i) => k[i]));
   expect(recordFiles[PINS]).toBe(text);
