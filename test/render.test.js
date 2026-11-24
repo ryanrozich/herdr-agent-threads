@@ -34,6 +34,7 @@ import {
   H,
   handlerAfterId,
   hcBy,
+  heldClock,
   herdrSettings,
   herdrVersion,
   hostPlatform,
@@ -3116,6 +3117,9 @@ test("V3b: reply, latest and YOU TextViews never scroll; a message over 420 px i
   v.prefs = { ...v.prefs, bubbleColor: "plain", agentBubbleColor: "plain" }; // Markdown in the message: the plain look
   v.open = new Set(v.current().turns.map((t) => `0:${t.n}`));
   v.full = new Set(v.current().turns.flatMap((t) => [`0:${t.n}`, `l:0:${t.n}`]));
+  // Every row built first: the build is cut into slices by the clock, so one frame on a busy
+  // machine drew only some of them, and the press below found no part to open.
+  settleRows(v, cx);
   views.length = 0;
   frame(v, cx);
   const md = views.filter((x) => /^(th-probe-)?th-(md|lmd)-/.test(x.id));
@@ -3136,6 +3140,7 @@ test("V3b: reply, latest and YOU TextViews never scroll; a message over 420 px i
   const h0 = v.estimate(capped);
   // A press on the bubble (the list's item click) opens the rest in place; another closes it.
   v.click(capped.key, cx);
+  settleRows(v, cx);
   const open = v.rows().find((r) => r.key === capped.key);
   expect(open.all).toBe(true);
   const y = v.youMd(open);
@@ -3146,6 +3151,7 @@ test("V3b: reply, latest and YOU TextViews never scroll; a message over 420 px i
   expect(d.some(([n, a]) => n === "h" && a === 420)).toBe(false);
   expect(d.some(([n, a]) => n === "child" && a === "Show less")).toBe(true);
   v.click(capped.key, cx);
+  settleRows(v, cx);
   expect(v.youMd(v.rows().find((r) => r.key === capped.key)).capped).toBe(true);
 });
 
@@ -20567,26 +20573,33 @@ test("the opening: the first session's stat and peek that come back after anothe
 });
 
 test("a later session still being read, with no loading state over it, shows no running turn before a later chunk has the turn's end", async () => {
-  let second = null;
-  const { v, cx, go } = await openingPane(busy(), (v) => second != null && v.current() === second && second.offset > 0);
-  v.opening.at -= 1000;
-  go((v) => second != null && v.current() === second && second.offset > 0);
-  await settle(v);
-  openFrames(v, cx);
-  expect(v.openActive()).toBe(false);
-  // A new session (a /clear) whose first turn ends in its second chunk, held after the first.
-  v.adopt({ kind: "found", id: "made-up-second", file: endInChunk2(), live: true }, cx);
-  second = v.current();
-  await until(() => second.offset > 0, "the second session's first chunk");
-  expect([Boolean(second.loaded), second.turns.length, second.turns[0].done]).toEqual([false, 1, false]);
-  expect(v.isLive(second, 1, 0)).toBe(false);
-  // Not the running turn: no live row, and no working card.
-  const rows = v.rows();
-  expect(rows.filter((r) => r.live || r.running).map((r) => r.kind)).toEqual([]);
-  expect(drawnText(frame(v, cx)).join("|")).not.toMatch(/No reply yet|Working/);
-  go(() => false);
-  await settle(v);
-  expect(second.turns[0].done).toBe(true);
+  // The rows on screen, as Herdr's list draws them: with every row of the busy fixture drawn
+  // in each frame, the frames to the end of the opening took 15 s, and over 30 s on CI.
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    let second = null;
+    const { v, cx, go } = await openingPane(busy(), (v) => second != null && v.current() === second && second.offset > 0);
+    v.opening.at -= 1000;
+    go((v) => second != null && v.current() === second && second.offset > 0);
+    await settle(v);
+    // On a held clock, the same frames on any machine: on the real one a busy machine needed
+    // more of them, as each slice of the rows did less.
+    heldClock(() => openFrames(v, cx));
+    expect(v.openActive()).toBe(false);
+    // A new session (a /clear) whose first turn ends in its second chunk, held after the first.
+    v.adopt({ kind: "found", id: "made-up-second", file: endInChunk2(), live: true }, cx);
+    second = v.current();
+    await until(() => second.offset > 0, "the second session's first chunk");
+    expect([Boolean(second.loaded), second.turns.length, second.turns[0].done]).toEqual([false, 1, false]);
+    expect(v.isLive(second, 1, 0)).toBe(false);
+    // Not the running turn: no live row, and no working card.
+    const rows = v.rows();
+    expect(rows.filter((r) => r.live || r.running).map((r) => r.kind)).toEqual([]);
+    expect(drawnText(frame(v, cx)).join("|")).not.toMatch(/No reply yet|Working/);
+    go(() => false);
+    await settle(v);
+    expect(second.turns[0].done).toBe(true);
+  } finally { H.listWindow = null; }
 }, 30000);
 
 test("the agent message counts follow a session's read ending: a running agent turn counted hidden while read is shown once it is", async () => {

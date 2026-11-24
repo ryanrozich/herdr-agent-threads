@@ -321,6 +321,17 @@ export function dropTimers(v, cx) { cx.timers = []; v.shapeNext = false; v.build
 // Draws until the rows are built and shaped. Rows left waiting are reshaped in the frame the
 // 0 ms timer asks for (reshapeDue), as Herdr runs it: a draw alone never takes them up.
 export function settleRows(v, cx) { draw(v, cx); for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || v.shapeLeft > 0); k++) { cx.flush(0); draw(v, cx); } }
+// Runs fn, which must not await, with performance.now held where it was, then puts the real
+// clock back. The slices a draw cuts by now() (BUILD_MS, SHAPE_MS) then never run out, so each
+// frame fn draws does all the work it has, and fn draws the same frames on any machine,
+// however busy. A held clock never runs ahead of the real one, so no time the pane keeps from
+// inside fn is in its future afterwards.
+export function heldClock(fn) {
+  const real = performance.now;
+  const t = real.call(performance);
+  performance.now = () => t;
+  try { return fn(); } finally { performance.now = real; }
+}
 
 // Herdr's v_virtual_list as the pane meets it: an offset in px that new heights do not move,
 // held to the list at each layout; scroll_to_item to the near edge or the middle, and
