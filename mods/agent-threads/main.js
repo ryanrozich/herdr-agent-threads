@@ -9367,7 +9367,9 @@ export default class Threads extends View {
     // are still on their way.
     if (s && this.rowJob && !this.baseRows?.length && this.openActive()) return this.openCover(t, s, cx);
     if (s && this.rowJob && !this.baseRows?.length) return this.loading(t, `Reading session${s.size && harnessOfFile(s.file) !== "opencode" ? ` (${fmtBytes(s.size)})` : ""}…`, this.readPct(s));
-    if (s?.loaded && !this.filterText() && !this.turnKeys(rows).length && this.counts().hiddenAll > 0) {
+    // Whether any turn shows is the base rows' to say: past the list's cap the rows drawn can
+    // be one open turn's last items, with no turn's head among them.
+    if (s?.loaded && !this.filterText() && this.counts().hiddenAll > 0 && !this.allRows().some((r) => TURN_KINDS.has(r.kind))) {
       const n = this.counts().hiddenAll;
       return this.empty(t, "bot", "No user messages yet",
         `No user messages in this session yet. ${plural(n, "agent message")} ${n === 1 ? "is" : "are"} hidden.`, null,

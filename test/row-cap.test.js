@@ -7,6 +7,7 @@ import {
   capList,
   draw,
   dropTimers,
+  frame,
   H,
   lastList,
   LIST_MAX,
@@ -1459,4 +1460,29 @@ test("a wheel up ends the end's own asks: the one 16 ms after the end is taken, 
     fastRows(v);
     H.listWindow = null;
   }
+});
+
+// ---- the review's fixes ----
+
+test("past the cap, latest on a newest turn open past it, in a session with a hidden agent message, shows the turn, not No user messages yet", async () => {
+  const ts = new Date(Date.UTC(2026, 10, 1, 8, 0, 0)).toISOString();
+  // A made-up teammate's message, hidden while agent messages are, then 20 turns, the last long.
+  const ev = [{ k: "p", o: "peer", t: '<teammate-message teammate_id="helper-a" color="blue" summary="x">Done here</teammate-message>', ts }, { k: "d", ms: 200, ts }];
+  for (let i = 0; i < 20; i++) ev.push(...capTurn(i, i === 19, 80));
+  const { v, cx } = await scripted(ev);
+  v.debug = false;
+  v.win.cap = { ...v.win.cap, ...SMALL, max: 40 };
+  v.width = 560; v.rootH = 1100; v.listH = 1000;
+  v.prefs = { ...v.prefs, agentTurns: false };
+  expect(v.counts().hiddenAll).toBe(1);
+  const last = v.turnKeys(v.allRows()).at(-1);
+  v.open.add(last);
+  v.rowsKey = null;
+  v.jumpLatest(true);
+  frames(v, cx);
+  // The list keeps only the open turn's last items: no turn's head is in it.
+  expect(v.turnKeys(v.rows())).toEqual([]);
+  expect(v.rows()[0].key).toBe("capped");
+  expect(JSON.stringify(frame(v, cx)).includes("No user messages yet")).toBe(false);
+  expect(lastList.sizes.length).toBe(40);
 });
