@@ -2666,7 +2666,7 @@ export default class Threads extends View {
       this.filterText(), status,
       Math.round(this.width), Boolean(this.res.ended),
       `${P.textSize}.${this.chars()}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}.${P.agentRail === true ? 1 : 0}`, this.selecting ?? "",
-      this.linksVer, this.sendersVer, this.repoSig(), this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
+      this.linksVer, this.sendersVer, this.repoSig(), this.remote.owner ?? "", this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
     const rest = `${this.turnSets().map((x) => [...x].join(",")).join("|")}|${this.callVer ?? 0}|${other}`;
