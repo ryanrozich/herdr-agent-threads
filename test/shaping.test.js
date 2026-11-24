@@ -11,6 +11,27 @@ import { fixture, H, pane, setup } from "./render-harness.js";
 
 setup();
 
+// Runs f with performance.now held, and v.reshape taking msPerChar ms a character of its turn
+// (prompt and reply, as shapeLearn counts them) on that clock: a reshape of known cost,
+// whatever the machine is doing meanwhile. The clock and v.reshape are put back after.
+function reshapeAt(v, msPerChar, f) {
+  const real = globalThis.performance.now;
+  const own = Object.hasOwn(v, "reshape");
+  const reshape = v.reshape;
+  let clk = 1e6;
+  globalThis.performance.now = () => clk;
+  v.reshape = function (turn, live, q, P, why, text) {
+    const out = reshape.call(this, turn, live, q, P, why, text);
+    clk += (turn.prompt.length + (text?.length ?? 0)) * msPerChar;
+    return out;
+  };
+  try { return f(); } finally {
+    globalThis.performance.now = real;
+    if (own) v.reshape = reshape;
+    else delete v.reshape;
+  }
+}
+
 test("shaping: a turn whose expected cost would take the draw past its shaping time waits for the next draw, unless it is the draw's first", async () => {
   const { v } = await pane(fixture("--extra", "3"));
   const t = v.current().turns.at(-1);
@@ -31,13 +52,24 @@ test("shaping: a turn whose expected cost would take the draw past its shaping t
     again();
     v.shapeSpent = 0;
     v.shapeLeft = 0;
-    const sh = v.shape(t);
+    // Its reshape takes 0.1 µs a character on a held clock (reshapeAt), so what it teaches is
+    // known however long the reshape really took.
+    const sh = reshapeAt(v, 1e-4, () => v.shape(t));
     expect(v.shapeStale).toBe(false);
     expect(v.shapeLeft).toBe(0);
     expect(sh).not.toBe(before);
-    // Shaping it taught the rate: here far under 1 µs a character, so it fell by a tenth.
-    expect(v.shapeRate).toBeLessThan(1e-3);
-    expect(v.shapeRate).toBeGreaterThanOrEqual(0.9e-3 - 1e-12);
+    // Shaping it taught the rate: under 1 µs a character, so it fell by a tenth.
+    expect(v.shapeRate).toBeCloseTo(0.9e-3, 12);
+    // At 1 µs a character the rate holds; past it, the rate rises to what the reshape took.
+    again();
+    v.shapeSpent = 0;
+    v.shapeRate = 1e-3;
+    reshapeAt(v, 1e-3, () => v.shape(t));
+    expect(v.shapeRate).toBeCloseTo(1e-3, 12);
+    again();
+    v.shapeSpent = 0;
+    reshapeAt(v, 2e-3, () => v.shape(t));
+    expect(v.shapeRate).toBeCloseTo(2e-3, 12);
     // A short turn still fits: its cost is its length at the same rate.
     const short = v.current().turns[0];
     again();
