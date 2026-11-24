@@ -121,18 +121,19 @@ test("timeline: a call with no result in a turn that is not running runs flat to
   expect(torn.length).toBe(1);
   expect(torn[0][1]).toBeCloseTo(L.turns[0].w, 3);
   expect(L.grow).toEqual([]);
-  // 6,000 turns: each under 2 px, so the layout walks turns, not steps, and draws few spans.
+  // 6,000 turns: each under 2 px, so the layout walks turns, not steps, and draws few spans:
+  // one placing, one layout and no turn's tracks worked out (counted, not timed).
   const one = head(turn(4, ["a", [["Bash", "x", 1000, 2000, true]]]));
   const heads = Array.from({ length: 6000 }, (_, i) => ({ ...one, key: `0:${i + 1}`, n: i + 1, t0: T0 + i * 120000 }));
-  const t0 = performance.now();
+  const was = { ...TL_MADE };
   const big = timelineLayout(heads, 500, "clock");
-  const ms = performance.now() - t0;
+  expect([TL_MADE.geo - was.geo, TL_MADE.layout - was.layout, TL_MADE.tracks - was.tracks]).toEqual([1, 1, 0]);
   expect(big.turns.length).toBe(6000);
+  expect(big.turns.every((t) => t.w < 2)).toBe(true);
   let spans = 0;
   for (const list of big.spans.values()) spans += list.length;
   expect(spans).toBeLessThan(500);
   expect(big.fails.length).toBeLessThanOrEqual(500 / 6 + 1);
-  expect(ms).toBeLessThan(200);
 });
 
 // Round 7 decisions, section 2: an unfinished call is mark 1, the torn end.
