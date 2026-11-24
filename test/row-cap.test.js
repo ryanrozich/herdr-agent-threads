@@ -30,6 +30,42 @@ import { capList, LIST_MAX, RowWindow } from "../mods/agent-threads/ui.js";
 
 setup();
 
+// Up or down onto Show earlier or Show later scrolls to it. The landing asks for its item by key
+// 16 and 48 ms on (rowIndex), and in a window capList has not cut, the fast answer for a key not
+// in the session's rows was "none" for these two as well: no ask was made, and the selection
+// could sit on an item off screen. Session of 150 short turns, the small window.
+test("up onto Show earlier and down onto Show later scroll to it, in a window capList has not cut", async () => {
+  noPins();
+  const { v, cx } = await capSession(150, SMALL);
+  v.jumpLatest(true);
+  frames(v, cx);
+  const got = [];
+  // Up from the window's first turn onto Show earlier.
+  v.sel = v.turnKeys(v.rows())[0];
+  v.follow = false;
+  let asked = scrollsOf(v);
+  v.action("prev", cx);
+  frames(v, cx);
+  got.push([v.sel, Boolean(v.capCut), asked.filter((k) => k === "older").length > 0]);
+  delete v.askScroll;
+  // Show earlier pressed twice, so the window ends short of the session's end, then down from
+  // its last turn onto Show later.
+  v.action("open", cx);
+  frames(v, cx);
+  v.sel = v.turnKeys(v.rows())[0];
+  v.action("prev", cx);
+  v.action("open", cx);
+  frames(v, cx);
+  v.sel = v.turnKeys(v.rows()).at(-1);
+  asked = scrollsOf(v);
+  v.action("next", cx);
+  frames(v, cx);
+  got.push([v.sel, Boolean(v.capCut), asked.filter((k) => k === "newer").length > 0]);
+  delete v.askScroll;
+  expect(got).toEqual([["older", false, true], ["newer", false, true]]);
+});
+
+
 // ---- the list's window: Herdr's v_virtual_list takes at most 10,000 item sizes ----
 
 // Turn i of a one-day session of short done turns, as the reader's events. long: a reply of
