@@ -588,6 +588,54 @@ test("timeline press: a running call's growing bar is drawn over every other bar
   expect(timelineHit(L, [h], at(5000), "tools", now).key).toBe(read.key);
 });
 
+test("timeline press: reaches 4 px left of a turn exactly 2 px wide, where its unfinished call's bar starts", () => {
+  // 300 turns across 2,000 px: the least turn width is 0.3 * 2,000 / 300, 2 px exactly, with a
+  // break of about 1 px. Turn 151 (index 150) is 600 s long with text only, so it takes most
+  // of the strip; the others are 0.5 s long, held at 2 px, and turn 152 stopped after a Read
+  // with a Bash that never returned. That bar is 6 px wide and ends at its turn's end, so
+  // it starts 4 px left of it, over the break and the long turn's end.
+  const heads = Array.from({ length: 300 }, (_, i) => {
+    const t = i === 150 ? turn(i + 1, ["a"], { end: T0 + 600000 }) : i === 151 ? turn(i + 1, ["a", [["Read", "b", 50, 100]], [["Bash", "sleep", 200, null]]], { interrupted: true, reply: null, end: T0 + 500, untimed: true }) : turn(i + 1, ["a"], { end: T0 + 500, untimed: true });
+    return { ...head(t), t0: T0 + i * 1200000 };
+  });
+  const L = timelineLayout(heads, 2000, "clock", T0 + 1e10);
+  const t = L.turns[151];
+  expect(t.w).toBe(2);
+  expect(L.turns[150].x + L.turns[150].w).toBeGreaterThan(t.x - 3.9);
+  const bash = stepsOf(heads[151]).find((it) => it.open);
+  const bar = L.spans.get("tools|tools|0").find(([a, b]) => a < t.x && t.x < b);
+  expect(bash.open).toBe(true);
+  expect(bar[0]).toBeCloseTo(t.x - 4, 9);
+  // 3.9 px left of the turn, inside the long turn: the Bash, drawn there.
+  expect(timelineHit(L, heads, t.x - 3.9, "tools")).toEqual({ turn: heads[151].key, key: bash.key });
+  // Past its bar's start: the long turn's heading.
+  expect(timelineHit(L, heads, t.x - 4.1, "tools")).toEqual({ turn: heads[150].key, key: heads[150].key });
+});
+
+test("timeline press: in one turn, of two bars on the same layer under the press, the narrower, whichever is listed first", () => {
+  const hit = (h, ms) => timelineHit(timelineLayout([h], 1200, "clock", T0 + 1e7), [h], (ms / 60000) * 1200, "tools").key;
+  const keyOf = (h, name) => stepsOf(h).find((it) => it.lane === "tools" && rowsOf(h)[it.i].tool === name).key;
+  // Read from 2 to 40 s; Grep (10 to 20 s) listed before Glob (12 to 14 s), both on the half
+  // track: at 13 s the narrower, Glob, though Grep is listed first.
+  const h = head(turn(1, [[["Read", "a", 2000, 40000]], [["Grep", "b", 10000, 20000]], [["Glob", "c", 12000, 14000]]]));
+  expect(stepsOf(h).filter((it) => it.lane === "tools").map((it) => it.track)).toEqual([0, 1, 1]);
+  expect(hit(h, 13000)).toBe(keyOf(h, "Glob"));
+  expect(hit(h, 16000)).toBe(keyOf(h, "Grep"));
+});
+
+test("timeline press: takes no y inside the lane, so where a half-height bar is over a full one it gets the half one, even where only the full one is drawn", () => {
+  // Read from 2 to 40 s, full height (2 to 14 px down the lane), and a Grep from 10 to 20 s on
+  // the half track (8 to 14 px). At 15 s a press 4 px down the lane is on the Read alone, but
+  // the model's press has no y: it gets the Grep, the bar drawn on top at that x. The view's
+  // press (slice 1) passes the y.
+  const h = head(turn(1, [[["Read", "a", 2000, 40000]], [["Grep", "b", 10000, 20000]]]));
+  const L = timelineLayout([h], 1200, "clock", T0 + 1e7);
+  expect(timelineHit.length).toBe(4);
+  const grep = stepsOf(h).find((it) => rowsOf(h)[it.i].tool === "Grep");
+  expect(timelineHit(L, [h], 300, "tools").key).toBe(grep.key);
+});
+
+
 
 
 test("timeline press: a press at no number finds nothing", () => {
