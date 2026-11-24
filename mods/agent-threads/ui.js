@@ -457,6 +457,12 @@ function packEnd(pk, sep, emit) {
 // line it reads or looks at (two for a word of a line split at words). Weighed so that a unit
 // takes about the same time whatever the text's shape (without the JIT, 8 to 27 ns).
 const LINE_UNITS = 16;
+// A word of a line split at words: up to a space, and also just past a sentence or clause mark
+// of Japanese or Chinese prose, which has no space between words. The marks are the full-width
+// forms only (。！？；，、：, written by code point), so text with none of them splits at spaces
+// alone, as before. The three classes share no character, so a match is one scan: a run of
+// 200,000 characters with no space or mark is read once, not tried again from each place.
+const MD_WORD = /[^\s\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A]+[\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A]*\s*|[\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A]+\s*/g;
 // mdChunks as a job that stops and goes on, so an open reply's split can share a draw's time
 // (on the rig a 120 KB reply's took 44 ms, near Herdr's 50 ms for a draw). mdSplit(md) starts
 // one; mdSplitOn(job, lines, units) goes on with it until that many lines are read or that much
@@ -533,11 +539,11 @@ export function mdSplitOn(job, lines = Infinity, units = Infinity) {
     }
     const l = L[r.k];
     if (blk.lens[r.k] <= r.room) { work += LINE_UNITS; add(l, blk.lens[r.k]); r.k++; return; }
-    // A line longer than the room: its words, packed with no space between.
+    // A line longer than the room: its words (MD_WORD), packed with nothing between.
     if (!r.inner) r.inner = { pos: 0, chunk: [], len: 0, any: false, word: null, wLen: 0, wScan: 0 };
     const w = r.inner;
     if (w.word == null) {
-      const re = /\S+\s*/g;
+      const re = MD_WORD;
       re.lastIndex = w.pos;
       const m = re.exec(l);
       work += 2 * LINE_UNITS;
@@ -554,7 +560,7 @@ export function mdSplitOn(job, lines = Infinity, units = Infinity) {
       w.wLen = 0;
       w.wScan = 0;
     }
-    // A word measured a part at a time too: a line with no space is one word.
+    // A word measured a part at a time too: a line with no space or mark is one word.
     const [k, end] = utf8Run(w.word, w.wScan, Math.min(w.word.length, w.wScan + Math.max(256, room())));
     work += end - w.wScan;
     w.wLen += k;

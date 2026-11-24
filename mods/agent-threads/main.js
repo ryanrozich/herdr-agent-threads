@@ -174,7 +174,7 @@ const CUT_WATCH_MS = 250;
 // On the rig 128 lines of short paragraphs (about 4 KB) took 0.61 to 0.83 ms in the open draw;
 // SPLIT_UNITS is about half of that, 0.4 ms at the cold rate (about 0.00005 ms a unit), and a
 // read runs past it by at most one part made (with a table split out, about 1 ms), or by a
-// word longer than MD_MAX, a part of its own (a line with no space).
+// word longer than MD_MAX, a part of its own (a line with no space or full-width mark).
 const SPLIT_LINES = 128;
 const SPLIT_UNITS = 8192;
 // What a draw should cost. Reshaping and building rows share what the rest of the last draw
@@ -453,9 +453,10 @@ const DRAG_SLOP = 4; // design px a press may move and still be a click, not a t
 // reply's words from one beside them.
 const OPEN_WAIT_MS = 300;
 const FULL_REPLY_CHARS = 200000; // of an open reply; a note under it says what is left out
-// An open reply's part longer than this is a run with no space or line break to split it at
-// (a word longer than MD_MAX), past what Herdr draws as one Markdown view: it shows as plain
-// text, this many characters of its start, under a dim line saying so (mdlong).
+// An open reply's part longer than this is a run with no place to split it (a word longer than
+// MD_MAX: no space, line break, or Japanese or Chinese sentence or clause mark), past what Herdr
+// draws as one Markdown view: it shows as plain text, this many characters of its start, under
+// a dim line saying so (mdlong).
 const LONG_SHOWN = 4000;
 const VIEWER_PROMPT = 8000; // characters of the prompt in the image viewer's panel
 const LONG_REPLY = 1600; // characters past which an open reply ends in a Collapse (Esc) row
@@ -6187,7 +6188,7 @@ export default class Threads extends View {
     const t0 = now();
     // A light draw's time for the row is its height's too (mdHeight reads shapeMax), for a part
     // of at most MD_MAX characters only. The height checks the time only before it starts, and
-    // costs by the text's length: a longer part (a run with no space or line break) of 200,000
+    // costs by the text's length: a longer part (a run with no place to split it) of 200,000
     // characters, sized in a light draw at twice the price, ran past Herdr's time in every one.
     // It gets a rough height there instead, and is sized in a full draw.
     this.lightRoom = this.light && src.length <= MD_MAX ? SHAPE_MIN_MS : null;
@@ -6200,10 +6201,13 @@ export default class Threads extends View {
     pm.rows.set(key, row);
     return rough ? null : row;
   }
-  // A part longer than LONG_SHOWN (a run with no space or line break) as plain text: its start
-  // under a dim line that gives its length (longNote). Its height is counted from the length
-  // shown, at no cost, until the probe measures it, and it has no link rules. As Markdown, at
-  // twice the price, sizing one of 200,000 characters ran past Herdr's time in every draw.
+  // A part longer than LONG_SHOWN (a run with no place to split it) as plain text: its start
+  // under a dim line that gives its length (longNote). The line says it has no place to break
+  // it, not that it has no space: it can be prose, in a script written with no space and none of
+  // the marks the split breaks after (Thai and its neighbours). Its height is counted from the
+  // length shown, at no cost, until the probe measures it, and it has no link rules. As
+  // Markdown, at twice the price, sizing one of 200,000 characters ran past Herdr's time in
+  // every draw.
   longPart(pm, item, key, src, j) {
     const gap = j ? this.paraGap() : undefined;
     const old = pm.rows.get(key);
@@ -6212,7 +6216,7 @@ export default class Threads extends View {
     pm.rows.set(key, row);
     return row;
   }
-  longNote(r) { return `This part is ${fmtCount(r.n)} characters with no space; only its start is shown. Copy (c) copies all of it.`; }
+  longNote(r) { return `This part is ${fmtCount(r.n)} characters with no place to break it; only its start is shown. Copy (c) copies all of it.`; }
   // The time a draw gives an open reply's split and its parts' rows: its reshaping time, or
   // SHAPE_MIN_MS of a light draw.
   partMax() { return this.light ? SHAPE_MIN_MS : this.shapeMax(); }
@@ -11689,7 +11693,7 @@ export default class Threads extends View {
       }
       case "codeall": return this.showAllRow(t, r.all ? "Show less" : `Show all · ${plural(r.left, "more row")}`, r.all ? "chevron-up" : "chevron-down");
       case "mview": return this.showAllRow(t, "View diagram", "panel-right");
-      // A part with no space or line break, too long for one Markdown view (longPart): its start
+      // A part with no place to split it, too long for one Markdown view (longPart): its start
       // as plain text under a dim line saying so.
       case "mdlong": return v_flex().mt(r.gap ?? 6).gap(4)
         .child(div().text_size(11.5).line_height("18px").text_color(t.dim).child(this.longNote(r)))
