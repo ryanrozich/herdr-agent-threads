@@ -385,7 +385,7 @@ for (const [where, make] of Object.entries(VIEWS)) test(`in ${where}, a scroll t
 // call, and a call is one even after a string holding "//".
 test("the source check counts a call to readerMoved, not a comment naming it", () => {
   const cases = {
-    comment: "  read() {\n    // readerMoved is not called here\n    this.follow = true;\n  }\n",
+    comment: "  read() {\n    // the reader's own: readerMoved() is not called here\n    this.follow = true;\n  }\n",
     block: "  read() {\n    /* this.readerMoved() */\n    this.follow = true;\n  }\n",
     call: "  read() {\n    this.readerMoved(); // the reader's\n  }\n",
     afterString: "  read() {\n    const u = \"https://example.com\"; this.readerMoved();\n  }\n",
