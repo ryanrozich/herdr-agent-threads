@@ -227,8 +227,8 @@ export function setup() {
     v_virtual_list: (_id, n, sizes, keyOf, draw) => {
       // One number is one height for every item (the Trajectory's list); an array is one each.
       const size = (i) => (typeof sizes === "number" ? sizes : sizes[i]);
-      // Herdr refuses more than 10,000 item sizes, and throws on every draw; one number has no
-      // such limit (seen on the rig, 2026-11-17).
+      // Herdr refuses more than 10,000 item sizes, and throws on every draw (seen on Herdr
+      // 0.1.17); one number has no such limit (seen on the rig, not measured on a known version).
       if (Array.isArray(sizes) && sizes.length > 10000) throw new RangeError("item_sizes may contain at most 10000 entries");
       lastList = { sizes: typeof sizes === "number" ? Array.from({ length: n }, () => sizes) : [...sizes], keys: [], draw };
       for (let i = 0; i < n; i++) { if (!(size(i) > 0)) throw new Error(`item ${keyOf(i)} has height ${size(i)}`); lastList.keys.push(keyOf(i)); }
