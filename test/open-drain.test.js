@@ -90,8 +90,12 @@ const blankInView = (v) => { const r = lastList?.range; let n = 0; for (let i = 
 // to, if not the turn it is given. Each frame after go(), and four after the rows are drained:
 // [rows left, the first and last row drawn, blank rows among them, that row's top in the view,
 // its height, rows on screen drawn at a height not their own (held), a place held, the rows].
-// The timers age pace ms a frame.
+// The timers age pace ms a frame. The clock is the harness's (1 us a read): a draw's time, the
+// 35 ms line and the shaping time are the same on every run and every machine.
 async function leaveDuringDrain(go, pace = 16) {
+  const realPerf = performance.now.bind(performance);
+  let clock = 0;
+  performance.now = () => (clock += 0.001);
   const host = { off: 0, end: false, want: null };
   const top = (z, i) => z.slice(0, i).reduce((x, y) => x + y, 0);
   H.listWindow = (n, id) => {
@@ -132,7 +136,7 @@ async function leaveDuringDrain(go, pace = 16) {
       frames.push([v.staleRows?.length ?? 0, range.start, range.end, blankInView(v), i < 0 ? null : top(sizes, i) - host.off, sizes[i], held, Boolean(v.anchor?.open), sizes.length]);
     }
     return { v, cx, frames, step };
-  } finally { H.listWindow = null; }
+  } finally { H.listWindow = null; performance.now = realPerf; }
 }
 
 test("the opening: a long plain chat shows within a few frames of its read, once the rows near the end are shaped and measured", async () => {
@@ -608,7 +612,7 @@ test("a jump in the same frame as a pending scroll to the end lands on its turn"
 // and the render is left open.
 const wheelUp = (v, _cx, host) => { host.off = Math.max(0, host.off - 30000 / v.zoom()); v.listWheel({ delta: { y: 30000 } }); };
 const STOP = new Error("stopped at 50 ms");
-async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, stop = false } = {}) {
+async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, stop = false, stream = false } = {}) {
   const realPerf = performance.now.bind(performance);
   let clock = 0;
   performance.now = () => (clock += 0.001);
@@ -619,11 +623,18 @@ async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, st
     v.opening.at -= 1000;
     v.shapeBudget = 12;
     let starts = [];
+    let seen = 0;
+    let offLate = 0;
+    let drawn = new Set();
     let on = false;
     const past = (x) => on && stop && x.renderOpen && clock - x.renderAt > 50;
     const reshape = v.reshape;
     v.reshape = function (...a) {
-      if (this.renderOpen) starts.push(Math.round(clock - this.renderAt));
+      if (this.renderOpen) {
+        starts.push(Math.round(clock - this.renderAt));
+        if (drawn.has(a[0])) seen++;
+        else if (clock - this.renderAt > 35) offLate++;
+      }
       clock += ms;
       if (past(this)) throw STOP;
       return reshape.apply(this, a);
@@ -641,6 +652,11 @@ async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, st
       for (const x of cx.timers) x.ms -= 16;
       cx.flush(16);
       starts = [];
+      seen = 0;
+      offLate = 0;
+      // The turns the last draw showed (Herdr draws the same rows until the list moves).
+      const r = lastList?.range;
+      drawn = new Set(r ? v.rowsMemo.slice(r.start, r.end).map((x) => x.turn).filter(Boolean) : []);
       stopped = false;
       try { frame(v, cx); } catch (e) { if (e !== STOP) throw e; stopped = true; }
       if (past(v)) stopped = true;
@@ -651,15 +667,19 @@ async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, st
     step();
     on = true;
     move(v, cx, host);
+    // An agent writing the newest turn: it runs, and its reply grows a line each frame.
+    const live = v.sessions.at(-1).turns.at(-1);
+    if (stream) live.done = false;
     const out = [];
     for (let k = 0; k < frames; k++) {
+      if (stream) live.after.push(`More of the reply, line ${k}.`);
       const stale = new Set(v.staleRows);
       const s = step();
       const r = lastList.range;
       const off = v.rowsMemo[0]?.kind === "spacer" || v.rowsMemo[0]?.kind === "gap" ? 1 : 0;
       // Rows taken this frame from outside the rows drawn.
       const away = [...stale].filter((i) => !v.staleRows.includes(i) && (i + off < r.start || i + off >= r.end)).length;
-      out.push({ starts: s, blank: blankInView(v), drawn: r.end - r.start, away, stopped });
+      out.push({ starts: s, seen, offLate, blank: blankInView(v), drawn: r.end - r.start, away, stopped });
     }
     return { v, frames: out };
   } finally { H.listWindow = null; performance.now = realPerf; }
@@ -757,24 +777,29 @@ test("the opening: a jump during the drain onto costly rows keeps each draw's re
 // was let start up to 50 ms: one costlier than the time left was stopped, then 5 s of plain
 // draws, then stopped again, and no row was reshaped. Now none starts that is expected to end
 // past the stop: where the first fits it starts at the walk; where it does not, the next frame
-// reshapes it first, near 0 ms. No draw is stopped, a row is reshaped in every frame, and the
-// rows on screen are filled by the sixth frame after the wheel.
+// reshapes it first, near 0 ms. Past the line only a row on screen starts. No draw is stopped,
+// a row on screen is reshaped in every frame until they are all shaped (in at least every
+// second frame where the first does not fit), and they are by the sixth frame after the wheel.
+// Per cell: draws stopped; a row on screen reshaped in every frame until they are all shaped
+// where the walk's first fits (base + ms and the 3 ms margin within 50 ms), else in at least
+// every second frame (a frame whose owed row took the draw's shaping time owes none); starts
+// that end past 50 ms; starts past 35 ms for a row off screen; frames from the sixth with a
+// blank row on screen.
+function gridCell(frames, ms, fits) {
+  const filled = frames.findLastIndex((f) => f.blank > 0) + 1;
+  let run = 0;
+  let most = 0;
+  for (const f of frames.slice(0, filled)) { run = f.seen ? 0 : run + 1; most = Math.max(most, run); }
+  return [frames.filter((f) => f.stopped).length, most <= (fits ? 0 : 1), frames.flatMap((f) => f.starts).filter((s) => s + ms > 50).length, frames.reduce((n, f) => n + f.offLate, 0), frames.slice(5).filter((f) => f.blank > 0).length];
+}
 test("the opening: a draw that reaches its walk late starts no reshape expected to end past Herdr's stop, and reshapes the row it refused first in the next frame", async () => {
   const got = [];
   const want = [];
   for (const base of [36, 40, 44, 48]) {
     for (const ms of [2, 8, 20]) {
       const { v, frames } = await costlyWheel(ms, base, 30, wheelUp, { until: true, stop: true });
-      // Draws stopped; a reshape in every frame where the walk's first fits (base + ms and the
-      // margin within 50 ms), else in at least every second frame (the frame a costly owed row
-      // took the draw's shaping time owes none); starts that end past 50 ms; frames from the
-      // sixth with a blank row on screen; and rows still left after the 30.
-      let run = 0;
-      let most = 0;
-      for (const f of frames) { run = f.starts.length ? 0 : run + 1; most = Math.max(most, run); }
-      const fits = base + ms + 3 <= 50;
-      got.push([base, ms, frames.filter((f) => f.stopped).length, most <= (fits ? 0 : 1), frames.flatMap((f) => f.starts).filter((s) => s + ms > 50).length, frames.slice(5).filter((f) => f.blank > 0).length, v.staleRows.length > 400]);
-      want.push([base, ms, 0, true, 0, 0, true]);
+      got.push([base, ms, ...gridCell(frames, ms, base + ms + 3 <= 50), v.staleRows.length > 400]);
+      want.push([base, ms, 0, true, 0, 0, 0, true]);
     }
   }
   expect(got).toEqual(want);
@@ -802,12 +827,50 @@ test("the opening: a second jump 60 ms after the first is held only after its ow
 }, 60000);
 
 // A landing's hold still to take ends with the place: a pick of another session, a restart of
-// the read, or a wheel (dropAnchor) leaves no hold to be taken on other rows.
-test("the opening: a pick, a restart or a dropped place ends a landing's hold still to take", async () => {
+// the read, a wheel (dropAnchor), or a switch to the other view with nothing selected (with a
+// selection the switch makes a landing of its own) leaves no hold to be taken on other rows.
+test("the opening: a pick, a restart, a dropped place or a switch of view ends a landing's hold still to take", async () => {
   const { v, cx } = await plainOpening(60);
-  for (const [name, f] of [["dropAnchor", () => v.dropAnchor()], ["restart", () => v.restart(v.current())], ["pick", () => v.pick({ path: v.current().file }, cx)]]) {
+  const views = () => { v.sel = null; v.setView(v.view === "pinned" ? "all" : "pinned"); };
+  for (const [name, f] of [["dropAnchor", () => v.dropAnchor()], ["restart", () => v.restart(v.current())], ["view", views], ["view back", views], ["pick", () => v.pick({ path: v.current().file }, cx)]]) {
     v.openLand = "due";
     f();
     expect([name, v.openLand]).toEqual([name, false]);
+  }
+}, 30000);
+
+// An agent writing the newest turn while the reader is scrolled up into rows still to reshape,
+// the walk 40 ms into each draw and rows of 8 ms. The running turn is off screen: past the line
+// it is not reshaped in the drain (the rows build shapes it when it is drawn), and the rows on
+// screen are, one a frame, as without it. Before, the running turn was reshaped first in every
+// frame and took the draw's one reshape past the line: the rows on screen stayed blank in all
+// 30 frames.
+test("the opening: while a turn streams, the rows on screen are still reshaped, one a frame, and the running turn off screen waits", async () => {
+  const { frames } = await costlyWheel(8, 40, 30, wheelUp, { until: true, stop: true, stream: true });
+  expect(gridCell(frames, 8, false)).toEqual([0, true, 0, 0, 0]);
+  expect(frames.slice(0, 5).filter((f) => f.seen > 0).length).toBeGreaterThanOrEqual(4);
+}, 60000);
+
+// The 35 ms line is the drain's (reshapeStale): a reshape asked for late in a draw elsewhere (a
+// rows build, a settings rebuild) is held only to the draw's shaping time, as before it.
+test("a reshape asked for past 35 ms in a draw outside the drain starts, and inside the drain, off screen, waits", async () => {
+  const { v } = await plainOpening(60);
+  const turn = v.sessions[0].turns[3];
+  const fresh = () => Object.assign(turn, { shapeKey: null, shapeFast: null, shapesKept: null });
+  try {
+    v.renderOpen = true;
+    v.renderAt = performance.now() - 40;
+    v.shapeSpent = 0;
+    fresh();
+    v.shape(turn);
+    expect(v.shapeStale).toBe(false);
+    fresh();
+    v.lineOn = true;
+    v.lineFirst = true;
+    v.shape(turn);
+    expect(v.shapeStale).toBe(true);
+  } finally {
+    v.lineOn = false;
+    v.renderOpen = false;
   }
 }, 30000);
