@@ -4850,7 +4850,7 @@ export default class Threads extends View {
     // Out of time and never shaped: no key to build (3 µs a turn, 30 ms a draw with 6,000 rows
     // waiting after renders were stopped through a whole load).
     let held = null;
-    if (turn.shapeKey == null && (held = this.shapeHeld(turn, text, live, true))) return this.shapeRefused(this.blankShape());
+    if (turn.shapeKey == null && (held = this.shapeHeld(turn, text, live))) return this.shapeRefused(this.blankShape());
     const q = this.filterText();
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
@@ -4902,12 +4902,13 @@ export default class Threads extends View {
   //   running turn's reply is reshaped at each update, and each would pass the limit, so it
   //   keeps the shape it had until it ends. With a rate far too high every turn can never
   //   fit: each runs alone, a draw each, and teaches the rate down (shapeLearn).
-  // - Every other turn: within the draw's shaping time (the draw's first whatever its cost; a
-  //   turn never shaped, fresh, while any is left), and in the drain expected to end in time
-  //   (lineCut, fitsHost).
+  // - Every other turn: within the draw's shaping time, the draw's first whatever its cost and
+  //   any other only if its expected cost fits what is left (a turn never shaped too, as on
+  //   main: in a rows build a 35 ms turn after another unit waits, its blank row drawn, for a
+  //   draw where it comes first), and in the drain expected to end in time (lineCut, fitsHost).
   // Outside a draw nothing is stopped, so the mark is not read there. The rate is learned only
   // from turns shaped.
-  shapeHeld(turn, text, live, fresh = false) {
+  shapeHeld(turn, text, live) {
     if (this.unitAlone && this.renderOpen) return true;
     const max = this.shapeMax();
     const spent = this.shapeSpent ?? 0;
@@ -4948,7 +4949,7 @@ export default class Threads extends View {
       if (this.owedRun === turn) this.owedAlone = (this.owedAlone ?? 0) + 1;
       return false;
     }
-    return spent > max || (!fresh && spent > 0 && spent + this.shapeCost(turn, text) > max) || this.lineCut(turn, text);
+    return spent > max || (spent > 0 && spent + this.shapeCost(turn, text) > max) || this.lineCut(turn, text);
   }
   // What a mark is for: the turn's text, by its prompt and reply lengths (as shape()'s fast
   // check compares them).
