@@ -628,6 +628,29 @@ test("a jump to one turn with more items than the list takes lands on its head, 
   expect(inList(v, "0:150")).toBe(true);
 });
 
+// The Pinned view reads from its top when no row is kept (capKey), so latest there keeps the
+// last row instead; the Chat's list keeps its newest items with none.
+test("in the Pinned view past the cap, latest after a scroll to a huge pin's head shows the newest pin: the list ends with it", async () => {
+  const { v, cx } = await capSession(150, { ...SMALL, max: 40 }, 140, 80);
+  v.jumpLatest(true);
+  frames(v, cx);
+  v.open.add("0:141");
+  frames(v, cx);
+  v.sel = "0:150";
+  v.action("pin", cx);
+  v.sel = "0:141";
+  v.action("pin", cx);
+  v.setView("pinned");
+  frames(v, cx);
+  v.sel = "0:141";
+  v.scrollTo = { key: "0:141", how: "center" };
+  frames(v, cx);
+  expect([inList(v, "0:141"), inList(v, "0:150")]).toEqual([true, false]);
+  v.action("latest", cx);
+  frames(v, cx);
+  expect([v.sel, inList(v, "0:150"), v.rows().at(-1).key]).toEqual(["0:150", true, "0:150"]);
+});
+
 test("capList keeps the item a reader went to: a head kept above a note, or a middle between two", () => {
   const rows = Array.from({ length: 30 }, (_, i) => ({ kind: "md", key: `r${i}` }));
   const sizes = rows.map(() => 40);
