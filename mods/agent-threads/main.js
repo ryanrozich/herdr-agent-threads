@@ -6523,12 +6523,19 @@ export default class Threads extends View {
             if (p != null) return p + (older ? -1 : 1);
             return this.selMatches() ? this.hitNear(h, this.sel, older) : h.top - 1;
           };
-          // An older step from a match in a tail being checked again, not placed yet: the
-          // tail's next slice first, so the step does not skip its matches not checked again.
+          // An older step from a match in a tail being checked again, not placed yet: the turns
+          // back from it to the tail's next turn, not checked again yet, are checked here, one
+          // slice at most (tailBack). It lands on the first match there. A slice that ends first
+          // leaves the selection where it is, and the next press goes on from where it stopped.
+          // Every match before the tail's next turn has its place, so hitNear is exact there.
           const tail = h.cur.tail;
           if (older && tail && !h.at.has(this.sel) && this.selMatches()) {
             const [si, n] = this.sel.split(":").map(Number);
-            if (si === this.sessions.length - 1 && n - 1 >= tail.next) this.scanHits(h, now() + this.scanMax(), true);
+            if (si === this.sessions.length - 1 && n - 1 > tail.next) {
+              const k = this.tailBack(h, this.sel, n - 2, now() + this.scanMax());
+              if (k === undefined) return true;
+              if (k) { this.sel = k; this.follow = false; this.scrollTo = { key: k, how: "center" }; return true; }
+            }
           }
           let j = next();
           // Past the oldest match found so far, while more can come: one slice, here.
@@ -9317,6 +9324,7 @@ export default class Threads extends View {
       h.top = p;
     }
     h.hidL = h.hidL.filter((ti) => ti < safe);
+    h.back = null;
     // The tail from safe, marked with the counts as they are now, in one write. A scan still
     // among those turns found only matches from safe on, all gone now: it goes on from the turn
     // before safe.
@@ -9325,6 +9333,25 @@ export default class Threads extends View {
     h.done = false;
     if (turns.length - safe <= HITS_TAIL) this.scanHits(h, Infinity, true);
     return true;
+  }
+
+  // The newest shown match among the newest session's turns from turn index from down to the
+  // tail's next turn (those not checked again yet), checked within until: its key, or null
+  // when there is none. A slice that runs out returns undefined and keeps where it got to
+  // (h.back), and a later call for the same key goes on from there. hitsTail clears it: the
+  // tail checked again from its start can have changed those turns.
+  tailBack(h, key, from, until) {
+    const L = this.sessions.length - 1;
+    const s = this.sessions[L];
+    const turns = s.turns;
+    const stop = h.cur.tail.next;
+    let ti = h.back?.key === key ? Math.min(h.back.ti, from) : from;
+    for (let c = 1; ti >= stop; ti--, c++) {
+      if ((c & 31) === 0 && now() > until) { h.back = { key, ti }; return undefined; }
+      const t = turns[ti];
+      if (threadMatches(turns, t, h.q) && isShown(t, { agentTurns: h.agents, live: this.isLive(s, L, ti), turns })) return `${L}:${t.n}`;
+    }
+    return null;
   }
 
   // The place of the nearest match older (or newer) than turn key, by turn order: the places
