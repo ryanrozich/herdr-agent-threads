@@ -450,7 +450,9 @@ export function itemBox(a, b, f, i, tx, w, wall, scale, len, upTo = null) {
 // Turn ti's step for a press at px x of the view in a lane: { ti, i, d, r, w } (i null for
 // none). With bars under the press (d 0), the one drawn on top: r, failed over the rest (2),
 // half height over full (1), the view's order; then the narrowest, w. Else the nearest bar
-// within 4 px, the first listed at equal distance.
+// within 4 px, the first listed at equal distance. A turn under 2 px is drawn as one span per
+// lane, from its x and at least 1 px wide (timelineLayout), so each of its bars is that span
+// here: the press answers what is drawn, its failed call where the span is red.
 function nearStep(L, h, ti, x, lane, nowMs) {
   const z = L.z ?? 1;
   const wall = L.geo?.walls[ti] ?? wallOf(h);
@@ -458,15 +460,16 @@ function nearStep(L, h, ti, x, lane, nowMs) {
   const tw = L.turns[ti].w * z;
   // The running turn's unfinished bars end at now, not at its room's end.
   const upTo = ti === L.geo?.live && h.t0 != null ? growEnd(tx, tw, wall, h.t0, nowMs) : null;
+  const narrow = tw < 2;
   // The tracks the layout worked out for this turn; a turn it did not draw as bars, here.
-  const tk = L.tracks?.has(h) ? L.tracks.get(h) : L.scale === "steps" ? null : tlTracks(h);
+  const tk = narrow || L.scale === "steps" ? null : L.tracks?.has(h) ? L.tracks.get(h) : tlTracks(h);
   const out = { ti, i: null, d: 4, r: -1, w: Infinity };
   const len = stepN(h);
   for (let i = 0; i < len; i++) {
     const k = LEDGER_KINDS[h.steps[i].lk];
     // A row with no lane (an interrupted turn's Interrupted row) is no bar.
     if (!laneKeys(h.steps[i]) || (lane && k?.lane !== lane)) continue;
-    const b = stepBox(h, i, tk?.[i], tx, tw, wall, L.scale, len, upTo);
+    const b = narrow ? { x0: tx, x1: tx + Math.max(tw, 1), track: 0 } : stepBox(h, i, tk?.[i], tx, tw, wall, L.scale, len, upTo);
     if (!b) continue;
     const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
     const r = (b.track ? 1 : 0) + (k?.ink === "failed" ? 2 : 0);
@@ -488,9 +491,10 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
   let lo = 0;
   let hi = T.length - 1;
   while (lo < hi) { const m = (lo + hi + 1) >> 1; if (T[m].x <= fx) lo = m; else hi = m - 1; }
-  // Past the turn into its break: the nearer turn. The press stays where it is, so a step is
-  // found only within 4 px of it.
-  if (fx > T[lo].x + T[lo].w && T[lo + 1] && T[lo + 1].x - fx < fx - (T[lo].x + T[lo].w)) lo++;
+  // Past the turn as drawn into its break: the nearer turn. A turn under 2 px is drawn at least
+  // 1 px wide. The press stays where it is, so a step is found only within 4 px of it.
+  const end = T[lo].x + (T[lo].w * z < 2 ? Math.max(T[lo].w, 1 / z) : T[lo].w);
+  if (fx > end && T[lo + 1] && T[lo + 1].x - fx < fx - end) lo++;
   const h = heads[lo];
   if (!h || h.key !== T[lo].key) return null;
   let win = nearStep(L, h, lo, x, lane, nowMs);

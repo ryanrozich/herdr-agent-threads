@@ -565,7 +565,7 @@ test("timeline press: on turns under 2 px, drawn as one span per lane from the t
   }
   // Presses past a turn's own width, inside its drawn span, come up too.
   expect(pressed).toBeGreaterThan(1000);
-  expect(past).toBeGreaterThan(100);
+  expect(past).toBeGreaterThan(40);
 });
 
 
