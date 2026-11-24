@@ -466,6 +466,9 @@ const FULL_REPLY_CHARS = 200000; // of an open reply; a note under it says what 
 // sentence or clause mark), or one its dollar escapes take past a view: it shows whole as plain
 // text (mdlong), under main's line for a part Herdr could not draw as Markdown (BROKEN_NOTE).
 const BROKEN_NOTE = "Herdr could not draw this part as Markdown, so it shows as plain text.";
+// What the note's icon and the gap after it take from its line (brokenPlain): 12 px and 5 px.
+// The note's characters are MD_CHAR's at its own 11.5 px, not at the reading text's size.
+const BROKEN_ICON = 17;
 const VIEWER_PROMPT = 8000; // characters of the prompt in the image viewer's panel
 const LONG_REPLY = 1600; // characters past which an open reply ends in a Collapse (Esc) row
 // px above a paragraph drawn as its own list item, and above a heading, as inside one block
@@ -6313,12 +6316,13 @@ export default class Threads extends View {
     return row;
   }
   // A part as plain text under BROKEN_NOTE, with the warning's icon and colour: one Herdr drew at
-  // no height (mdBroken), or one a Markdown view cannot hold (mdlong).
+  // no height (mdBroken), or one a Markdown view cannot hold (mdlong). The note is 18 px a line,
+  // as its count (height) has it, and wraps beside the icon and its gap (BROKEN_ICON).
   brokenPlain(t, r, text) {
     return v_flex().mt(r.gap ?? 6).gap(4)
       .child(h_flex().gap(5).items_center().text_size(11.5).text_color(t.warning ?? t.dim)
         .child(svg(ICON("alert")).size(12).flex_none())
-        .child(div().min_w(0).child(BROKEN_NOTE)))
+        .child(div().min_w(0).line_height("18px").child(BROKEN_NOTE)))
       .child(this.readBlock(div()).text_color(t.foreground).child(text));
   }
   // The time a draw gives an open reply's split and its parts' rows: its reshaping time, or
@@ -10518,7 +10522,7 @@ export default class Threads extends View {
       case "noreply": return 6 + TV_LINE * (this.wrapped(this.noReplyText(r.turn), w, MD_CHAR) + 1);
       case "md": return (r.gap ?? 6) + (r.table ? this.tableHeight(r) : this.mdHeight(r.src ?? r.md));
       // Main's line's lines at its 11.5 px, 4 px, then the text at the reading line.
-      case "mdlong": return (r.gap ?? 6) + 18 * this.wrapped(BROKEN_NOTE, this.prose(), (this.charW(MD_CHAR) * 11.5) / 13) + 4 + this.restHeight(r.src.length, 1);
+      case "mdlong": return (r.gap ?? 6) + 18 * this.wrapped(BROKEN_NOTE, this.prose() - BROKEN_ICON, (MD_CHAR * 11.5) / 13) + 4 + this.restHeight(r.src.length, 1);
       case "seltext": return 6 + 22 + r.boxH;
       case "codehead": return 8 + 28;
       case "code": return this.codeBoxH(r);
