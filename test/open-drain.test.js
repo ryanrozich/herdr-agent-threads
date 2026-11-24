@@ -1740,6 +1740,36 @@ test("shaping: in a rows build, a turn never shaped after another unit is shaped
   }
 }, 300000);
 
+// Rows never shaped, as the light draws after a stop leave them (on the rig, 3,791 of 5,600
+// turns once the read ended), drained on a priced clock: 300 turns of 2 to 9 ms each at the
+// rate learned, each costing 0.3 ms more than its estimate, with 10 ms of the draw after the
+// rows. A drain draw shapes for its shaping time (12 ms here), and after its first unit a
+// turn never shaped starts only if its expected cost fits what is left, as on main: the rest
+// of the draw keeps its room and no draw is stopped. Before, a turn never shaped skipped that
+// check and was held only by the fit check (fitsHost, 47 ms): each draw shaped to about 47 ms
+// by the estimates, and the estimates' misses took draws past 50 (rig: drain frames of 45 to
+// 52 ms on big5600b, where main's worst is 42).
+test("shaping: rows never shaped are drained within the draw's shaping time, so a drain draw keeps room for the rest of the frame and none is stopped", async () => {
+  const p = await pricedDrain({ n: 400 });
+  try {
+    p.begin();
+    const fresh = new Set(p.turns.slice(40, 340));
+    let i = 0;
+    for (const t of fresh) { p.restale(t, 2000 + ((i++ * 1373) % 7000)); p.charge(t, 0.3); }
+    const frames = untilDone(p.v, p.step, 3000);
+    const late = [];
+    for (const [k, f] of frames.entries()) {
+      let spent = 0;
+      for (const [j, x] of f.log.entries()) {
+        if (j > 0 && fresh.has(x.turn) && spent + (x.cost - 0.3) > 12 + 0.01) late.push([k, j, Math.round(spent * 10) / 10, Math.round((x.cost - 0.3) * 10) / 10]);
+        spent += x.cost;
+      }
+    }
+    expect(late.slice(0, 5)).toEqual([]);
+    expect([frames.filter((f) => f.stopped).length, [...fresh].filter((t) => t.shapeKey == null).length, p.v.staleRows.length]).toEqual([0, 0, 0]);
+  } finally { p.end(); }
+}, 300000);
+
 // A limit, pinned as it is: the owed row is paid before the draw's rows build (payOwed, then
 // rows()), and the build's slice is not cut by the time the owed row took. A turn of about 30
 // ms on screen meets a 25 ms build and is owed; in the next draw it is paid first (30 ms, and
