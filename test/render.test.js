@@ -102,7 +102,9 @@ mock.module("gpui-base", () => ({
     const size = (i) => (typeof sizes === "number" ? sizes : sizes[i]);
     lastList = { sizes: typeof sizes === "number" ? Array.from({ length: n }, () => sizes) : [...sizes], keys: [], draw };
     for (let i = 0; i < n; i++) { if (!(size(i) > 0)) throw new Error(`item ${keyOf(i)} has height ${size(i)}`); lastList.keys.push(keyOf(i)); }
+    thinDrawn.length = 0;
     draw(listWindow ? listWindow(n) : { start: 0, end: n });
+    if (thinDrawn.length) throw new Error(`rows drawn thin: ${thinDrawn.join(", ")}`);
     return el;
   },
   TextView: { html: (id, html) => { const calls = []; views.push({ id, html, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); }, markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: (opts) => { const st = { opts, handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
@@ -203,6 +205,14 @@ if (process.env.THREADS_CHILD === "read-timing") {
   mock.module(turnsPath, () => ({ ...real, parseLine: (c, line) => { work.lines++; return parseLine(c, line); }, apply: (s, e) => { work.events++; return apply(s, e); } }));
 }
 const { default: Threads } = await import("../mods/agent-threads/main.js");
+// The shape bound: no closed or running row is drawn thin. Every row the list draws is noted
+// here when its shape lacks its lines, and the list (v_virtual_list) fails the draw on one.
+const thinDrawn = [];
+const drawItem = Threads.prototype.item;
+Threads.prototype.item = function (t, r, ...rest) {
+  if ((r?.kind === "turn" || r?.kind === "wrow") && (r.shape?.thin || !Array.isArray(r.shape?.prompt))) thinDrawn.push(r.key);
+  return drawItem.call(this, t, r, ...rest);
+};
 const { thumbSize, tileRow, bubbleMax, ROW, columnWidth, railLook, rowHeight, MD_MAX, alpha: alphaForTest, dayKey } = await import("../mods/agent-threads/ui.js");
 
 function fixture(...flags) {
@@ -20842,3 +20852,379 @@ test("shaping: a rate far too high holds every turn but the first of each draw, 
   expect(v.shapeRate).toBeLessThan(1);
   expect(frames.some((f) => f.length > 1)).toBe(true);
 });
+
+// ---- the shape bound (TRD-114) ----
+// A made-up long session whose replies are Markdown (paragraphs, a list, code, and a table in
+// every seventh), so every closed row has a reply block for the probe to measure.
+async function mdSession(n) {
+  const words = "the cart total rounds per line so the order is off by a cent when a coupon applies to a split shipment".split(" ");
+  const say = (i, k) => Array.from({ length: k }, (_, j) => words[(i * 7 + j * 3) % words.length]).join(" ");
+  const ev = [];
+  for (let i = 0; i < n; i++) {
+    const ts = new Date(Date.UTC(2026, 10, 1, 8, 0) + i * 60000).toISOString();
+    const parts = [`Reply ${i}: ${say(i, 20 + (i % 5) * 9)}.`, `- ${say(i + 1, 8)}`, `- ${say(i + 2, 8)}`, `${say(i + 3, 14 + (i % 3) * 10)}.`];
+    if (i % 7 === 0) parts.push("| line | tax |\n| --- | --- |\n| cart | 0.01 |");
+    ev.push({ k: "p", o: "human", t: `Prompt ${i}: ${say(i, 12 + (i % 4) * 8)}.`, ts }, { k: "t", t: parts.join("\n\n") }, { k: "d", ts });
+  }
+  return scripted(ev);
+}
+const SHAPE_NEAR_T = 40;
+// Every shape object the pane holds, from the turns, the rows and the kept rows: which are
+// full (text and lines) and which thin (numbers only), and the turns holding a full one.
+function shapeCensus(v) {
+  const full = new Set();
+  const thin = new Set();
+  const fullTurns = new Set();
+  const see = (sh, t) => { if (!sh || sh.blank) return; if (sh.thin) thin.add(sh); else { full.add(sh); if (t) fullTurns.add(t); } };
+  for (const s of v.sessions) for (const t of s.turns) for (const k of t.shapesKept?.values() ?? []) see(k.memo, t);
+  for (const r of v.baseRows ?? []) see(r.shape, r.turn);
+  for (const k of v.keptBases?.values() ?? []) for (const e of k.rows.values()) { see(e.shape, e.turn); for (const r of e.rows) see(r.shape, r.turn); }
+  return { full, thin, fullTurns };
+}
+// The turns the bound keeps whole: the drawn range and SHAPE_NEAR rows each side of it, the
+// selected, open, pinned and running turns.
+function nearSet(v) {
+  const rows = v.rowsMemo ?? [];
+  const off = rows[0]?.kind === "spacer" || rows[0]?.kind === "gap" ? 1 : 0;
+  const [a, b] = v.viewRange;
+  const near = new Set();
+  for (let i = Math.max(0, a - off - SHAPE_NEAR_T); i < Math.min(v.baseRows.length, b - off + SHAPE_NEAR_T); i++) if (v.baseRows[i].turn) near.add(v.baseRows[i].turn);
+  for (const k of [v.sel, ...v.open]) { const t = k && v.findTurn(k); if (t) near.add(t); }
+  const s = v.current();
+  if (s.turns.length && !s.turns.at(-1).done) near.add(s.turns.at(-1));
+  for (const t of v.pinTurns ?? []) near.add(t);
+  return { near, span: b - a };
+}
+function expectBound(v) {
+  const c = shapeCensus(v);
+  const { near, span } = nearSet(v);
+  for (const t of c.fullTurns) expect(near.has(t)).toBe(true);
+  expect(c.fullTurns.size).toBeLessThanOrEqual(span + 2 * SHAPE_NEAR_T + 4);
+  return c;
+}
+const turnRowAt = (v, key) => v.baseRows[v.baseIndex.get(key)];
+const scrollToKey = (v, cx, sim, key) => { v.follow = false; v.toBottom = false; v.scrollTo = { key, how: "top" }; return settleList(v, cx, sim); };
+
+test("shape bound: after a full pass over a long session, only the turns near the view hold shape objects, and every row still has its measured height", async () => {
+  const { v, cx } = await mdSession(700);
+  v.debug = false;
+  v.listH = 900;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    const c = expectBound(v);
+    // The rows drawn and the SHAPE_NEAR rows above them are whole before they are drawn.
+    const [a] = v.viewRange;
+    const off = v.rowsMemo[0]?.kind === "spacer" || v.rowsMemo[0]?.kind === "gap" ? 1 : 0;
+    const margin = v.baseRows.slice(a - off - SHAPE_NEAR_T, v.baseRows.length).filter((r) => r.kind === "turn");
+    expect(margin.length).toBeGreaterThanOrEqual(SHAPE_NEAR_T);
+    for (const r of margin) expect(r.shape.thin).toBeUndefined();
+    expect(v.baseRows[a - off - SHAPE_NEAR_T - 1].shape.thin).toBe(true);
+    // Most turns are far: their shapes are numbers only, in the turn, the rows and the kept rows.
+    expect(c.thin.size).toBeGreaterThan(500);
+    const far = v.baseRows.filter((r) => r.kind === "turn" && !nearSet(v).near.has(r.turn));
+    expect(far.length).toBeGreaterThan(500);
+    for (const r of far) {
+      expect(r.shape.thin).toBe(true);
+      expect(r.shape.prompt).toBeUndefined();
+      expect(r.shape.md).toBeUndefined();
+      expect(r.shape.mdLen).toBeGreaterThan(0);
+    }
+    // The probe measured every reply block, far ones too (from a fresh Markdown start it did
+    // not keep), and each row's size is its height from those numbers.
+    expect(v.probeLeft).toBe(0);
+    v.baseRows.forEach((r, i) => {
+      if (r.kind !== "turn") return;
+      expect(v.measured(v.cmdFor(r))).not.toBe(null);
+      expect(v.baseSizes[i]).toBe(v.height(r));
+    });
+    // The Markdown parts made for far rows are not kept on them.
+    for (const r of far) { expect(r.shape.part).toBeUndefined(); expect(v.cmdFor(r).md).toBe(null); }
+  } finally { listWindow = null; }
+}, 60000);
+
+test("shape bound: a turn that leaves the view loses its shape and keeps its height; back in view it is shaped again at the same height", async () => {
+  const { v, cx } = await mdSession(600);
+  v.debug = false;
+  v.listH = 900;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    const key = v.baseRows.filter((r) => r.kind === "turn").at(-3).key;
+    const before = { ...turnRowAt(v, key).shape };
+    const size = v.baseSizes[v.baseIndex.get(key)];
+    expect(before.thin).toBeUndefined();
+    // Far up the session: the turn is far now.
+    scrollToKey(v, cx, sim, "0:20");
+    expect(sim.last().key).toBe("0:20");
+    const gone = turnRowAt(v, key).shape;
+    expect(gone.thin).toBe(true);
+    expect(gone.prompt).toBeUndefined();
+    expect(v.baseSizes[v.baseIndex.get(key)]).toBe(size);
+    expect(v.height(turnRowAt(v, key))).toBe(size);
+    expectBound(v);
+    // Back: shaped again, the same lines and height, and the row keeps its size.
+    v.jumpLatest();
+    settleList(v, cx, sim);
+    const back = turnRowAt(v, key).shape;
+    expect(back.thin).toBeUndefined();
+    expect(back).toBe(gone);
+    for (const f of ["prompt", "reply", "md", "p", "r", "height", "mdBase", "mdEst", "bubbleW"]) expect(back[f]).toEqual(before[f]);
+    expect(v.baseSizes[v.baseIndex.get(key)]).toBe(size);
+    expectBound(v);
+  } finally { listWindow = null; }
+}, 60000);
+
+test("shape bound: a shape a turn has replaced, still on a row, stays whole while the turn is near and is thinned once it is far", async () => {
+  const { v, cx } = await mdSession(500);
+  v.debug = false;
+  v.listH = 900;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    const key = v.baseRows.filter((r) => r.kind === "turn").at(-2).key;
+    const turn = turnRowAt(v, key).turn;
+    const old = turnRowAt(v, key).shape;
+    // Shaped again (as when Herdr's senders change), while its row still holds the old shape.
+    turn.shapeKey = null;
+    v.shape(turn);
+    expect(turn.shapeMemo).not.toBe(old);
+    v.rows();
+    expect(old.thin).toBeUndefined();
+    expect(v.loose.some((x) => x.sh === old)).toBe(true);
+    scrollToKey(v, cx, sim, "0:30");
+    expect(old.thin).toBe(true);
+    expect(v.loose.some((x) => x.sh === old)).toBe(false);
+    expectBound(v);
+  } finally { listWindow = null; }
+}, 60000);
+
+test("shape bound: a jump to a far turn lands it exactly at the top, its rows shaped as they are drawn", async () => {
+  const { v, cx } = await mdSession(600);
+  v.debug = false;
+  v.listH = 900;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    const sizes = v.baseSizes.slice();
+    const key = "0:150";
+    expect(turnRowAt(v, key).shape.thin).toBe(true);
+    const frames = scrollToKey(v, cx, sim, key);
+    const at = frames.findIndex((f) => f.key === key);
+    expect(at).toBeGreaterThanOrEqual(0);
+    // From the frame it landed in on, the turn stays at the top edge, at 0 px in.
+    for (const f of frames.slice(at)) expect([f.key, f.into]).toEqual([key, 0]);
+    expect(v.baseSizes).toEqual(sizes);
+    expect(turnRowAt(v, key).shape.thin).toBeUndefined();
+    expectBound(v);
+  } finally { listWindow = null; }
+}, 60000);
+
+test("shape bound: a resize keeps the bound at the new width, and back at the old width every row has the size it had", async () => {
+  const { v, cx } = await mdSession(600);
+  v.debug = false;
+  v.listH = 900;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    const at650 = v.baseSizes.slice();
+    stillAt(v, 760);
+    settleList(v, cx, sim);
+    expect(v.baseSizes).not.toEqual(at650);
+    // Only the near turns hold whole shapes; the kept rows of the width the pane left hold
+    // numbers for every other turn.
+    expectBound(v);
+    stillAt(v, 650);
+    settleList(v, cx, sim);
+    expect(v.baseSizes).toEqual(at650);
+    expectBound(v);
+  } finally { listWindow = null; }
+}, 60000);
+
+test("shape bound: two panes at different widths each keep their own bound", async () => {
+  const a = await mdSession(500);
+  a.v.debug = false;
+  a.v.listH = 900;
+  const sa = simList(a.v);
+  const wa = listWindow;
+  const b = await mdSession(500);
+  b.v.debug = false;
+  b.v.listH = 700;
+  const sb = simList(b.v);
+  const wb = listWindow;
+  try {
+    listWindow = wa;
+    openAt(a.v, a.cx, sa, 650);
+    listWindow = wb;
+    openAt(b.v, b.cx, sb, 820);
+    scrollToKey(b.v, b.cx, sb, "0:100");
+    listWindow = wa;
+    probeFrame(a.v, a.cx);
+    expect(a.v.sessions[0].turns[0]).not.toBe(b.v.sessions[0].turns[0]);
+    const ca = expectBound(a.v);
+    listWindow = wb;
+    probeFrame(b.v, b.cx);
+    const cb = expectBound(b.v);
+    expect(ca.fullTurns.size).toBeGreaterThan(5);
+    expect(cb.fullTurns.size).toBeGreaterThan(5);
+    // Each pane's whole turns are its own view's: the newest in one, around #100 in the other.
+    expect([...ca.fullTurns].some((t) => t.n === 500)).toBe(true);
+    expect([...cb.fullTurns].some((t) => t.n === 100)).toBe(true);
+    // (the newest stays whole in both: it is the selected turn.)
+    expect(b.v.sel).toBe("0:500");
+    expect([...cb.fullTurns].some((t) => t.n === 500)).toBe(true);
+    expect([...cb.fullTurns].some((t) => t.n > 300 && t.n < 500)).toBe(false);
+    expect([...ca.fullTurns].some((t) => t.n < 400)).toBe(false);
+  } finally { listWindow = null; }
+}, 60000);
+
+test("shape bound: the probe's fresh Markdown for a far row counts in the draw's shaping time, and waits when it is spent", async () => {
+  const { v, cx } = await mdSession(400);
+  v.debug = false;
+  v.listH = 900;
+  simList(v);
+  try {
+    stillAt(v, 650);
+    draw(v, cx);
+    settleRows(v, cx);
+    // The rows near the view measured, the far ones not: those need their Markdown made again.
+    const far = v.baseRows.filter((r) => r.kind === "turn" && r.shape.thin);
+    expect(far.length).toBeGreaterThan(200);
+    v.meas ??= new Map();
+    for (const r of v.baseRows) if (r.kind === "turn" && !r.shape.thin) v.measPut(`cmd:${r.key}`, v.partSig(v.cmdFor(r)), 80);
+    v.measEpoch = (v.measEpoch ?? 0) + 1;
+    v.probeTries = new Map();
+    v.probeQuiet = null;
+    v.shapeBudget = -1;
+    v.shapeSpent = 0;
+    const due = Threads.prototype.probeDue.call(v);
+    // Out of time: only parts that need no shaping (rows drawn now, still whole).
+    expect(due).toEqual([]);
+    expect(v.probeLeft).toBe(1);
+    expect(v.probeQuiet).toBe(null);
+    v.shapeBudget = 1e6;
+    v.shapeSpent = 0;
+    const more = Threads.prototype.probeDue.call(v);
+    expect(more.length).toBe(16);
+    for (const [p, sig] of more) {
+      const r = turnRowAt(v, p.key.slice(4));
+      expect(r.shape.thin).toBe(true);
+      // The fresh Markdown is the shape's, by its measure's signature, and is not kept on the row.
+      expect(p.md.length).toBe(r.shape.mdLen);
+      expect(sig).toBe(v.partSig(v.cmdFor(r)));
+      expect(r.shape.part).toBeUndefined();
+    }
+    expect(v.shapeSpent).toBeGreaterThan(0);
+  } finally { listWindow = null; v.shapeBudget = null; }
+}, 60000);
+
+test("shape bound: the debug report counts full and thin shapes and marks a thin row as thin", async () => {
+  const { v, cx } = await mdSession(400);
+  v.listH = 900;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    v.debug = true;
+    v.lastReport = null;
+    v.report();
+    const snap = state.shared["threads.debug"].t4;
+    const c = shapeCensus(v);
+    expect(snap.shapes).toEqual({ full: c.full.size, thin: c.thin.size });
+    expect(snap.shapes.thin).toBeGreaterThan(300);
+    const d = snap.detail.find((x) => x.startsWith("turn#3 "));
+    expect(d).toMatch(/^turn#3 thin /);
+    expect(d).not.toContain("Prompt 2");
+  } finally { listWindow = null; }
+}, 60000);
+
+test("shape bound: no row is drawn thin through a sweep: the end to the top and back, a far jump, a pin's return, a new width and one seen before", async () => {
+  const { v, cx } = await mdSession(500);
+  v.debug = false;
+  v.listH = 900;
+  const sim = simList(v);
+  let drawn = 0;
+  const item = v.item;
+  // Every draw of a closed or running row is counted; the list fails a draw with a thin one.
+  v.item = function (t, r, ...rest) { if (r?.kind === "turn") drawn++; return item.call(this, t, r, ...rest); };
+  try {
+    openAt(v, cx, sim, 650);
+    // Up to the top a screen at a time, then down to the end again.
+    for (let k = 0; k < 400 && sim.off > 0; k++) { sim.wheel(900); probeFrame(v, cx); }
+    expect(sim.off).toBe(0);
+    expect(sim.last().keys.slice(0, 3)).toContain("0:1");
+    for (let k = 0; k < 400 && !sim.last().end; k++) { sim.wheel(-900); probeFrame(v, cx); }
+    expect(sim.last().end).toBe(true);
+    // A pin on a far turn, a jump away, and the pin's return.
+    scrollToKey(v, cx, sim, "0:200");
+    v.sel = "0:200";
+    v.action("pin", cx);
+    expect(v.isPinned("0:200")).toBe(true);
+    scrollToKey(v, cx, sim, "0:40");
+    expect(sim.last().key).toBe("0:40");
+    v.action("go:1", cx);
+    settleList(v, cx, sim);
+    expect(sim.frames.slice(-3).some((f) => f.keys.slice(f.keys.indexOf(f.key), f.keys.indexOf(f.key) + 8).includes("0:200"))).toBe(true);
+    // A width the pane has not had, then the one it had.
+    stillAt(v, 820);
+    settleList(v, cx, sim);
+    stillAt(v, 650);
+    settleList(v, cx, sim);
+    expect(drawn).toBeGreaterThan(400);
+    expectBound(v);
+  } finally { listWindow = null; }
+}, 120000);
+
+test("shape bound: a turn thinned and filled again has the same height and the same measure signature, at two widths", async () => {
+  const { v, cx } = await mdSession(400);
+  v.debug = false;
+  v.listH = 900;
+  const sim = simList(v);
+  try {
+    for (const w of [650, 820]) {
+      openAt(v, cx, sim, w);
+      const look = v.shapeLook();
+      const sample = v.baseRows.filter((r, i) => r.kind === "turn" && i % 29 === 0);
+      expect(sample.length).toBeGreaterThan(10);
+      for (const r of sample) {
+        if (r.shape.thin) expect(v.fillRow(r, true)).toBe(r);
+        const sh = r.shape;
+        const before = { height: v.height(r), sig: v.partSig(v.cmdFor(r)), size: v.baseSizes[v.baseIndex.get(r.key)], fields: { ...sh, part: undefined } };
+        v.thinShape(sh, look);
+        expect(sh.thin).toBe(true);
+        expect(sh.prompt).toBeUndefined();
+        // Thin: the same height and signature from its numbers.
+        expect([v.height(r), v.partSig(v.cmdFor(r))]).toEqual([before.height, before.sig]);
+        expect(v.fillRow(r, true)).toBe(r);
+        expect(r.shape).toBe(sh);
+        expect([v.height(r), v.partSig(v.cmdFor(r)), v.baseSizes[v.baseIndex.get(r.key)]]).toEqual([before.height, before.sig, before.size]);
+        expect({ ...sh, part: undefined }).toEqual(before.fields);
+      }
+    }
+  } finally { listWindow = null; }
+}, 60000);
+
+test("shape bound: a thin row of an older look drawn through a rebuild is filled at its own width, for the draw only", async () => {
+  const { v, cx } = await mdSession(400);
+  v.debug = false;
+  v.listH = 900;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    const old = v.shapeLook();
+    const rows = v.baseRows.filter((r) => r.kind === "turn" && r.shape.thin).slice(0, 20);
+    expect(rows.length).toBe(20);
+    const want = rows.map((r) => { v.fillRow(r, true); const f = { ...r.shape, part: undefined }; v.thinShape(r.shape, old); return f; });
+    stillAt(v, 820);
+    settleList(v, cx, sim);
+    const w = v.width;
+    expect(v.shapeLook()).not.toBe(old);
+    // As the list would draw them while the rows for the new width are built.
+    rows.forEach((r, i) => {
+      const d = v.fillRow(r);
+      expect(d).not.toBe(r);
+      expect({ ...d.shape, part: undefined }).toEqual(want[i]);
+      expect(r.shape.thin).toBe(true);
+    });
+    expect(v.width).toBe(w);
+  } finally { listWindow = null; }
+}, 60000);
