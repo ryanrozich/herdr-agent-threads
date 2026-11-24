@@ -349,3 +349,17 @@ test("timeline running turn: a room for a time with no bound is the least room, 
   expect(geo.room).toBe(TL_ROOM_MIN);
   expect(geo.turns.every((t) => Number.isFinite(t.x) && Number.isFinite(t.w) && t.w > 0)).toBe(true);
 });
+
+test("torn end by steps: an unfinished call in a turn with no times is torn too; on the clock it is no bar", () => {
+  // No step has a time, so the turn is not timed; its last call, in the running turn, has no result yet.
+  const h = head(turn(9, ["Looking.", [["Bash", "sleep", null, null]]], { untimed: true, done: false, end: null, reply: null }), true);
+  const i = h.stepRows.findIndex((r) => r.open);
+  expect(i).toBeGreaterThan(-1);
+  expect(Array.from(h.tl.slice(3 * i, 3 * i + 3))).toEqual([Number.NaN, Number.NaN, 2]);
+  expect(tlStep(h, i)).toMatchObject({ a: null, b: null, open: true });
+  const St = timelineLayout([h], 400, "steps");
+  expect(St.spans.get("tools|tools|0").filter((sp) => sp[2] === 1).length).toBe(1);
+  const Cl = timelineLayout([h], 400, "clock", Date.now());
+  expect(Cl.spans.has("tools|tools|0")).toBe(false);
+  expect(Cl.grow).toEqual([]);
+});
