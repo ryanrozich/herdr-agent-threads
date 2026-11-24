@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cardKey, keyAction, ledgerKey, ringKey } from "../mods/agent-threads/ui.js";
 import { trajCompact } from "../mods/agent-threads/ledger.js";
-import { H, drawRange, fixture, keyEv, pane, pinsShown, root, settleRows, setup, state } from "./render-harness.js";
+import { H, draw, drawRange, fixture, keyEv, pane, pinsShown, probeFrame, root, scripted, settleList, settleRows, setup, simList, state, stillAt } from "./render-harness.js";
 
 setup();
 
@@ -88,6 +88,13 @@ const label = (e) => `${e.modifiers.shift ? "shift-" : ""}${e.key}`;
 // What a key that goes on to keyAction counts (the first walk's rows).
 const onward = (v, e) => { const n = keyAction(e, v.filtering, v.quoteKey); return n ? ACTIONS[n] ?? `no row for ${n}` : 0; };
 const BEFORE = {
+  // The plain list, nothing open: every key goes through key() to keyAction, so a key key()
+  // takes on its own in the list only is walked too.
+  list: {
+    enter: () => {},
+    check: (v) => !v.traj && !v.settingsOpen && !v.keysOpen && !v.filtering && !v.fieldFocused && v.view !== "pinned" && !v.outlined(),
+    want: (v, e) => onward(v, e),
+  },
   // The Trajectory in this pane (y in a Chat under its split width).
   trajectory: {
     enter: (v, cx) => { v.paneW = 400; v.width = 400; v.action("trajectory", cx); v.tdetail = false; },
@@ -112,7 +119,7 @@ const BEFORE = {
     want: (_v, e) => (ringKey(e, false) ? RING[ringKey(e, false)] : 0),
   },
 };
-test("every key key() takes ahead of keyAction counts as its row says: the Trajectory's, the settings card's ring and scroll, a field's", async () => {
+test("every key key() takes ahead of keyAction counts as its row says: the plain list's, the Trajectory's, the settings card's ring and scroll, a field's", async () => {
   const got = {};
   const wanted = {};
   const states = [];
@@ -123,6 +130,9 @@ test("every key key() takes ahead of keyAction counts as its row says: the Traje
       for (let k = 0; k < 4 && (v.keysOpen || v.settingsOpen || v.filtering || v.query) && v.action("escape", cx); k++);
       v.fieldFocused = null;
       if (v.traj) v.leaveTraj();
+      if (v.outlined()) v.action("outline:off", cx);
+      if (v.view === "pinned") v.action("pinned", cx);
+      v.choosing = false;
       v.sel = v.sel ?? v.turnKeys(v.rows()).at(-1);
       s.enter(v, cx);
       v.render(cx);
@@ -320,7 +330,7 @@ test("every pointer handler the pane draws has a row, and each counts as its row
 // put back after a stopped row draw (rowCut), the scroll handles themselves (askScroll,
 // askEnd), and jumpLatest, which the reader reaches only through its callers (End, the pill:
 // the action latest). None of them counts.
-const PANE = ["read", "reselectVisible", "applyStick", "latestAfterBuild", "render", "bodyNow", "openOver", "openFinish", "rowCut", "askScroll", "askEnd", "jumpLatest"];
+const PANE = ["read", "reselectVisible", "applyStick", "latestAfterBuild", "render", "bodyNow", "openOver", "openFinish", "rowCut", "askScroll", "ownAsk", "askEnd", "jumpLatest", "letGo"];
 function body(name) {
   const at = SRC.search(new RegExp(`^  (async )?${name}\\(`, "m"));
   if (at < 0) return null;
@@ -353,6 +363,24 @@ function code(src) {
 }
 // Whether this source calls readerMoved (in its code, not its comments).
 const callsReaderMoved = (src) => /\breaderMoved\s*\(/.test(code(src));
+// A regex literal: after an operator, a bracket or return, a slash that opens no comment, up
+// to the slash that closes it. The comment strip above reads a regex ending in an escaped
+// slash as a comment (the rest of the line, a call too, dropped), and a quote in one as the
+// start of a string. So the regex literals in the bodies the check reads are listed here, and
+// none holds a slash, a quote, a backtick or a star: a new one fails until it is looked at and
+// listed. A false match (a string with such a slash in it) fails too, the safe way round.
+const REGEX_AT = /(?:^|[(,=:[!&|?{};]|\breturn)\s*(\/(?![/*])(?:[^/\\\n[]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[dgimsuyv]*)/gm;
+const regexes = (src) => [...src.matchAll(REGEX_AT)].map((m) => m[1]);
+const KNOWN_REGEXES = { bodyNow: ["/ or ([^ ]+)$/"] };
+test("the bodies the source check reads hold only the regex literals listed, none the strip could misread", () => {
+  // The pattern itself: the reader's case and a quote in a class are found; a division and a
+  // comment are not.
+  const cases = ["if (/^https?:\\/\\//.test(u)) this.readerMoved();", "const a = b / 2; // half", "x = y / z / 3;", "return /[\"']/.test(s);"].map((c) => regexes(c).length);
+  expect(cases).toEqual([1, 0, 0, 1]);
+  const found = Object.fromEntries(PANE.map((n) => [n, regexes(body(n) ?? "")]).filter(([, r]) => r.length));
+  expect(found).toEqual(KNOWN_REGEXES);
+  expect(Object.values(found).flat().filter((r) => /[\\/'"`*]/.test(r.slice(1, r.lastIndexOf("/"))))).toEqual([]);
+});
 test("no scroll the pane makes itself counts as the reader's", () => {
   const found = Object.fromEntries(PANE.map((n) => [n, body(n) == null ? "missing" : callsReaderMoved(body(n)) ? "counts" : "no"]));
   expect(found).toEqual(Object.fromEntries(PANE.map((n) => [n, "no"])));
@@ -473,6 +501,127 @@ test("the pane's own scroll landing counts nothing: a scroll just asked for, and
   };
   expect(got).toEqual({ asked: 0, landed: 0, bar: 1 });
 });
+
+// debugScroll stands for the reader's scroll in the still tests: it counts once, at the
+// command. Its landing, a frame or more later, moves the top row with no wheel and no busy
+// window (a person's scroll sets none), and must not count again. Followed through the frames
+// that take it, as Herdr's list does (simList), not only through command().
+test("debugScroll counts once, through the frames that land it", async () => {
+  const { v, cx } = await pane(fixture("--extra", "30"));
+  settleRows(v, cx);
+  v.listH = 300;
+  const sim = simList(v);
+  try {
+    v.follow = false;
+    v.toBottom = false;
+    v.pinningUntil = 0;
+    v.scrollBusyUntil = 0;
+    v.scrollTo = null;
+    for (let k = 0; k < 3; k++) { cx.flush(20); draw(v, cx); }
+    const keys = v.turnKeys(v.rows());
+    const top0 = sim.last().key;
+    const n0 = moves(v);
+    v.command(`debugScroll:${keys[Math.floor(keys.length / 2)]}`, cx);
+    const atCommand = moves(v) - n0;
+    for (let k = 0; k < 8; k++) { cx.flush(20); draw(v, cx); }
+    expect({ debug: v.debug, atCommand, moved: sim.last().key !== top0, asked: v.scrollTo, all: moves(v) - n0 }).toEqual({ debug: true, atCommand: 1, moved: true, asked: null, all: 1 });
+  } finally { H.listWindow = null; }
+});
+
+// Two of the pane's own moves of the list, with no wheel and no bar, in the list, the outline
+// and the Pinned view: neither counts.
+// - A held place let go (letGo): after a re-wrap the probe measures the rows above, and the
+//   list is put back at the same row with a scroll the pane asks for. In the list that is a
+//   column step; the outline's rows keep their heights through it, so letGo asks for nothing
+//   there; the narrow Pinned view has one column step, and a text size change takes no place
+//   in it, so nothing is let go.
+// - A row above the view measured again: the list keeps its offset in px, so the row at the
+//   top edge changes, in a frame whose rows are built again for the new size. The outline's
+//   and the Pinned view's rows are not measured by the probe, so it does not happen there.
+// Each run says which of these it met, so a change that makes one happen in a view shows.
+async function wrapPane(n) {
+  const words = "the cart total rounds per line so the order is off by a cent when a coupon applies to a split shipment".split(" ");
+  const say = (i, k) => Array.from({ length: k }, (_, j) => words[(i * 7 + j * 3) % words.length]).join(" ");
+  const ev = [];
+  for (let i = 0; i < n; i++) {
+    const ts = new Date(Date.UTC(2026, 10, 1, 8, 0) + i * 60000).toISOString();
+    ev.push({ k: "p", o: "human", t: `Prompt ${i}: ${say(i, 18 + (i % 5) * 6)}.`, ts }, { k: "t", t: `Reply ${i}: ${say(i + 3, 30 + (i % 7) * 8)}.` }, { k: "d", ts });
+  }
+  return scripted(ev);
+}
+// Per view: how to make it, what changes its wrap, and what each run meets there.
+const OWN_MOVES = {
+  list: {
+    make: async () => (await wrapPane(400)), w: 650, change: (v) => stillAt(v, 750),
+    letGo: { lets: 1, asked: true }, measured: { above: true, moved: true },
+  },
+  outline: {
+    make: async () => (await wrapPane(400)), w: 650, change: (v) => stillAt(v, 750), after: (v, cx) => v.action("outline", cx),
+    letGo: { lets: 1, asked: false }, measured: { above: true, moved: false },
+  },
+  pinned: {
+    make: async () => (await pinsShown(["--extra", "40"], Array.from({ length: 30 }, (_, i) => i + 1))), w: 400, change: (v, cx) => v.command("textSize:17", cx),
+    letGo: { lets: 0, asked: false }, measured: { above: false, moved: false },
+  },
+};
+const viewOf = (v) => (v.view === "pinned" ? "pinned" : v.outlined() ? "outline" : "list");
+// The pane at its width, rows built and measured, away from the end and the top (the list from
+// its end, up half way; the views from their top, down half way), the wheel's count behind it.
+async function ownMovePane(where) {
+  const o = OWN_MOVES[where];
+  const { v, cx } = await o.make();
+  v.debug = false;
+  v.listH = where === "pinned" ? 300 : 600;
+  const sim = simList(v);
+  stillAt(v, o.w);
+  settleList(v, cx, sim);
+  if (o.after) { o.after(v, cx); settleList(v, cx, sim); }
+  if (where === "list") { v.jumpLatest(); settleList(v, cx, sim); sim.wheel(sim.off / 2); }
+  else sim.wheel(-sim.last().sizes.reduce((x, y) => x + y, 0) / 2);
+  sim.wheel(37);
+  settleList(v, cx, sim);
+  return { v, cx, sim, o };
+}
+for (const where of Object.keys(OWN_MOVES)) test(`a held place let go counts nothing, in the ${where}`, async () => {
+  const { v, cx, sim, o } = await ownMovePane(where);
+  try {
+    const n0 = moves(v);
+    const go = v.letGo;
+    const ask = v.askScroll;
+    let inGo = false;
+    const got = { lets: 0, asks: 0 };
+    v.letGo = function (why, c) { got.lets++; inGo = true; try { return go.call(this, why, c); } finally { inGo = false; } };
+    v.askScroll = function (i, how) { if (inGo) got.asks++; return ask.call(this, i, how); };
+    const look = () => `${v.chars()}|${v.prefs.textSize}`;
+    const was = look();
+    o.change(v, cx);
+    settleList(v, cx, sim);
+    v.letGo = go;
+    v.askScroll = ask;
+    expect({ view: viewOf(v), changed: look() !== was, lets: got.lets, asked: got.asks > 0, wheel: v.wheelN === v.stickWheelN, moves: moves(v) - n0 })
+      .toEqual({ view: where, changed: true, ...o.letGo, wheel: true, moves: 0 });
+  } finally { H.listWindow = null; }
+}, 60000);
+for (const where of Object.keys(OWN_MOVES)) test(`a row above the view measured again counts nothing, in the ${where}`, async () => {
+  const { v, cx, sim, o } = await ownMovePane(where);
+  try {
+    const n0 = moves(v);
+    const f0 = sim.last();
+    const top = f0.keys.indexOf(f0.key);
+    // A measured part of a row well above the top edge (of the Chat's list), taller by 400 px.
+    const rowOf = (k) => (k.startsWith("cmd:") ? k.slice(4) : k.startsWith("wyou:") ? k.slice(5) : k);
+    const list = v.baseRows?.map((r) => r.key) ?? [];
+    const part = [...(v.meas ?? new Map()).keys()].find((k) => { const j = list.indexOf(rowOf(k)); return j >= 0 && j < Math.max(0, top - 2); });
+    if (part) {
+      const m = v.meas.get(part);
+      v.probed(part, m.sig, { width: 300, height: (m.h + 400) * v.zoom() }, cx);
+    }
+    for (let k = 0; k < 4; k++) probeFrame(v, cx);
+    const f1 = sim.last();
+    expect({ view: viewOf(v), above: Boolean(part), moved: f1.keys.indexOf(f1.key) !== top, wheel: v.wheelN === v.stickWheelN, moves: moves(v) - n0 })
+      .toEqual({ view: where, ...o.measured, wheel: true, moves: 0 });
+  } finally { H.listWindow = null; }
+}, 60000);
 
 // The outline and the Pinned view scroll on the same list: a scroll it reports with no wheel
 // since the last frame (a drag on its bar) counts once there too, a wheel there counts once

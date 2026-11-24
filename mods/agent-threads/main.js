@@ -5214,6 +5214,10 @@ export default class Threads extends View {
   }
   // Every scroll the pane asks of the list, so trackOff knows where it lands.
   askScroll(i, how) { this.scrollAsk = { i, how }; this.scroll.scroll_to_item(i, how); }
+  // A scroll the pane asks for itself, by its own count (askN): the frame that takes it does
+  // not count it as the reader's (stickCheck), wherever it lands. A scrollTo's landing and a
+  // held place let go (letGo) ask this way; nothing but stickCheck reads the count.
+  ownAsk(i, how) { this.askN = (this.askN ?? 0) + 1; this.askScroll(i, how); }
   askEnd() { this.scrollAsk = { end: true }; this.scroll.scroll_to_bottom(); }
 
   // The place on screen just before a re-wrap's rows come in (buildStep): the row at the top
@@ -5310,7 +5314,7 @@ export default class Threads extends View {
     if (!p) return;
     if (p.end) { this.askEnd(); return; }
     if (p.lift || p.slot) { this.anchorLift = p.lift; this.anchorSlot = p.slot ?? null; this.fitKey = null; cx.timer.after(0, (cx) => cx.notify()); }
-    this.askScroll(p.j, p.how);
+    this.ownAsk(p.j, p.how);
   }
 
   // Stick to the bottom, from what each frame draws (listItems; it may not change the view,
@@ -5330,12 +5334,14 @@ export default class Threads extends View {
     const prevStart = this.stickStart;
     // The frame's rows, start and wheel count are kept once the count is done (seen): a draw
     // stopped before it leaves them as they were, so the next frame counts the scroll.
-    const seen = () => { this.stickRows = rows; this.stickStart = start; this.stickWheelN = this.wheelN ?? 0; };
+    const seen = () => { this.stickRows = rows; this.stickStart = start; this.stickWheelN = this.wheelN ?? 0; this.stickAskN = this.askN ?? 0; };
     if (!rows.length) { seen(); return; }
     const now = Date.now();
     const busy = Boolean(this.scrollTo) || now < (this.scrollBusyUntil ?? 0);
     const moved = same && prevStart != null && start !== prevStart;
     const wheeled = (this.wheelN ?? 0) !== (this.stickWheelN ?? 0);
+    // A scroll the pane asked for itself since the last frame (ownAsk) moved the list.
+    const asked = (this.askN ?? 0) !== (this.stickAskN ?? 0);
     const pinning = this.toBottom || now < (this.pinningUntil ?? 0);
     const view = this.view === "pinned" || this.outlined();
     // On the way down to the end or a pin's landing, the top row moving is the pane's own.
@@ -5346,8 +5352,9 @@ export default class Threads extends View {
     }
     // A scroll of theirs with no wheel since the last frame (the list's own bar) moved the list
     // too, in every view, the outline and the Pinned view as well: the wheel counted its own
-    // (listWheel). A scroll asked for or settling (busy) is the pane's own, and does not count.
-    if (moved && !busy && !wheeled) this.readerMoved();
+    // (listWheel). A scroll asked for or settling (busy), or one the pane asked for itself since
+    // the last frame (asked), is the pane's own, and does not count.
+    if (moved && !busy && !wheeled && !asked) this.readerMoved();
     seen();
     if (view) return;
     if (moved && !busy) this.scrolledBy(start < prevStart ? 1 : -1, now);
@@ -9732,7 +9739,8 @@ export default class Threads extends View {
     } else if (this.scrollTo) {
       // A pin's place can be gone (the reply changed): the next best item, then the card.
       const st = this.scrollTo;
-      // The pane's own scrolls never count as the person's (stickCheck); debugScroll does.
+      // The pane's own scrolls never count as the person's (stickCheck). debugScroll counts at
+      // its command, once: its landing asks (ownAsk), like every landing's, do not count again.
       if (st.person) { this.upAt = Date.now() + 600; this.downAt = this.upAt; }
       else { this.scrollBusyUntil = Date.now() + 500; this.upAt = 0; this.downAt = 0; }
       let how = st.how;
@@ -9773,8 +9781,8 @@ export default class Threads extends View {
         let top = lead(i);
         if (rows[top - 1]?.key === `visit:${rows[i].key}`) top -= 1;
         if (rows[top - 1]?.kind === "pday") top -= 1; // a pin's day header comes with it
-        cx.timer.after(16, (cx) => { this.askScroll(j, "top"); cx.notify(); });
-        cx.timer.after(48, (cx) => { this.askScroll(top, "top"); cx.notify(); });
+        cx.timer.after(16, (cx) => { this.ownAsk(j, "top"); cx.notify(); });
+        cx.timer.after(48, (cx) => { this.ownAsk(top, "top"); cx.notify(); });
       } else if (i >= 0 && how === "land") {
         // scroll_to_item only brings an item to the nearest edge, so a place below the view
         // would land at the bottom. An item a pane further down first, then the place, which
@@ -9792,17 +9800,17 @@ export default class Threads extends View {
         if (!p || p.y < minTop) p = landExact(slots, i, Math.round(Math.max(minTop, st.at ?? minTop)));
         const lift = p.lift ?? 0;
         this.landed = { key: rows[i]?.key ?? null, ...p };
-        cx.timer.after(16, (cx) => { this.askScroll(j, "top"); cx.notify(); });
+        cx.timer.after(16, (cx) => { this.ownAsk(j, "top"); cx.notify(); });
         cx.timer.after(48, (cx) => {
           if (lift > 0) { this.landLift = lift; this.fitKey = null; }
-          this.askScroll(p.j, p.how);
+          this.ownAsk(p.j, p.how);
           cx.notify();
         });
         if (lift > 0) cx.timer.after(120, (cx) => { this.landLift = 0; this.fitKey = null; cx.notify(); });
       } else if (i >= 0) {
         const top = lead(i);
-        cx.timer.after(16, (cx) => { this.askScroll(i, how); cx.notify(); });
-        if (top !== i) cx.timer.after(48, (cx) => { this.askScroll(top, how); cx.notify(); });
+        cx.timer.after(16, (cx) => { this.ownAsk(i, how); cx.notify(); });
+        if (top !== i) cx.timer.after(48, (cx) => { this.ownAsk(top, how); cx.notify(); });
       }
     }
     const dim = Boolean(this.res.ended);
