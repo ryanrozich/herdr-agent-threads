@@ -9147,9 +9147,9 @@ export default class Threads extends View {
   }
 
   // The set cut back to where its last whole slice ended (cur): the places below cur.bot,
-  // from cur.tail.top up (a newer place a stop left half made, by and at written and top not
-  // yet moved, included), and the hidden matches past cur's counts are from a slice that was
-  // stopped. Safe to stop and do again.
+  // from cur.tail.top up, and the hidden matches past cur's counts are from a slice that was
+  // stopped. A place a stop left half made (its key or place written, the edge not yet moved)
+  // is just outside the set, at bot - 1 or at top, and is cut too. Safe to stop and do again.
   hitsCut(h) {
     const c = h.cur;
     const drop = (p) => {
@@ -9157,7 +9157,7 @@ export default class Threads extends View {
       h.by.delete(p);
       if (k !== undefined && h.at.get(k) === p) h.at.delete(k);
     };
-    for (let p = h.bot; p < c.bot; p++) drop(p);
+    for (let p = h.bot - 1; p < c.bot; p++) drop(p);
     h.bot = c.bot;
     if (c.tail) {
       for (let p = c.tail.top; p <= h.top; p++) drop(p);
@@ -9168,8 +9168,9 @@ export default class Threads extends View {
   }
 
   // One turn checked for the set: a shown match takes the next place, older (below bot) or
-  // newer (at top); a hidden one is counted. Each write leaves the set one that hitsCut, or
-  // hitsTail for the newer side, puts right after a stop at any point.
+  // newer (at top); a hidden one is counted. The place's key and place are written first and
+  // the edge moved last, so a stop at any point leaves no empty place inside the set, and one
+  // that hitsCut puts right.
   hitCheck(h, s, si, ti, newer) {
     const t = s.turns[ti];
     if (!threadMatches(s.turns, t, h.q)) return;
@@ -9185,9 +9186,10 @@ export default class Threads extends View {
       h.at.set(key, p);
       h.top = p + 1;
     } else {
-      const p = --h.bot;
+      const p = h.bot - 1;
       h.by.set(p, key);
       h.at.set(key, p);
+      h.bot = p;
     }
   }
 
