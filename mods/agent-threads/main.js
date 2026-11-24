@@ -2752,6 +2752,9 @@ export default class Threads extends View {
     ].join("|");
     const rest = `${this.turnSets().map((x) => [...x].join(",")).join("|")}|${this.callVer ?? 0}|${other}`;
     const key = `${sess}|${rest}`;
+    // A splice Herdr stopped halfway (spliceRows) is followed by a build of every row, even when
+    // the key is back to the rows' own: a card closed again before the next draw.
+    if (this.splicing) this.rowsKey = null;
     // Rows left with an old shape (SHAPE_MS) are reshaped where they are; the rest stay.
     if (this.rowsKey === key && this.baseRows && this.reshapeDue) {
       this.reshapeDue = false;
@@ -2867,6 +2870,16 @@ export default class Threads extends View {
       this.cachedH = left.cachedH;
       this.cacheNew = left.cacheNew;
     } else {
+      // A slice goes on from where the one before ended, adding to the build's own rows. One that
+      // Herdr stopped (in a turn's rows or a row's height) left its rows in them, to be added
+      // again: they go back to where it began, with their sizes and index entries.
+      const f = job.from;
+      if (f?.own) {
+        for (let i = f.row; i < f.rows.length; i++) job.index.delete(f.rows[i].key);
+        f.rows.length = f.row;
+        f.railRows.length = f.rail;
+        if (job.sizes.length > f.row) job.sizes.length = f.row;
+      }
       out = this.buildRows(status, job.from, until);
       if (job.from?.before && job.from.dayRow != null && !this.buildInfo.resume) job.sizes[job.from.dayRow] = this.height(out[job.from.dayRow]);
     }
