@@ -568,11 +568,12 @@ test("timeline view: a hidden strip keeps no model: b, the four-row rule or a na
   expect(ids(c)).toContain("th-tl-lanes");
   expect(b.tlModel).not.toBe(null);
   expect([TL.TL_MADE.geo - before.geo, TL.TL_MADE.layout - before.layout]).toEqual([1, 1]);
-  // Hidden by the four-row rule: 3 rows would be left. Dropped too.
+  // Hidden by the four-row rule: the list, measured with the strip above it, 3 rows and 23 px
+  // tall, so 3 rows would be left. Dropped too.
   const p = await dockPane(fixture("--extra", "3"), "bottom", 1440);
   shownFrame(p.b, p.cb);
   expect(p.b.tlModel).not.toBe(null);
-  listTall(p.b, p.cb, 3 * 24 + 23 + 98);
+  listTall(p.b, p.cb, 3 * 24 + 23);
   c = frame(p.b, p.cb);
   expect(ids(c)).not.toContain("th-timeline");
   expect(p.b.tlModel ?? null).toBe(null);

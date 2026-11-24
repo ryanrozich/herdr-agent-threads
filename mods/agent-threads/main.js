@@ -12069,6 +12069,9 @@ export default class Threads extends View {
     // has it, for the list's size callback (tlBase).
     const tlOn = this.tlShown();
     this.tlSlot = tlOn;
+    // A hidden strip keeps no model (about 452 B a turn at Fit, 2.5 MiB at 5,600 turns): shown
+    // again, it places the turns anew.
+    if (!tlOn) this.tlModel = null;
     return v_flex()
       .id("threads-root")
       .track_focus(this.h)
