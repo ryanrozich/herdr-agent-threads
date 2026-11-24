@@ -453,6 +453,10 @@ const DRAG_SLOP = 4; // design px a press may move and still be a click, not a t
 // reply's words from one beside them.
 const OPEN_WAIT_MS = 300;
 const FULL_REPLY_CHARS = 200000; // of an open reply; a note under it says what is left out
+// An open reply's part longer than this is a run with no space or line break to split it at
+// (a word longer than MD_MAX), past what Herdr draws as one Markdown view: it shows as plain
+// text, this many characters of its start, under a dim line saying so (mdlong).
+const LONG_SHOWN = 4000;
 const VIEWER_PROMPT = 8000; // characters of the prompt in the image viewer's panel
 const LONG_REPLY = 1600; // characters past which an open reply ends in a Collapse (Esc) row
 // px above a paragraph drawn as its own list item, and above a heading, as inside one block
@@ -481,13 +485,13 @@ const WAKE_H = 24;
 const NOTE_LINE = 20; // the working card's 12 px note, set explicitly (about 1.618 em)
 // Open-card parts whose text gpui wraps: drawn once more in a hidden probe, measured, and
 // then given that height (measured()).
-const PROBED = new Set(["you", "rhead", "md", "itext", "lhead", "latest", "noreply", "cmd"]);
+const PROBED = new Set(["you", "rhead", "md", "mdlong", "itext", "lhead", "latest", "noreply", "cmd"]);
 const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (scaled by charW())
 // Where hlBlock cuts a line into words: after white space or a HYPHEN_BREAK.
 const WORD_END = new RegExp(`(?<=[\\s${HYPHEN_BREAK}])`);
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
-const CARD = new Set(["head", "imgs", "you", "ustrip", "rhead", "itext", "grp", "call", "cout", "wspin", "noreply", "md", "mdrest", "codehead", "code", "fold", "lhead", "latest", "copy", "seltext", "resume"]);
+const CARD = new Set(["head", "imgs", "you", "ustrip", "rhead", "itext", "grp", "call", "cout", "wspin", "noreply", "md", "mdlong", "mdrest", "codehead", "code", "fold", "lhead", "latest", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
 // The line limit of a collapsed row's prompt and reply when long messages are not shortened
 // (truncate off, the default): no message reaches it, so nothing is cut.
@@ -1206,6 +1210,7 @@ export default class Threads extends View {
         const y = this.youMd(r);
         return `you${n} ${this.youLabel(r.turn)} ${y.hl ? "hl" : "md"} q${y.quotes} code${y.code} links${y.links}${y.more ? ` +${y.more}` : ""} h${this.height(r)}${y.hl ? "" : ` | ${y.md.replace(/\n/g, " ⏎ ").slice(0, 300)}`}`;
       }
+      case "mdlong": return `mdlong${n} ${r.n} chars, ${r.shown.length} shown h${this.height(r)}`;
       case "md": return `md${n} links ${r.links ?? 0}${this.mdBroken?.has(r.key) ? " plain" : ""} h${this.height(r)}${r.links ? ` | ${(r.md.match(/\]\(https?:[^)]+\)/g) ?? []).join(" ")}` : ""}`;
       case "rhead": return `rhead${n} ${this.lineText(r.turn, `${r.si}:${r.turn.n}`)}${this.captionParts(r.turn).map(([i, x]) => ` · ${i} ${x}`).join("")} h${this.height(r)}`;
       case "lhead": return `lhead${n} LATEST UPDATE · after ${plural(r.turn.followups, "background update")}`;
@@ -6155,6 +6160,7 @@ export default class Threads extends View {
   // height, which has nothing to cut. A part with no height worked out gets null, and it and
   // the parts after it wait in an mdrest row.
   partRow(pm, item, key, src, table, j, whole) {
+    if (!table && src.length > LONG_SHOWN) return this.longPart(pm, item, key, src, j);
     const lk = whole ?? this.partLinks(pm, src);
     const gap = j ? this.paraGap() : undefined;
     const old = pm.rows.get(key);
@@ -6193,6 +6199,19 @@ export default class Threads extends View {
     pm.rows.set(key, row);
     return rough ? null : row;
   }
+  // A part longer than LONG_SHOWN (a run with no space or line break) as plain text: its start
+  // under a dim line that gives its length (longNote). Its height is counted from the length
+  // shown, at no cost, until the probe measures it, and it has no link rules. As Markdown, at
+  // twice the price, sizing one of 200,000 characters ran past Herdr's time in every draw.
+  longPart(pm, item, key, src, j) {
+    const gap = j ? this.paraGap() : undefined;
+    const old = pm.rows.get(key);
+    if (old?.kind === "mdlong" && old.src === src && old.gap === gap && this.sameItem(old, item)) return old;
+    const row = { ...item, kind: "mdlong", key, src, shown: src.slice(0, LONG_SHOWN), n: src.length, ...(j ? { gap } : {}) };
+    pm.rows.set(key, row);
+    return row;
+  }
+  longNote(r) { return `This part is ${fmtCount(r.n)} characters with no space; only its start is shown. Copy (c) copies all of it.`; }
   // The time a draw gives an open reply's split and its parts' rows: its reshaping time, or
   // SHAPE_MIN_MS of a light draw.
   partMax() { return this.light ? SHAPE_MIN_MS : this.shapeMax(); }
@@ -10369,6 +10388,8 @@ export default class Threads extends View {
       case "latest": return 6 + (r.md ? this.mdHeight(r.md) + (r.left > 0 ? LATEST_NOTE : 0) + (r.whole ? 0 : 22) : this.latestBox(r) + (this.latestCut(r) ? 22 : 0));
       case "noreply": return 6 + TV_LINE * (this.wrapped(this.noReplyText(r.turn), w, MD_CHAR) + 1);
       case "md": return (r.gap ?? 6) + (r.table ? this.tableHeight(r) : this.mdHeight(r.src ?? r.md));
+      // The note's lines at its 11.5 px, 4 px, then the text shown at the reading line.
+      case "mdlong": return (r.gap ?? 6) + 18 * this.wrapped(this.longNote(r), this.prose(), (this.charW(MD_CHAR) * 11.5) / 13) + 4 + this.restHeight(r.shown.length, 1);
       case "seltext": return 6 + 22 + r.boxH;
       case "codehead": return 8 + 28;
       case "code": return this.codeBoxH(r);
@@ -10412,6 +10433,7 @@ export default class Threads extends View {
       case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.repoSig()}|${y.linkMd ?? ""}`; }
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
       case "itext": return `${head}|${r.md.length}|${this.linksVer}`;
+      case "mdlong": return `${head}|${r.n}|${r.shown.length}|${r.gap ?? 6}`;
       case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.repoSig()}|${this.mdBroken?.has(r.key) ? "plain" : "md"}${r.table ? `|t${this.tableExtra(r)}` : ""}`;
       case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}|t${this.tableExtra(r)}`;
       case "lhead": return `${head}|${r.turn.followups}`;
@@ -11666,6 +11688,11 @@ export default class Threads extends View {
       }
       case "codeall": return this.showAllRow(t, r.all ? "Show less" : `Show all · ${plural(r.left, "more row")}`, r.all ? "chevron-up" : "chevron-down");
       case "mview": return this.showAllRow(t, "View diagram", "panel-right");
+      // A part with no space or line break, too long for one Markdown view (longPart): its start
+      // as plain text under a dim line saying so.
+      case "mdlong": return v_flex().mt(r.gap ?? 6).gap(4)
+        .child(div().text_size(11.5).line_height("18px").text_color(t.dim).child(this.longNote(r)))
+        .child(this.readBlock(div()).text_color(t.foreground).child(r.shown));
       // The parts of a long reply not laid out yet: a quiet line in their place, at their rough
       // height, until the next frames bring them (partRow).
       case "mdrest": return v_flex().mt(r.gap ?? 6).h(Math.max(18, r.h - (r.gap ?? 6))).child(div().h(18).text_size(11.5).line_height("18px").text_color(t.dim).child(r.one ? "Laying out this part…" : "Laying out the rest of the reply…"));
