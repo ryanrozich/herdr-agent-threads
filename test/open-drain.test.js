@@ -1231,6 +1231,40 @@ test("the opening: with every walk past the line, the rows the opening waits for
   expect(v.lateWalks).toBeGreaterThan(40);
 }, 300000);
 
+// Past the line no reshape starts off screen, a run alone included: shapeInView, at the walk's
+// start, shapes up to SHAPE_FIRST turns from the top of the pane down, past the rows drawn too,
+// with no row on screen (lineScreen false). With 36 ms of fixed work in the walk and 6 after it
+// every walk is past the line, and once the lightest of the last 64 draws is 42 ms a row of 8 ms
+// can never fit (8 + 42 + 3 > 50), though it would end in this draw (36 + 8 + 3 <= 50). Rows
+// below the view, left to reshape again, wait for a walk before the line; the rows on screen
+// are reshaped, and no draw is stopped.
+test("the opening: past the line a turn below the view that can never fit is not run alone, and no reshape starts off screen", async () => {
+  let below = [];
+  const { v, frames } = await costlyWheel(8, 36, 160, wheelUp, {
+    after: 6,
+    stop: true,
+    each: (v, k) => {
+      if (k !== 1) return;
+      const r = lastList.range;
+      const shown = v.rowsMemo.slice(r.start, r.end).map((x) => x.turn).filter(Boolean);
+      const last = v.rowsMemo.slice(0, r.end).findLast((x) => x.turn)?.turn;
+      const turns = v.sessions.at(-1).turns;
+      const from = turns.indexOf(last) + 1;
+      below = turns.slice(from, from + 20).filter((t) => !shown.includes(t));
+      for (const t of below) restaleRow(v, t);
+    },
+  });
+  expect(v.follow).toBe(false);
+  expect(below.length).toBe(20);
+  // Every walk after the move was past the line, and the rows below can never fit by the end.
+  expect(v.lateWalks).toBeGreaterThan(150);
+  expect(below.every((t) => v.neverFits(v.hostCost(t, v.replyText(t))))).toBe(true);
+  expect(frames.reduce((n, f) => n + f.offLate, 0)).toBe(0);
+  expect(below.filter((t) => t.shapeKey != null)).toEqual([]);
+  expect(frames.filter((f) => f.stopped).length).toBe(0);
+  expect(frames.at(-1).blank).toBe(0);
+}, 300000);
+
 // Two jumps 60 ms apart, in different frames, during the drain: each one's 130 ms timer is for
 // its own landing. Before, the first's ended the second's 70 ms in: its place was held before
 // the second's scrolls and lift were all drawn.
