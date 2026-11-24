@@ -488,8 +488,11 @@ export function itemBox(tl, i, tx, w, wall, scale, len, upTo = null) {
 }
 // The turn and step under px x of the strip in a lane: { turn, key } (key: the step's row,
 // or the turn's heading when no step's bar is within 4 px). heads in the layout's order; x in
-// px of the view (zoomed and panned).
-export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
+// px of the view (zoomed and panned); ly, px down the lane (null: any). Where bars overlap
+// (calls running at once share the half-height track), the bar drawn on top at x and ly:
+// failed over the rest, half height over full (the view's order), then the narrowest. With
+// none there, the nearest within 4 px.
+export function timelineHit(L, heads, x, lane, nowMs = Date.now(), ly = null) {
   const T = L.turns;
   if (!T.length) return null;
   const z = L.z ?? 1;
@@ -502,7 +505,7 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
   const h = heads[lo];
   if (!h || h.key !== t.key) return null;
   // Past the turn into its break: the nearer turn.
-  if (fx > t.x + t.w && T[lo + 1] && T[lo + 1].x - fx < fx - (t.x + t.w)) return timelineHit(L, heads, T[lo + 1].x * z - x0, lane, nowMs);
+  if (fx > t.x + t.w && T[lo + 1] && T[lo + 1].x - fx < fx - (t.x + t.w)) return timelineHit(L, heads, T[lo + 1].x * z - x0, lane, nowMs, ly);
   const wall = L.geo?.walls[lo] ?? wallOf(h);
   const tx = t.x * z - x0;
   const tw = t.w * z;
@@ -510,15 +513,26 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
   const upTo = lo === L.geo?.live && h.t0 != null ? growEnd(tx, tw, wall, h.t0, nowMs) : null;
   let best = null;
   let bestD = 4;
+  let bestR = -1;
+  let top = null;
+  let topR = -1;
+  let topW = Infinity;
   const len = stepN(h);
   for (let i = 0; i < len; i++) {
-    if (lane && LEDGER_KINDS[h.stepRows[i].lk]?.lane !== lane) continue;
+    const k = LEDGER_KINDS[h.stepRows[i].lk];
+    if (lane && k?.lane !== lane) continue;
     const b = itemBox(h.tl, i, tx, tw, wall, L.scale, len, upTo);
     if (!b) continue;
     const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
-    if (d < bestD || (d === 0 && bestD === 0 && b.track === 1)) { best = i; bestD = d; }
+    const r = (b.track ? 1 : 0) + (k?.ink === "failed" ? 2 : 0);
+    // A full bar is 2 to 14 px down its lane, a half one 8 to 14 (the view's rectLayer).
+    if (d === 0 && (ly == null || (ly >= (b.track ? 8 : 2) && ly <= 14))) {
+      const w = b.x1 - b.x0;
+      if (r > topR || (r === topR && w < topW)) { top = i; topR = r; topW = w; }
+    } else if (d < bestD || (d === bestD && r > bestR)) { best = i; bestD = d; bestR = r; }
   }
-  return { turn: h.key, key: best != null ? h.stepRows[best].key : h.key };
+  const pick = top ?? best;
+  return { turn: h.key, key: pick != null ? h.stepRows[pick].key : h.key };
 }
 // The timeline for a draw: the turns placed and the view laid out, each made again only when
 // what it depends on changes, and the running turn's growing bars at nowMs. prev: the last

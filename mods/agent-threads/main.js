@@ -12119,8 +12119,9 @@ export default class Threads extends View {
     const p = e?.local_position;
     if (!M || this.tlWait || p?.x == null) return;
     const z = this.zoom();
-    const lane = p.y == null ? null : TL_LANES[Math.floor(p.y / z / TL_LANE)] ?? null;
-    const hit = timelineHit(M.L, M.heads, p.x / z, lane, Date.now());
+    const li = p.y == null ? -1 : Math.floor(p.y / z / TL_LANE);
+    const lane = TL_LANES[li] ?? null;
+    const hit = timelineHit(M.L, M.heads, p.x / z, lane, Date.now(), lane ? p.y / z - li * TL_LANE : null);
     if (hit && this.tlPick(hit)) cx.notify();
   }
   // The row a press picked, as a row click does (ledgerClick): selected, or on the selected
