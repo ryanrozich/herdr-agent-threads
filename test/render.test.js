@@ -21198,20 +21198,29 @@ test("past the cap, a pin's return with a wheel down before it lands stays where
   listWindow = null;
 });
 
-test("a wheel after a jump is taken, before the landing's own asks 16 and 48 ms on, ends them", async () => {
-  const { v, cx, sim } = await cutScene();
-  v.sel = "0:41";
-  v.action("next", cx);
-  const asked = scrollsOf(v);
-  draw(v, cx);
-  const n = asked.length;
-  sim.wheel(-300);
-  const at = Math.round(sim.off);
-  cx.flush(120, 3);
-  dropTimers(v, cx);
-  expect(asked.length).toBe(n);
-  expect(offs(v, cx, sim, 3)).toEqual([at, at, at]);
-  listWindow = null;
+test("a wheel after a jump is taken, before the landing's own asks 16 and 48 ms on, ends them: a scroll to a turn, a pin's return, a rail jump (with its lift), a card", async () => {
+  const lifts = [];
+  for (const go of [(v, cx) => { v.sel = "0:41"; v.action("next", cx); }, (v, cx) => { v.pinnedList = () => [{ key: "0:65", turn: v.findTurn("0:65"), pin: { n: 65 }, s: v.current(), state: "done" }]; v.goPin(0, cx); }, (v, cx) => v.railJump("0:65", cx), (v, cx) => v.toggle("0:38", cx)]) {
+    const { v, cx, sim } = await cutScene();
+    v.probeDue = () => [];
+    go(v, cx);
+    const asked = scrollsOf(v);
+    for (let k = 0; k < 4 && v.scrollTo; k++) draw(v, cx);
+    expect(v.scrollTo).toBe(null);
+    const n = asked.length;
+    sim.wheel(-300);
+    const at = Math.round(sim.off);
+    // Past the 48 ms ask, before a lift's 120 ms end.
+    cx.flush(60, 3);
+    expect([asked.length, v.landLift ?? 0]).toEqual([n, 0]);
+    lifts.push(v.landed?.lift ?? 0);
+    cx.flush(120, 3);
+    dropTimers(v, cx);
+    delete v.probeDue;
+    expect(offs(v, cx, sim, 3)).toEqual([at, at, at]);
+    listWindow = null;
+  }
+  expect(Math.max(...lifts)).toBeGreaterThan(0);
 });
 
 test("latest while a jump waits for the rows to reshape shows the end in the next frame, and holds it", async () => {
