@@ -867,6 +867,32 @@ test("a draw stopped inside the matches' scan counts each match once", async () 
   expect(runs).toEqual(runs.map((r) => ({ q: r.q, landed: r.landed, stops: 1, counted: true, tally: { n: n[r.q], distinct: n[r.q], at: n[r.q], done: true }, places: true, text: `1 of ${n[r.q]} · newest first` })));
 }, 300000);
 
+// ---- a long tail with no reply, still changing ----
+// More than HITS_TAIL turns after the newest session's last finished turn with a reply (turns
+// interrupted, queued, or with no reply), and the session changing before every draw, as a
+// running agent's does: the count still ends, in every draw.
+test("with 100 turns after the last one with a reply and a turn coming in before every draw, the count ends in each draw", async () => {
+  const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
+  const more = (s, n) => { for (let i = 0; i < n; i++) { T.apply(s, { k: "p", o: "human", t: `Turn ${s.turns.length}: please look again.`, ts }); T.apply(s, { k: "d", ms: 1000, ts }); } };
+  const { v, cx, s } = await longPane(5600);
+  more(s, 100);
+  settleRows(v, cx);
+  v.sel = `0:${s.turns.length}`;
+  const seen = [];
+  priced(v, () => {
+    v.action("search:zqxjvk", cx);
+    for (let k = 0; k < 150; k++) {
+      more(s, 1);
+      const d = drawOnce(v, cx);
+      seen.push({ k, stopped: d.stopped, ms: d.ms <= LIMIT, counting: counting(v) });
+    }
+  });
+  // Counted again within the draw of each change, from the first draw on.
+  expect(seen.filter((x) => x.stopped || !x.ms || x.counting)).toEqual([]);
+  expect(places(v)).toEqual(want(v, "zqxjvk"));
+  expect(fieldText(v)).toBe("No matches");
+}, 120000);
+
 // ---- a transcript replaced ----
 // A replaced transcript is read again from the top into the same session (restart). Read
 // back to as many turns or more before a draw, the matches are found again, not kept from
