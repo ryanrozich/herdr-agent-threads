@@ -1948,7 +1948,11 @@ test("the day pill over a window's first turns is the band of the rows the pane 
   await addCapTurns(s, 150, 3);
   frames(v, cx);
   expect(v.allRows()).not.toBe(rows);
-  expect(expectPillRight(v).band.key).toBe(d.band.key);
+  const rebuilt = expectPillRight(v);
+  expect(rebuilt.band.key).toBe(d.band.key);
+  // The band's row was built again with the newest day's rows: a band kept from the rows
+  // before would be another row with the same key.
+  expect(rebuilt.band).not.toBe(d.band);
   // A splice: a card opened inside the window, and one closed again.
   const inside = v.turnKeys(v.rows())[2];
   v.open.add(inside);
