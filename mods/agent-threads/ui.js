@@ -2536,6 +2536,12 @@ export function capList(rows, sizes, max, noteH, at = -1) {
 // The kinds of row that stand for a turn: a closed row, an open card's head, the running row,
 // an outline line.
 export const TURN_KINDS = new Set(["turn", "head", "working", "wrow", "line"]);
+// The turns among rows [a, z): every turn has one row of these kinds.
+export function turnsIn(rows, a, z) {
+  let n = 0;
+  for (let i = a; i < z; i++) if (TURN_KINDS.has(rows[i].kind)) n++;
+  return n;
+}
 const turnKeyOf = (r) => (r?.turn && r.si != null ? `${r.si}:${r.turn.n}` : null);
 // A day's band (its "day" row) goes with the turn after it: a range starts at the band, and
 // ends before it.
@@ -2621,21 +2627,39 @@ export class RowWindow {
     const edge = later ? z : a;
     return this.turnFrom(list, edge) ?? this.lastTurnBefore(list, edge);
   }
-  // The turns the range leaves out above and below it. Counted once for the rows (by their
-  // array and ver, which a splice moves on) and the range: every probe batch refits the list,
-  // and the rows outside a window can be tens of thousands.
+  // The turns the range leaves out above and below it. Every probe batch refits the list, a
+  // live event builds the newest rows again, and the rows outside a window can be tens of
+  // thousands, so the counts are kept (outMemo) and carried over what changed since: the same
+  // rows (by their array and ver, which a splice moves on), or list.since, the rows' changes
+  // since then (main.js rowsSince). Only the rows between the old and the new edge are read,
+  // and none when a change lies inside the range or past its end.
   outside(list) {
     const { rows } = list;
-    const { a, z } = this.at ?? { a: 0, z: rows.length };
+    const n = rows.length;
+    const { a, z } = this.at ?? { a: 0, z: n };
     const m = this.outMemo;
-    if (m && m.rows === rows && m.ver === list.ver && m.n === rows.length && m.a === a && m.z === z) return m.out;
-    let earlier = 0;
-    let later = 0;
-    for (let i = 0; i < a; i++) if (TURN_KINDS.has(rows[i].kind)) earlier++;
-    for (let i = z; i < rows.length; i++) if (TURN_KINDS.has(rows[i].kind)) later++;
-    const out = { earlier, later };
-    this.outMemo = { rows, ver: list.ver, n: rows.length, a, z, out };
+    const c = !m ? null : m.rows === rows && m.ver === list.ver ? { K: n, end: n, d: 0, dT: 0 } : list.since?.(m.rows, m.ver) ?? null;
+    const earlier = c ? this.carry(rows, c, m.a, a, m.out.earlier, 1) : null;
+    const later = c ? this.carry(rows, c, m.z, z, m.out.later, -1) : null;
+    const out = { earlier: earlier ?? turnsIn(rows, 0, a), later: later ?? turnsIn(rows, z, n) };
+    this.outMemo = { rows, ver: list.ver, a, z, out };
     return out;
+  }
+  // A count kept for an edge, carried to the edge now: the turns before it (dir 1) or from it
+  // on (dir -1). c says what changed: the rows before K are as they were, the rows from end on
+  // are the old ones from end - d on, and dT turns were gained between. An edge on either side
+  // of the change keeps its count (with dT for the side holding it), plus or minus the turns
+  // between where the old edge is now and the new one. null when reading afresh costs less.
+  carry(rows, c, was, at, count, dir) {
+    let from;
+    if (at <= c.K && was <= c.K) { from = was; if (dir < 0) count += c.dT; }
+    else if (at >= c.end && was + c.d >= c.end) { from = was + c.d; if (dir > 0) count += c.dT; }
+    else return null;
+    const lo = Math.min(from, at);
+    const hi = Math.max(from, at);
+    if (hi - lo > (dir > 0 ? at : rows.length - at)) return null;
+    const between = turnsIn(rows, lo, hi);
+    return count + (at > from ? dir : -dir) * between;
   }
   // The keys up and down step through (keys: every turn's, in order), with "older" (the Show
   // earlier item) before the range's first turn and "newer" (Show later) after its last.

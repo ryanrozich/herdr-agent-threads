@@ -80,7 +80,7 @@ import {
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
-  REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear, pairEvent, pairAlone, pinFit, weightHerdr, rowEvent, closeWeights, rowSolve, capList, LIST_MAX, RowWindow, TURN_KINDS,
+  REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear, pairEvent, pairAlone, pinFit, weightHerdr, rowEvent, closeWeights, rowSolve, capList, LIST_MAX, RowWindow, TURN_KINDS, turnsIn,
 } from "./ui.js";
 import { openLines, newestPrompt, figRuns } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
@@ -2865,7 +2865,41 @@ export default class Threads extends View {
   // Every row, in the list's window or not (winPlace): what the keys and the search step through.
   allRows() { this.rows(); return this.baseRows ?? []; }
   // ver: moved on by each splice of the base rows (spliceRows), which keeps their array.
-  winList() { return { rows: this.baseRows ?? [], index: this.baseIndex ?? new Map(), ver: this.baseVer ?? 0 }; }
+  // since: what changed in them from an earlier array and ver (rowsSince).
+  winList() { return { rows: this.baseRows ?? [], index: this.baseIndex ?? new Map(), ver: this.baseVer ?? 0, since: (r, v) => this.rowsSince(r, v) }; }
+  // The base rows' changes that keep their start: a build that keeps the rows before its first
+  // new turn (keptFrom), and a splice. Each is { r0, v0, r1, v1, K, end, d, dT }: the rows (array
+  // and baseVer) before and after; the rows before K are as they were, places and kinds (a day
+  // band among them may be built again in its place, with a new count); the rows from end on
+  // are the old ones from end - d on; dT is the turns gained. The window's memos (outside,
+  // dayAbove) carry what they knew over them, so a live event reads no row outside the window.
+  noteRows(r0, v0, K, end, d, dT) {
+    const log = (this.rowsLog ??= []);
+    log.push({ r0, v0, r1: this.baseRows, v1: this.baseVer ?? 0, K, end, d, dT });
+    if (log.length > 16) log.shift();
+  }
+  // The changes from rows r at ver to the rows now, as one { K, end, d, dT } (noteRows); null
+  // when one between is not known (a full build, a search, a new session).
+  rowsSince(r, ver) {
+    const rows = this.baseRows ?? [];
+    const now = this.baseVer ?? 0;
+    if (r === rows && ver === now) return { K: rows.length, end: rows.length, d: 0, dT: 0 };
+    const log = this.rowsLog ?? [];
+    let next = { r0: rows, v0: now };
+    const c = { K: Infinity, end: 0, d: 0, dT: 0 };
+    for (let j = log.length - 1; j >= 0; j--) {
+      const e = log[j];
+      if (e.r1 !== next.r0 || e.v1 !== next.v0) return null;
+      // e comes before the changes already taken: its region, moved on by theirs.
+      c.K = Math.min(c.K, e.K);
+      c.end = Math.max(c.end, e.end + c.d);
+      c.d += e.d;
+      c.dT += e.dT;
+      if (e.r0 === r && e.v0 === ver) return c;
+      next = e;
+    }
+    return null;
+  }
   winReport() { return { from: this.win.from, to: this.win.to, ...this.win.outside(this.winList()) }; }
 
   // The list's window (ui.js RowWindow), [a, z) in baseRows: the scroll the pane is about to
@@ -2966,6 +3000,11 @@ export default class Threads extends View {
       if (from) for (let i = from.row; i < this.baseRows.length; i++) index.delete(this.baseRows[i].key);
       job = this.rowJob = {
         key, rest, other, sessions: this.sessions.slice(), vers: this.sessions.map((x) => x.version),
+        // The rows before it, for noteRows when it is done, and how many of them it gives again
+        // in their places so far: those it keeps (keptFrom), then each next one that comes out
+        // as the same row (a closed turn's rows are kept, closedCached).
+        was: this.baseRows?.length ? { rows: this.baseRows, ver: this.baseVer ?? 0 } : null,
+        same: from ? from.row : 0,
         from: from ? { ...from, rows: this.baseRows, railRows: this.railTurns } : null,
         stale: from ? (this.staleRows ?? []).filter((i) => i < from.row) : [],
         sizes: from ? this.baseSizes.slice(0, from.row) : [],
@@ -2997,6 +3036,7 @@ export default class Threads extends View {
     // slice, unless only a few are left (about 2 ms of heights). A first build sizes them all:
     // with no rows yet, a pause would show the loading lines for a frame.
     const pause = Boolean(this.baseRows?.length);
+    const old = job.was?.rows;
     for (let i = job.sizes.length, n = 0; i < out.length; i++, n++) {
       if (pause && (n & 31) === 31 && out.length - i > SIZE_REST && now() > until) {
         job.sizing = { out, info: this.buildInfo, rail: this.buildRail, cachedH: this.cachedH, cacheNew: this.cacheNew };
@@ -3007,6 +3047,7 @@ export default class Threads extends View {
       }
       job.sizes.push(this.cachedH.get(i) ?? this.height(out[i]));
       job.index.set(out[i].key, i);
+      if (job.same === i && old && old[i] === out[i]) job.same = i + 1;
     }
     this.buildSpent = (this.buildSpent ?? 0) + Math.max(0, now() - b0 - ((this.shapeSpent ?? 0) - s0));
     job.ms = (job.ms ?? 0) + (now() - b0);
@@ -3024,7 +3065,14 @@ export default class Threads extends View {
     this.buildMs = job.ms;
     // A new column width: the place on screen before these rows come in (holdPlace).
     if (this.anchorDue) { this.anchorDue = false; this.anchor = this.takeAnchor(); }
+    // The rows from the first that changed on are counted for noteRows, while that reads
+    // fewer rows than it keeps (a live event, a new turn); a change from near the top is left
+    // out, and the memos count afresh.
+    const was = job.was;
+    const K = job.same;
+    const noted = was && was.rows === this.baseRows && was.ver === (this.baseVer ?? 0) && out.length + was.rows.length - 2 * K <= K;
     this.baseRows = out;
+    if (noted) this.noteRows(was.rows, was.ver, K, out.length, out.length - was.rows.length, turnsIn(out, K, out.length) - turnsIn(was.rows, K, was.rows.length));
     this.railTurns = this.buildRail;
     this.baseSizes = job.sizes;
     this.baseIndex = job.index;
@@ -3365,8 +3413,11 @@ export default class Threads extends View {
       const gone = z - a + 1;
       const d = out.length - gone;
       for (let i = a; i <= z; i++) this.baseIndex.delete(this.baseRows[i].key);
+      const v0 = this.baseVer ?? 0;
+      const dT = turnsIn(out, 0, out.length) - turnsIn(this.baseRows, a, z + 1);
       this.baseRows.splice(a, gone, ...out);
-      this.baseVer = (this.baseVer ?? 0) + 1;
+      this.baseVer = v0 + 1;
+      this.noteRows(this.baseRows, v0, a, a + out.length, d, dT);
       this.baseSizes.splice(a, gone, ...sizes);
       // The new rows, and every row after them when the count changed.
       const to = d === 0 ? a + out.length : this.baseRows.length;
@@ -11512,12 +11563,9 @@ export default class Threads extends View {
       const head = rows.find((r) => this.baseIndex?.has(r.key));
       if (head && rows !== base) {
         const at = this.baseIndex.get(head.key);
-        const m = this.dayAbove;
-        if (m && m.base === base && m.ver === (this.baseVer ?? 0) && m.at === at) day = m.day;
-        else {
-          for (let i = at; i >= 0; i--) if (base[i].kind === "day") { day = base[i]; break; }
-          this.dayAbove = { base, ver: this.baseVer ?? 0, at, day };
-        }
+        const idx = this.bandAbove(base, at);
+        this.dayAbove = { base, ver: this.baseVer ?? 0, at, idx };
+        day = idx >= 0 ? base[idx] : null;
       }
       for (const r of rows) {
         if (r.kind === "day") day = r;
@@ -11528,6 +11576,27 @@ export default class Threads extends View {
     const day = top ? this.dayOf.get(top) : null;
     // Not while the band itself is at the top of the list, right under the strip.
     return day && day.key !== top ? day : null;
+  }
+  // The place of the last day band at or above row at of the base rows, -1 for none. Carried
+  // from the last one found (dayAbove) over the rows' changes since (rowsSince) where it can
+  // be, by place, as the band's row may be built again: then only the rows between the old
+  // and the new place are walked, and none for a change below the window's start.
+  bandAbove(base, at) {
+    const walk = (hi, lo) => { for (let i = hi; i >= lo; i--) if (base[i].kind === "day") return i; return -1; };
+    const m = this.dayAbove;
+    const c = m ? this.rowsSince(m.base, m.ver) : null;
+    if (!c) return walk(at, 0);
+    let from;
+    let idx;
+    if (at <= c.K && m.at <= c.K) { from = m.at; idx = m.idx; }
+    else if (at >= c.end && m.at + c.d >= c.end) {
+      from = m.at + c.d;
+      // The band before the change, in it, or after it (moved on with the rows there).
+      if (m.idx >= c.end - c.d) idx = m.idx + c.d;
+      else { idx = walk(c.end - 1, c.K); if (idx < 0) idx = m.idx < c.K ? m.idx : walk(c.K - 1, 0); }
+    } else return walk(at, 0);
+    if (at >= from) { const k = walk(at, from + 1); return k >= 0 ? k : idx; }
+    return idx <= at ? idx : walk(at, 0);
   }
   hasDayStrip(rows) { return rows.some((r) => r.kind === "day"); }
   noteTopDay() {
