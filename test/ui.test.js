@@ -970,6 +970,22 @@ test("mdSplit: a read does at most its work whatever the text's shape: long line
   }
 });
 
+// A split's work counted from the text by the rule (mdSplitOn's LINE_UNITS, 16): the harness
+// prices a read by the count the split keeps, so a count that drifts from the work would price
+// itself. Short paragraphs: each line read 16, each character measured, each block joined and
+// each part made by its characters. A block over the limit with no blank line, as well: each of
+// its lines looked at for a table or fence (16, and once more at its end) and packed (16).
+test("mdSplit: the work counted for known texts is the rule's, line by line and character by character", () => {
+  const paras = Array.from({ length: 200 }, (_, i) => `Paragraph ${i + 1}: the cart total rounds per line.`);
+  const block = Array.from({ length: 300 }, (_, i) => `Line ${i} of a reply with no blank line.`);
+  const chars = (ls) => ls.reduce((k, l) => k + l.length, 0);
+  const run = (md) => { const job = mdSplit(md, MD_MAX, true); mdSplitOn(job, Infinity, Infinity); return [job.done, job.work, chars(job.parts.map((p) => p.text))]; };
+  const [d1, w1, made1] = run(paras.join("\n\n"));
+  expect([d1, w1]).toEqual([true, (2 * paras.length - 1) * 16 + 2 * chars(paras) + made1]);
+  const [d2, w2, made2] = run(block.join("\n"));
+  expect([d2, w2]).toEqual([true, block.length * 16 + chars(block) + (block.length + 1) * 16 + block.length * 16 + made2]);
+});
+
 // mdChunks as it was before its pieces' lengths were kept as they grew: the same chunks, found
 // by measuring each whole chunk again for every piece.
 function mdChunksBefore(md, max = MD_MAX) {
