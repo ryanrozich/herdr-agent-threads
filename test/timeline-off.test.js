@@ -350,3 +350,73 @@ test("timeline view: a width change while the build runs starts it again at the 
     H.state.terminals[0].status = "idle";
   }
 });
+
+// ---- a stop inside a build step ----
+// Herdr's interrupt stops a render that runs past its budget, and can land inside the build's
+// step (J.gen.next()). A generator that throws is closed. The next step of this build throws
+// the stop out of the frame and closes the build's generator, as an interrupt does.
+function stopIn(J) {
+  const g = J.gen;
+  g.next = () => { delete g.next; return g.throw(new Error("stopped by the interrupt")); };
+}
+// Frames until the strip's build ends, each look at the clock 3 ms later: none may throw.
+function framesOut(b, cb) {
+  return slowNow(() => {
+    let k = 0;
+    for (; k < 400 && (b.tlJob || !b.tlModel); k++) frame(b, cb);
+    return k;
+  });
+}
+
+test("timeline view: a stop inside a step of the working-off build: that frame throws, the stopped build is not kept, and the frames after it throw nothing, build again from the strip drawn and end as a whole build", async () => {
+  try {
+    const { b, cb } = await openPane(400);
+    offFrame(b, cb);
+    slowNow(() => frame(b, cb));
+    const J = b.tlJob;
+    expect(J).toBeTruthy();
+    expect(J.total).toBeGreaterThan(0);
+    const L0 = b.tlModel.L;
+    stopIn(J);
+    expect(() => slowNow(() => frame(b, cb))).toThrow("stopped by the interrupt");
+    expect(b.tlJob).not.toBe(J);
+    // The next frame draws the strip it had and starts a new build.
+    const c = slowNow(() => frame(b, cb));
+    expect(own(c, "th-tl-lanes")).not.toBe(null);
+    expect(b.tlModel.L).toBe(L0);
+    expect(b.tlJob).toBeTruthy();
+    expect(b.tlJob).not.toBe(J);
+    expect(framesOut(b, cb)).toBeGreaterThan(0);
+    expect(b.tlJob).toBe(null);
+    const M = b.tlModel;
+    sameStrip(M, TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null));
+  } finally {
+    setSystemTime();
+    H.state.terminals[0].status = "idle";
+  }
+});
+
+test("timeline view: a stop inside a step of the build from nothing: that frame throws, the stopped build is not kept, and the frames after it throw nothing, build again from nothing and end as a whole build", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "400"), 1440);
+  slowNow(() => {
+    const c = frame(b, cb);
+    handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 1440, height: 400 }, cb);
+    frame(b, cb);
+  });
+  expect(b.tlModel ?? null).toBe(null);
+  const J = b.tlJob;
+  expect(J).toBeTruthy();
+  expect(J.total).toBeGreaterThan(0);
+  stopIn(J);
+  expect(() => slowNow(() => frame(b, cb))).toThrow("stopped by the interrupt");
+  expect(b.tlJob).not.toBe(J);
+  const c = slowNow(() => frame(b, cb));
+  expect(own(c, "th-tl-wait")).not.toBe(null);
+  expect(b.tlJob).toBeTruthy();
+  expect(b.tlJob).not.toBe(J);
+  framesOut(b, cb);
+  expect(b.tlJob).toBe(null);
+  const M = b.tlModel;
+  expect(M).toBeTruthy();
+  sameStrip(M, TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null));
+});
