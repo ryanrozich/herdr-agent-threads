@@ -34,6 +34,37 @@ const fold = () => { if (spy) { paid.checks += spy.mock.calls.length; spy.mockCl
 // be caught; render() catches this one, so the driver sets renderOpen again, as the stop
 // leaves it.
 const LIMIT = 50;
+// The stop lands at any point of a draw, inside the matches' scan too, which makes no element:
+// a check (threadMatches) in a draw past LIMIT on the clock is stopped as well. And one stop
+// can be planted (plantStop), once: at the first check of a draw at or after a given count of
+// checks; or, with scan, at the given check among those the scan makes in draws.
+let stopV = null;
+let plant = null;
+// Where the last planted stop landed: in the matches' scan (scanHits) or elsewhere.
+let landed = null;
+const realMatches = T.threadMatches;
+function stopHere() {
+  if (!stopV?.renderOpen) return false;
+  if (plant?.scan ? stopV.scanning && --plant.scan === 0 : plant && checks() >= plant.at) { plant = null; landed = stopV.scanning ? "scan" : "other"; return true; }
+  return clock() - stopV.renderAt > LIMIT;
+}
+// A seeded draw of numbers in [0, 1) (mulberry32), so a planted stop lands at the same check
+// in every run.
+function seeded(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+// One stop planted at a check from 1 to span checks on from now, at random from rnd.
+const plantStop = (rnd, span, scan = false) => {
+  const k = 1 + Math.floor(rnd() * span);
+  plant = scan ? { scan: k } : { at: checks() + k };
+};
 
 // n turns of made-up work over three days: every prompt has an "a"; "ar" (cart) is in a third
 // of them; "rename" in a tenth; "zqxjvk" in none. The replies have none of them. With bare,
@@ -79,12 +110,16 @@ const settled = (v) => counted(v) && !v.staleRows?.length && !(v.shapeLeft > 0);
 function priced(v, fn) {
   const real = performance.now;
   for (const k of Object.keys(paid)) paid[k] = 0;
-  spy = spyOn(T, "threadMatches");
+  spy = spyOn(T, "threadMatches").mockImplementation((...a) => {
+    if (stopHere()) throw new Error("interrupted");
+    return realMatches(...a);
+  });
+  stopV = v;
   performance.now = clock;
   H.stopDraw = () => v.renderOpen && clock() - v.renderAt > LIMIT;
   v.frameBase = 0;
   v.cutUntil = 0;
-  try { return fn(); } finally { performance.now = real; H.stopDraw = null; fold(); spy.mockRestore(); spy = null; }
+  try { return fn(); } finally { performance.now = real; H.stopDraw = null; stopV = null; plant = null; fold(); spy.mockRestore(); spy = null; }
 }
 
 // One draw on the clock: its cost, its checks, and whether Herdr stopped it.
@@ -384,15 +419,17 @@ const hiddenDirect = (v, q, agentTurns = false) => {
   return n;
 };
 // Draws on the clock until the rows and matches settle: the draws, the stops and the checks.
-function drive(v, cx, max = 200) {
+// With until counted, until the rows are built and the matches counted: after a stop the
+// rows are reshaped only once the light draws end (CUT_MS on the clock).
+function drive(v, cx, max = 200, until = settled) {
   let draws = 0, stops = 0, n = 0;
   for (; draws < max; draws++) {
     const d = drawOnce(v, cx);
     n += d.checks;
     if (d.stopped) stops++;
-    else if (settled(v)) { draws++; break; }
+    else if (until(v)) { draws++; break; }
   }
-  return { draws, stops, checks: n, settled: settled(v) };
+  return { draws, stops, checks: n, settled: settled(v), counted: counted(v) };
 }
 const fieldText = (v) => String(v.filterCount());
 
@@ -715,6 +752,50 @@ for (const q of QUERIES) {
     expect(during.filter((t) => t.startsWith("No matches") || t.includes("hidden"))).toEqual([]);
   }, 120000);
 }
+
+// ---- a draw stopped inside the scan ----
+// Herdr stops a draw at any point, the matches' scan included. The slice it stops is checked
+// again from where the last whole slice ended, so each match is still counted once.
+const tally = (v) => {
+  const h = v.hitsNow();
+  const keys = [];
+  for (let p = h.top - 1; p >= h.bot; p--) keys.push(h.by.get(p));
+  return { n: h.top - h.bot, distinct: new Set(keys).size, at: h.at.size, done: h.done };
+};
+
+test("a draw stopped inside the matches' scan counts each match once", async () => {
+  const { v, cx, s } = await longPane(2000);
+  const scan = v.scanHits;
+  v.scanHits = function (...a) { this.scanning = true; try { return scan.apply(this, a); } finally { this.scanning = false; } };
+  const rnd = seeded(123);
+  const runs = [];
+  for (const q of ["rename", "ar"]) {
+    // The 300th check of the scan in draws (as the review's run), then three at random among
+    // the scan's checks in draws (about 500 of them, measured: the command checks the first
+    // 1,280 turns) and three at random among all of the draws' checks.
+    for (const at of [300, "scan", "scan", "scan", "any", "any", "any"]) {
+      v.sel = `0:${s.turns.length}`;
+      v.setQuery("", cx);
+      settleRows(v, cx);
+      // Each run its own set of matches, as a search typed first.
+      v.hits = null;
+      landed = null;
+      const r = priced(v, () => {
+        v.action(`search:${q}`, cx);
+        if (typeof at === "number") plant = { scan: at };
+        else plantStop(rnd, at === "scan" ? 480 : 2500, at === "scan");
+        return drive(v, cx, 200, counted);
+      });
+      const w = want(v, q);
+      runs.push({ q, landed, stops: r.stops, counted: r.counted, tally: tally(v), places: places(v).keys.join(",") === w.keys.join(","), text: fieldText(v) });
+    }
+  }
+  const n = { rename: direct(v, "rename").length, ar: direct(v, "ar").length };
+  expect(n).toEqual({ rename: 200, ar: 600 });
+  // Each query's stops land in the scan in at least four runs.
+  for (const q of ["rename", "ar"]) expect([q, runs.filter((r) => r.q === q && r.landed === "scan").length >= 4]).toEqual([q, true]);
+  expect(runs).toEqual(runs.map((r) => ({ q: r.q, landed: r.landed, stops: 1, counted: true, tally: { n: n[r.q], distinct: n[r.q], at: n[r.q], done: true }, places: true, text: `1 of ${n[r.q]} · newest first` })));
+}, 300000);
 
 // ---- the Pinned view ----
 // The Pinned view's matches are among its pins, PIN_LIMIT at most (pins.js): its count, place
