@@ -6716,7 +6716,7 @@ function costedFrames(v, cx, n, done) {
   let t = 1e7, at = null, stopped = false, linked = 0;
   const spend = (ms) => { t += ms; if (at != null && t - at > P.stop) { stopped = true; throw STOP; } };
   const lo = v.linkOne, wr = v.wrapped;
-  v.linkOne = function (md) { linked++; spend(md.split("\n").filter((x) => x.trim()).length * P.line); return lo.call(this, md); };
+  v.linkOne = function (md) { if (this.links.length) { linked++; spend(md.split("\n").filter((x) => x.trim()).length * P.line); } return lo.call(this, md); };
   v.wrapped = function (s, ...a) { spend(P.call + s.length * P.char); return wr.call(this, s, ...a); };
   performance.now = () => { if (stopped) throw STOP; return t; };
   const frames = [];
@@ -6764,6 +6764,14 @@ test("an open reply of 18 or 58 parts has every part linked and at its worked-ou
     expect(v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length).toBe(parts);
     expect(r.settled).toBeGreaterThan(0);
     expect(r.settled).toBeLessThanOrEqual(12);
+    // New rules link every part again, the same way, with the heights kept for the text.
+    const { parseLinks } = await import("../mods/agent-threads/settings.js");
+    const l = parseLinks([{ name: "Ticket", pattern: "\\bACME-(\\d+)\\b", url: "https://tickets.example.com/$1" }]);
+    v.setLinks(l.rules, l.list, 1);
+    const again = costedFrames(v, cx, 40, await cardDone(v, key));
+    costLog(`${parts} parts, new rules`, again);
+    expect([again.stops, again.linked, again.settled > 0 && again.settled <= 12]).toEqual([0, parts, true]);
+    expect(v.baseRows.find((x) => x.key.startsWith(`md:${key}:`)).md).toContain("tickets.example.com/1)");
   }
 }, 60000);
 
