@@ -34,22 +34,26 @@ function turn(n, steps, o = {}) {
   };
 }
 const S = { agents: new Map(), agentIds: new Map() };
-const head = (t, live = false, s = S) => ledgerTurn(s, t, 0, live).rows[0];
+const head = (t, live = false, s = S) => ledgerTurn(s, t, 0, live).head;
 // A heading's steps read back, one object each, for the tests only (the pane keeps none).
 const stepsOf = (h) => Array.from({ length: tlLen(h) }, (_, i) => tlStep(h, i));
-// A heading's step rows: its turn's rows after the heading.
-const rowsOf = (h) => h.rows.slice(1);
+// A heading's step rows: the array ledgerTurn returns beside it (h.steps).
+const rowsOf = (h) => h.steps;
 
-test("timeline steps: a heading keeps no array of its own for its steps: they are its turn's rows, read back with their times and flags", () => {
-  const { rows } = ledgerTurn(S, turn(3, ["Looking first.", [["Read", "src/a.ts", 2000, 2300], ["Bash", "bun test", 2100, 45000, true]]]), 0);
-  const [h, ...steps] = rows;
+test("timeline steps: a heading keeps no array of its own for its steps: they are its turn's step rows (h.steps), read back with their times and flags", () => {
+  const out = ledgerTurn(S, turn(3, ["Looking first.", [["Read", "src/a.ts", 2000, 2300], ["Bash", "bun test", 2100, 45000, true]]]), 0);
+  const { head: h, steps } = out;
   expect(TL_LANES).toEqual(["input", "model", "tools"]);
-  // No object and no number array per step: the heading holds the turn's own rows, the array
-  // ledgerTurn returns, heading first; a step's times and flags are read from its row.
+  // No object and no number array per step: the heading holds its turn's step rows, the one
+  // array ledgerTurn returns beside it (no rows array with the heading in it); a step's times
+  // and flags are read from its row.
+  expect(out.rows).toBe(undefined);
+  expect(h.rows).toBe(undefined);
   expect(h.items).toBe(undefined);
   expect(h.tl).toBe(undefined);
   expect(h.stepRows).toBe(undefined);
-  expect(h.rows).toBe(rows);
+  expect(h.steps).toBe(steps);
+  expect(steps.includes(h)).toBe(false);
   expect(tlLen(h)).toBe(steps.length);
   expect(steps.every((r, i) => tlRow(h, i) === r)).toBe(true);
   const at = (lk) => steps.findIndex((r) => r.lk === lk);
@@ -274,7 +278,7 @@ test("timeline band: the first and last steps whose bars start inside a band, in
   expect(b).toEqual({ a: read2.key, b: bash2.key });
   const across = bandRows(L, heads, L.turns[0].x, L.turns[2].x + L.turns[2].w);
   expect(across.a).toBe(tlRow(heads[0], 0).key);
-  expect(across.b).toBe(heads[2].rows.at(-1).key);
+  expect(across.b).toBe(heads[2].steps.at(-1).key);
   // A band inside the break between turns holds nothing.
   expect(bandRows(L, heads, L.gaps[0][0] + 1, L.gaps[0][1] - 1)).toBe(null);
   expect(bandRows(L, heads, 10, 5)).toBe(null);
@@ -474,4 +478,79 @@ test("timeline press in a break: the nearer turn, and its step only within 4 px 
   // Nearer the first turn, by the same rule: 3 px past its reply's bar, the reply; 6 px, the heading.
   expect(at(296)).toEqual({ turn: h1.key, key: rowsOf(h1).find((r) => r.lk === "reply").key });
   expect(at(299)).toEqual({ turn: h1.key, key: h1.key });
+});
+
+test("timeline steps: a heading and its steps hold no path back to the heading, and the heading has only its own keys", () => {
+  const { head: h, steps, fails, calls } = ledgerTurn(S, turn(3, ["Looking first.", [["Read", "src/a.ts", 2000, 2300], ["Bash", "bun test", 2100, 45000, true]]], { interrupted: true }), 0);
+  expect([fails, calls]).toEqual([1, 2]);
+  // No cycle: nothing reached from the heading (its steps, its turn, its lists) leads back to
+  // it, so a turn's thrown-away rows are freed as soon as nothing holds them, with no wait for
+  // the engine's cycle collector.
+  const seen = new Set();
+  const back = [];
+  const walk = (v, path) => {
+    if (v === null || typeof v !== "object") return;
+    if (v === h && path) { back.push(path); return; }
+    if (seen.has(v)) return;
+    seen.add(v);
+    for (const k of Object.keys(v)) walk(v[k], `${path}.${k}`);
+  };
+  walk(h, "");
+  expect(back).toEqual([]);
+  expect(steps.length).toBeGreaterThan(3);
+  // The heading's keys, all of them: a second copy of its steps under any name is caught here.
+  expect(Object.keys(h).sort()).toEqual([
+    "agent", "calls", "cnt", "failKeys", "fails", "going", "interrupted", "key", "kind", "lastAt", "line", "n", "partial", "reading",
+    "si", "span", "stale", "steps", "t0", "timed", "tokens", "total", "ts", "turn", "userKeys",
+  ]);
+});
+
+test("timeline press in a break, zoomed: the nearer turn is found once, so a press there can not land back on the turn before", () => {
+  // Twelve turns of 60 s across 1,440 px: each 102 px, breaks of 19.6 px. At this zoom, the
+  // second turn's start in px of the view, turned back into px of the strip, comes out a
+  // little under its start, so a second search from there finds the first turn again.
+  const heads = Array.from({ length: 12 }, (_, i) => head(turn(i + 1, [[["Read", "a", 2000, 2500]]])));
+  const L = timelineLayout(heads, 1440, "clock", T0 + 1e7, { z: 1.0532, x0: 0 });
+  expect(L.z).toBe(1.0532);
+  const t = L.turns[1];
+  expect((t.x * L.z - L.x0 + L.x0) / L.z).toBeLessThan(t.x);
+  // A press 1.6 px of the strip before the second turn: nearer it than the first turn's end.
+  const hit = timelineHit(L, heads, (t.x - 1.6) * L.z - L.x0, null, T0 + 1e7);
+  expect(hit).toEqual({ turn: heads[1].key, key: rowsOf(heads[1])[0].key });
+});
+
+test("timeline 2 px rule at its edge: a turn 2 px wide or more is drawn as bars, with its tracks; one under 2 px is not", () => {
+  const h = head(turn(1, [[["Read", "a", 2000, 2500], ["Bash", "x", 2100, 3000]]]));
+  // One turn placed by hand at w px, at the strip's left.
+  const at = (w) => {
+    const geo = { cw: 100, scale: "clock", turns: [{ x: 0, w, key: h.key, n: h.n }], index: new Map([[h.key, 0]]), walls: [60000], gap: 0, total: w, steps: tlLen(h), live: -1, room: 0 };
+    return timelineLayout([h], 100, "clock", T0 + 1e7, null, geo);
+  };
+  expect(at(1.99).tracks.has(h)).toBe(false);
+  expect(at(2).tracks.has(h)).toBe(true);
+  expect(at(2.5).tracks.has(h)).toBe(true);
+  // Bash starts while Read runs: the second track, so the tracks are not null.
+  expect(at(2).tracks.get(h)).not.toBe(null);
+});
+
+test("timeline tracks by steps: the steps scale draws every bar full height, so no turn's tracks are worked out, in the layout or a press", () => {
+  const heads = [head(turn(1, [[["Read", "a", 2000, 2500], ["Bash", "x", 2100, 3000]]])), head(turn(2, [[["Grep", "b", 2000, 2400]]]))];
+  const before = TL_MADE.tracks;
+  const L = timelineLayout(heads, 600, "steps", T0 + 1e7);
+  expect(L.tracks.size).toBe(0);
+  const x = L.turns[0].x + L.turns[0].w / 2;
+  expect(timelineHit(L, heads, x, null, T0 + 1e7)?.turn).toBe(heads[0].key);
+  expect(TL_MADE.tracks - before).toBe(0);
+});
+
+test("timeline bar ends: a call whose result comes after its turn's end is drawn to the turn's end, not into the break", () => {
+  const h = head(turn(1, [[["Read", "a", 50000, 70000]]], { end: T0 + 60000 }));
+  const i = rowsOf(h).findIndex((r) => r.lk === "tool");
+  const L = timelineLayout([h], 400, "clock", T0 + 1e7);
+  const t = L.turns[0];
+  // Its end is past the turn's length on the clock.
+  expect(tlStep(h, i).b).toBeGreaterThan(L.geo.walls[0]);
+  const [bar] = L.spans.get("tools|tools|0");
+  expect(bar[1]).toBe(t.x + t.w);
+  expect(bar[0]).toBeLessThan(bar[1]);
 });
