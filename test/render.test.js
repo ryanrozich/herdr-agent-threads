@@ -6905,19 +6905,21 @@ test("replies of long lines, long paragraphs or no blank line draw in time at th
 }, 120000);
 
 // In the light window after a stopped draw, a draw that builds the open turns gives a reply's
-// new rows (partRow) SHAPE_MIN_MS, and the split gets the same: a capped reply opened with its
-// first draw stopped goes on splitting in the light draw after it, still well inside a draw's
-// time. (The light draws after that one build nothing until the window's end asks.)
+// new rows (partRow) SHAPE_MIN_MS, and the split SHAPE_MIN_MS of its own after them: a capped
+// reply opened with its first draw stopped shows parts it had split and goes on splitting in
+// the light draw after it, still well inside a draw's time. (The light draws after that one
+// build nothing until the window's end asks.)
 test("an open reply's split goes on in the light window after a stopped draw, in the light draw's time", async () => {
   const { v, cx, keys } = await openLong(shortParas(4000));
   v.probeDue = function () { this.probeLeft = 0; return []; };
   const split = () => { let n = 0; for (const m of v.partTurns?.values() ?? []) for (const job of m.split.values()) n += job.n; return n; };
-  // The parts split by the end of each frame, and whether it was light.
+  // The parts split and shown by the end of each frame, and whether it was light.
   const seen = [];
-  const r = costedFrames(v, cx, 400, await cardDone(v, keys), { stopAfter: 1, onFrame: () => seen.push([v.light, split()]) });
+  const shown = () => v.baseRows.filter((x) => x.kind === "md" && x.key.startsWith(`md:${keys}:`)).length;
+  const r = costedFrames(v, cx, 400, await cardDone(v, keys), { stopAfter: 1, onFrame: () => seen.push([v.light, split(), shown()]) });
   costLog("capped, the split in light frames", { ...r, seen: seen.slice(0, 4) });
   const i = seen.findIndex(([light]) => light);
-  expect([r.frames[0].ok, i, seen[1][1] > seen[0][1], r.frames[1].ok && r.frames[1].ms < 25, r.settled > 0]).toEqual([false, 1, true, true, true]);
+  expect([r.frames[0].ok, i, seen[1][1] > seen[0][1], seen[1][2] > 0, r.frames[1].ok && r.frames[1].ms < 25, r.settled > 0]).toEqual([false, 1, true, true, true, true]);
 }, 60000);
 
 // A part is shown only at its worked-out height: where there is no time to work it out (a
