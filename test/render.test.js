@@ -6950,6 +6950,23 @@ test("an open reply's parts on a narrower pane stand in as being laid out until 
   expect([r.settled > 0, parts, waiting > 0, short]).toEqual([true, 58, true, 0]);
 }, 60000);
 
+// A Markdown height with no time to work it out counts each line of the text at least once and
+// each blank line between paragraphs as a gap, not the whole text as one long line: for short
+// paragraphs, lists and prose it comes within a tenth of the height worked out, and never over.
+test("a rough Markdown height counts lines and paragraph gaps, within a tenth of the worked-out height", async () => {
+  const { v } = await openLong(shortParas(10), true);
+  const texts = [shortParas(120), Array.from({ length: 60 }, (_, i) => `- Step ${i + 1}: replay the queue`).join("\n"), proseAndShort().slice(0, 30000)];
+  const got = texts.map((md) => {
+    v.shapeBudget = -1;
+    const rough = v.mdHeight(md);
+    v.shapeBudget = null;
+    v.shapeSpent = 0;
+    const real = v.mdHeight(md);
+    return [rough <= real, rough >= 0.9 * real];
+  });
+  expect(got).toEqual(texts.map(() => [true, true]));
+}, 60000);
+
 // Parts held through the light window after a stopped draw go on in the draw after it: a
 // timer asks for the open turns to be built again (againOpen), for the work left in them
 // (otherLeft). Herdr stops that draw inside the rebuild (stopAt, once, in the first draw after
