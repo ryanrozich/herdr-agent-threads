@@ -113,6 +113,7 @@ async function leaveDuringDrain(go, pace = 16) {
     v.scroll = { scroll_to_bottom() { host.end = true; }, scroll_to_item(i) { host.want = i; } };
     for (let k = 0; v.openActive() && k < 400; k++) step();
     step();
+    // Rows left to drain when go() leaves the end (see the jump test on the counts).
     expect(v.staleRows.length).toBeGreaterThan(250);
     // A turn far from the end, among the rows left.
     const key = v.baseRows[v.staleRows[v.staleRows.length >> 1]].key;
@@ -283,8 +284,13 @@ test("the opening: a jump away from the end while the rows above drain lands on 
     const { v, frames } = await leaveDuringDrain(go, pace);
     expect([name, v.staleRows.length]).toEqual([name, 0]);
     const on = (f) => f[4] != null && f[4] >= 0 && f[4] < 600;
-    // The turn's top is on screen once the landing's scrolls are drawn (48 ms), with most rows
-    // left to reshape.
+    // The turn's top is on screen once the landing's scrolls are drawn (48 ms), with rows left
+    // to reshape: it landed during the drain, not after it. The drain's pace is the test's
+    // shaping clock (12 rows a frame on any machine); only the rows left when the list shows
+    // (go's 250) depend on the machine: 980 to 1,860 in runs here, and once few enough that
+    // under 400 were left at the landing. A faster machine leaves fewer, so these lower bounds
+    // fail on it rather than pass with no drain to test: by the landing frame (at most 5, 60
+    // rows, at 8 ms apart) more than 200 must still be left.
     const at = frames.findIndex(on);
     expect([name, at >= 0 && at <= Math.max(1, Math.ceil(48 / pace) - 1)]).toEqual([name, true]);
     expect([name, frames[at][0] > 200]).toEqual([name, true]);
