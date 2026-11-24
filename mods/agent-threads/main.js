@@ -79,7 +79,7 @@ import {
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, noticeTurn, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, mdSplit, mdSplitOn, MD_MAX, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
+  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, mdSplit, mdSplitOn, MD_MAX, MD_VIEW_CHARS, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
   REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear, pairEvent, pairAlone, pinFit, weightHerdr, rowEvent, closeWeights, rowSolve,
 } from "./ui.js";
 import { openLines, newestPrompt, figRuns } from "./ui.js";
@@ -453,16 +453,13 @@ const DRAG_SLOP = 4; // design px a press may move and still be a click, not a t
 // reply's words from one beside them.
 const OPEN_WAIT_MS = 300;
 const FULL_REPLY_CHARS = 200000; // of an open reply; a note under it says what is left out
-// What one of Herdr's Markdown views holds, in characters: it draws nothing for a block over
-// 4,096 (ui.js, at MD_MAX: on 0.1.14 a block of 4,090 drew and one of 4,099 measured 0 px tall;
-// 4,096 is taken from that gap, not measured to the character). A part drawn at no height is
-// caught by the probe and shown whole as plain text (mdBroken), as on main.
-const MD_VIEW_CHARS = 4096;
-// An open reply's part whose Markdown would not fit one view (MD_VIEW_CHARS) is a run with no
-// place to split it (a word longer than MD_MAX: no space, line break, or Japanese or Chinese
-// sentence or clause mark): it shows as plain text, this many characters of its start, under a
-// dim line saying so (mdlong).
+// An open reply's part whose Markdown would not fit one view (MD_VIEW_CHARS, ui.js) is a run with
+// no place to split it (a word longer than MD_MAX: no space, line break, or Japanese or Chinese
+// sentence or clause mark): it shows as plain text (mdlong). Past a view, this many characters
+// of its start, under a dim line saying so; at most a view (its dollar escapes took it past one
+// as Markdown), all of it, under main's line for a part Herdr could not draw (BROKEN_NOTE).
 const LONG_SHOWN = 4000;
+const BROKEN_NOTE = "Herdr could not draw this part as Markdown, so it shows as plain text.";
 const VIEWER_PROMPT = 8000; // characters of the prompt in the image viewer's panel
 const LONG_REPLY = 1600; // characters past which an open reply ends in a Collapse (Esc) row
 // px above a paragraph drawn as its own list item, and above a heading, as inside one block
@@ -6229,13 +6226,22 @@ export default class Threads extends View {
     const gap = j ? this.paraGap() : undefined;
     const old = pm.rows.get(key);
     if (old?.kind === "mdlong" && old.src === src && old.gap === gap && this.sameItem(old, item)) return old;
-    const row = { ...item, kind: "mdlong", key, src, shown: src.slice(0, LONG_SHOWN), n: src.length, ...(j ? { gap } : {}) };
+    // A part of at most a view is never cut: plain text needs no escapes, so all of it fits.
+    const row = { ...item, kind: "mdlong", key, src, shown: src.length <= MD_VIEW_CHARS ? src : src.slice(0, LONG_SHOWN), n: src.length, ...(j ? { gap } : {}) };
     pm.rows.set(key, row);
     return row;
   }
-  // Only when text is left out: a part of at most LONG_SHOWN characters that its dollar
-  // escapes take past one view is plain text shown whole, and the line would be false.
-  longNote(r) { return r.n > r.shown.length ? `This part is ${fmtCount(r.n)} characters with no place to break it; only its start is shown. Copy (c) copies all of it.` : null; }
+  // The line says only the start is shown only when text is left out.
+  longNote(r) { return r.n > r.shown.length ? `This part is ${fmtCount(r.n)} characters with no place to break it; only its start is shown. Copy (c) copies all of it.` : BROKEN_NOTE; }
+  // A part as plain text under BROKEN_NOTE, with the warning's icon and colour: one Herdr drew at
+  // no height (mdBroken), or one its dollar escapes take past a view (mdlong, shown whole).
+  brokenPlain(t, r, text) {
+    return v_flex().mt(r.gap ?? 6).gap(4)
+      .child(h_flex().gap(5).items_center().text_size(11.5).text_color(t.warning ?? t.dim)
+        .child(svg(ICON("alert")).size(12).flex_none())
+        .child(div().min_w(0).child(BROKEN_NOTE)))
+      .child(this.readBlock(div()).text_color(t.foreground).child(text));
+  }
   // The time a draw gives an open reply's split and its parts' rows: its reshaping time, or
   // SHAPE_MIN_MS of a light draw.
   partMax() { return this.light ? SHAPE_MIN_MS : this.shapeMax(); }
@@ -10426,9 +10432,9 @@ export default class Threads extends View {
       case "latest": return 6 + (r.md ? this.mdHeight(r.md) + (r.left > 0 ? LATEST_NOTE : 0) + (r.whole ? 0 : 22) : this.latestBox(r) + (this.latestCut(r) ? 22 : 0));
       case "noreply": return 6 + TV_LINE * (this.wrapped(this.noReplyText(r.turn), w, MD_CHAR) + 1);
       case "md": return (r.gap ?? 6) + (r.table ? this.tableHeight(r) : this.mdHeight(r.src ?? r.md));
-      // The note's lines at its 11.5 px, 4 px, then the text shown at the reading line.
-      // With nothing left out (no line), the text shown alone.
-      case "mdlong": { const note = this.longNote(r); return (r.gap ?? 6) + (note ? 18 * this.wrapped(note, this.prose(), (this.charW(MD_CHAR) * 11.5) / 13) + 4 : 0) + this.restHeight(r.shown.length, 1); }
+      // The note's lines (longNote: the start line, or main's line when nothing is left out) at
+      // its 11.5 px, 4 px, then the text shown at the reading line.
+      case "mdlong": return (r.gap ?? 6) + 18 * this.wrapped(this.longNote(r), this.prose(), (this.charW(MD_CHAR) * 11.5) / 13) + 4 + this.restHeight(r.shown.length, 1);
       case "seltext": return 6 + 22 + r.boxH;
       case "codehead": return 8 + 28;
       case "code": return this.codeBoxH(r);
@@ -11688,11 +11694,7 @@ export default class Threads extends View {
         // out of view and its end is never cut (C3).
         // A block Herdr drew at no height (mdBroken) shows as plain text with a note, so a
         // reply never vanishes.
-        if (this.mdBroken?.has(r.key)) return v_flex().mt(r.gap ?? 6).gap(4)
-          .child(h_flex().gap(5).items_center().text_size(11.5).text_color(t.warning ?? t.dim)
-            .child(svg(ICON("alert")).size(12).flex_none())
-            .child(div().min_w(0).child("Herdr could not draw this part as Markdown, so it shows as plain text.")))
-          .child(this.readBlock(div()).text_color(t.foreground).child(r.src ?? r.md));
+        if (this.mdBroken?.has(r.key)) return this.brokenPlain(t, r, r.src ?? r.md);
         return this.readBlock(div().mt(r.gap ?? 6))
           .child(this.tableBlock(this.mdView(tv(`th-md-${r.key}`), r.md, this.replySelectable(), this.partViews(r)), this.tableExtra(r)));
       case "seltext": {
@@ -11728,13 +11730,12 @@ export default class Threads extends View {
       case "codeall": return this.showAllRow(t, r.all ? "Show less" : `Show all · ${plural(r.left, "more row")}`, r.all ? "chevron-up" : "chevron-down");
       case "mview": return this.showAllRow(t, "View diagram", "panel-right");
       // A part with no place to split it, too long for one Markdown view (longPart): its start
-      // as plain text under a dim line saying so.
-      case "mdlong": {
-        const note = this.longNote(r);
+      // as plain text under a dim line saying so; shown whole, under main's line (brokenPlain).
+      case "mdlong":
+        if (r.n <= r.shown.length) return this.brokenPlain(t, r, r.shown);
         return v_flex().mt(r.gap ?? 6).gap(4)
-          .children(note ? [div().text_size(11.5).line_height("18px").text_color(t.dim).child(note)] : [])
+          .child(div().text_size(11.5).line_height("18px").text_color(t.dim).child(this.longNote(r)))
           .child(this.readBlock(div()).text_color(t.foreground).child(r.shown));
-      }
       // The parts of a long reply not laid out yet: a quiet line in their place, at their rough
       // height, until the next frames bring them (partRow).
       case "mdrest": return v_flex().mt(r.gap ?? 6).h(Math.max(18, r.h - (r.gap ?? 6))).child(div().h(18).text_size(11.5).line_height("18px").text_color(t.dim).child(r.one ? "Laying out this part…" : "Laying out the rest of the reply…"));

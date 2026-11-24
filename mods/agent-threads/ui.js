@@ -457,12 +457,22 @@ function packEnd(pk, sep, emit) {
 // line it reads or looks at (two for a word of a line split at words). Weighed so that a unit
 // takes about the same time whatever the text's shape (without the JIT, 8 to 27 ns).
 const LINE_UNITS = 16;
-// A word of a line split at words: up to a space, and also just past a sentence or clause mark
-// of Japanese or Chinese prose, which has no space between words. The marks are the full-width
-// forms only (。！？；，、：, written by code point), so text with none of them splits at spaces
-// alone, as before. The three classes share no character, so a match is one scan: a run of
-// 200,000 characters with no space or mark is read once, not tried again from each place.
+// What one of Herdr's Markdown views holds, in characters: it draws nothing for a block over
+// 4,096 (at MD_MAX: on 0.1.14 a block of 4,090 drew and one of 4,099 measured 0 px tall; 4,096
+// is taken from that gap, not measured to the character). A part drawn at no height is caught
+// by the pane's probe and shown whole as plain text (mdBroken), as on main.
+export const MD_VIEW_CHARS = 4096;
+// A word of a line split at words: up to a space (MD_SPACE_WORD). A word that one view would not
+// hold is split again just past each sentence or clause mark of Japanese or Chinese prose,
+// which has no space between words (MD_WORD). Main kept a paragraph of it that one view holds
+// as one piece, and so does this: the split packs by bytes, three a character, so breaking any
+// paragraph of it over about 1,166 characters drew a paragraph gap inside it. The marks are the
+// full-width forms only (。！？；，、：, written by code point), so text with none of them splits
+// at spaces alone, as before. The three classes share no character, so a match is one scan: a
+// run of 200,000 characters with no space or mark is read once, not tried again from each place.
+const MD_SPACE_WORD = /\S+\s*/g;
 const MD_WORD = /[^\s\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A]+[\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A]*\s*|[\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A]+\s*/g;
+const MD_MARK = /[\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A]/;
 // mdChunks as a job that stops and goes on, so an open reply's split can share a draw's time
 // (on the rig a 120 KB reply's took 44 ms, near Herdr's 50 ms for a draw). mdSplit(md) starts
 // one; mdSplitOn(job, lines, units) goes on with it until that many lines are read or that much
@@ -539,15 +549,18 @@ export function mdSplitOn(job, lines = Infinity, units = Infinity) {
     }
     const l = L[r.k];
     if (blk.lens[r.k] <= r.room) { work += LINE_UNITS; add(l, blk.lens[r.k]); r.k++; return; }
-    // A line longer than the room: its words (MD_WORD), packed with nothing between.
-    if (!r.inner) r.inner = { pos: 0, chunk: [], len: 0, any: false, word: null, wLen: 0, wScan: 0 };
+    // A line longer than the room: its words (MD_SPACE_WORD), packed with nothing between. A
+    // word one view would not hold, with a mark in it, is read again as its pieces (sub, MD_WORD).
+    if (!r.inner) r.inner = { pos: 0, chunk: [], len: 0, any: false, word: null, wLen: 0, wScan: 0, sub: null, subPos: 0, inSub: false, mark: false };
     const w = r.inner;
     if (w.word == null) {
-      const re = MD_WORD;
-      re.lastIndex = w.pos;
-      const m = re.exec(l);
+      const inSub = w.sub != null;
+      const re = inSub ? MD_WORD : MD_SPACE_WORD;
+      re.lastIndex = inSub ? w.subPos : w.pos;
+      const m = re.exec(inSub ? w.sub : l);
       work += 2 * LINE_UNITS;
       if (!m) {
+        if (inSub) { w.sub = null; return; }
         if (!w.any) add(l, blk.lens[r.k]);
         else packEnd(w, "", (c, cLen) => add(c, cLen));
         r.inner = null;
@@ -555,19 +568,26 @@ export function mdSplitOn(job, lines = Infinity, units = Infinity) {
         return;
       }
       w.any = true;
-      w.pos = re.lastIndex;
+      if (inSub) w.subPos = re.lastIndex;
+      else w.pos = re.lastIndex;
+      w.inSub = inSub;
+      w.mark = false;
       w.word = m[0];
       w.wLen = 0;
       w.wScan = 0;
     }
-    // A word measured a part at a time too: a line with no space or mark is one word.
+    // A word measured a part at a time too: a line with no space is one word. A word longer than
+    // a view is looked at for a mark as it is measured, in the same steps.
     const [k, end] = utf8Run(w.word, w.wScan, Math.min(w.word.length, w.wScan + Math.max(256, room())));
+    const long = !w.inSub && w.word.length > MD_VIEW_CHARS;
+    if (long && !w.mark) { w.mark = MD_MARK.test(w.word.slice(w.wScan, end)); work += end - w.wScan; }
     work += end - w.wScan;
     w.wLen += k;
     w.wScan = end;
     if (w.wScan < w.word.length) return;
     const word = w.word;
     w.word = null;
+    if (long && w.mark) { w.sub = word; w.subPos = 0; return; }
     packAdd(w, word, w.wLen, 0, "", r.room, (c, cLen) => add(c, cLen));
   };
   const findStep = () => {
