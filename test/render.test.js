@@ -9154,7 +9154,9 @@ test("a turn with hundreds of interim texts opens within Herdr's time: links and
   expect(due.length).toBe(16);
   expect(v.probeLeft).toBeGreaterThan(0);
   expect(due.every(([r]) => Math.abs(v.baseIndex.get(r.key) - top) <= 32)).toBe(true);
+  // The timers dropped here include the probe's last ask, which would have let it ask again.
   cx.timers = [];
+  v.probeNext = false;
   v.render(cx);
   expect(cx.timers.some((x) => x.ms === 16)).toBe(true);
   draw(v, cx);
@@ -20049,16 +20051,20 @@ function spanSettled(v) {
 const blankInView = (v) => { const r = lastList?.range; let n = 0; for (let i = r?.start ?? 0; i < (r?.end ?? 0); i++) if (v.rowsMemo?.[i]?.shape?.blank) n++; return n; };
 // A reader who leaves the end by go() once the list shows, while the rows above drain. The list
 // as Herdr keeps it: an offset in px (host.off) and 600 px of rows from it; a scroll to the end
-// or to a row applies to the heights of the draw that asked for it. Each frame after go():
-// [rows left, the first and last row drawn, blank rows among them].
-async function leaveDuringDrain(go) {
+// or to a row applies to the heights of the draw that asked for it, and goes no further than the
+// end. go() returns the row it goes
+// to, if not the turn it is given. Each frame after go(), and four after the rows are drained:
+// [rows left, the first and last row drawn, blank rows among them, that row's top in the view,
+// its height, rows on screen drawn at a height not their own (held), a place held, the rows].
+// The timers age pace ms a frame.
+async function leaveDuringDrain(go, pace = 16) {
   const host = { off: 0, end: false, want: null };
   const top = (z, i) => z.slice(0, i).reduce((x, y) => x + y, 0);
   H.listWindow = (n, id) => {
     const z = lastList.sizes;
     if (!String(id).startsWith("threads-list")) return { start: 0, end: n };
     if (host.end) host.off = Math.max(0, top(z, n) - 600);
-    else if (host.want != null) host.off = top(z, host.want);
+    else if (host.want != null) host.off = Math.min(top(z, host.want), Math.max(0, top(z, n) - 600));
     host.end = false;
     host.want = null;
     let a = 0, y = 0;
@@ -20076,15 +20082,23 @@ async function leaveDuringDrain(go) {
     expect(v.staleRows.length).toBeGreaterThan(400);
     // A turn far from the end, among the rows left.
     const key = v.baseRows[v.staleRows[v.staleRows.length >> 1]].key;
-    go(v, cx, key, host, step);
+    const aim = go(v, cx, key, step, host) ?? key;
     const frames = [];
-    for (let k = 0; (v.rowJob || v.staleRows?.length) && k < 400; k++) {
-      // A scroll to a place waits SCROLL_WAIT_MS at most while rows are left: as if it had.
+    for (let k = 0, after = 0; (v.rowJob || v.staleRows?.length || after++ < 4) && k < 400; k++) {
+      // A scroll to a place waits SCROLL_WAIT_MS at most while rows are left, and a return waits
+      // 400 ms at most for its parts (the harness measures none): as if both had passed.
       if (v.scrollTo) v.scrollWait = 1;
+      if (v.scrollTo?.until) v.scrollTo.until = 1;
+      // pace ms a frame for the timers too: a landing's scrolls and lift come over several frames.
+      for (const x of cx.timers) x.ms -= pace;
       step();
-      frames.push([v.staleRows?.length ?? 0, lastList.range.start, lastList.range.end, blankInView(v)]);
+      const { sizes, range } = lastList;
+      const i = lastList.keys.indexOf(aim);
+      let held = 0;
+      for (let j = range.start; j < range.end; j++) if (sizes[j] !== Math.ceil(v.sizesMemo[j])) held++;
+      frames.push([v.staleRows?.length ?? 0, range.start, range.end, blankInView(v), i < 0 ? null : top(sizes, i) - host.off, sizes[i], held, Boolean(v.anchor?.open), sizes.length]);
     }
-    return { v, frames };
+    return { v, cx, frames, step };
   } finally { H.listWindow = null; }
 }
 
@@ -20211,17 +20225,79 @@ test("the opening: scrolled up mid-chat while the rows above drain, the row at t
   } finally { H.listWindow = null; }
 }, 30000);
 
-test("the opening: a jump away from the end while the rows above drain lands on rows shaped by the next frame", async () => {
-  for (const go of [(v, cx, key) => v.railJump(key, cx)]) {
+// Every way to leave the end for a turn while the rows above drain. Before, first, #n, a key step
+// and a search step were dropped: the end was held (toBottom) until the jump's wait was over,
+// and then the view went to the end.
+const LEAVE_WAYS = {
+  "the rail": (v, cx, key) => { v.railJump(key, cx); },
+  first: (v, cx) => { v.action("first", cx); return v.sel; },
+  "#n": (v, cx, key) => { v.setQuery(`#${v.findTurn(key).n}`, cx); },
+  "a key step": (v, cx, key) => { v.sel = key; v.follow = false; v.action("next", cx); return v.sel; },
+  // "Turn" is in every prompt, so the search hides none and the rows drain as before.
+  "a search step": (v, cx, key) => { v.setQuery("Turn", cx); v.sel = key; v.action("olderMatch", cx); return v.sel; },
+  "older then newer": (v, cx, key) => { v.setQuery("Turn", cx); v.sel = key; for (const a of ["olderMatch", "olderMatch", "newerMatch"]) v.action(a, cx); return v.sel; },
+  "the outline": (v, _cx, key, step) => { v.setOutline(true); step(); step(); v.leaveOutline(key); },
+  "a pin": (v, cx, key) => { v.togglePin(key, cx); v.goPin(0, cx); },
+};
+test("the opening: a jump away from the end while the rows above drain lands on its turn, on rows shaped by the next frame", async () => {
+  for (const [name, go] of Object.entries(LEAVE_WAYS)) {
     const { frames } = await leaveDuringDrain(go);
-    // The frame that lands: the rows drawn are far from the ones before.
-    const at = frames.findIndex((f) => f[2] < frames[0][2] - 100);
-    expect(at).toBeGreaterThanOrEqual(0);
-    expect(at).toBeLessThan(3);
-    expect(frames[at][0]).toBeGreaterThan(400);
-    // Only the frame that lands can show empty bubbles.
-    expect(frames.slice(at + 1).filter((f) => f[3] > 0)).toEqual([]);
+    const on = (f) => f[4] != null && f[4] >= 0 && f[4] < 600;
+    // The turn's top is on screen within 3 frames, with most rows left to reshape.
+    const at = frames.findIndex(on);
+    expect([name, at >= 0 && at < 3]).toEqual([name, true]);
+    expect([name, frames[at][0] > 400]).toEqual([name, true]);
+    // From then on: never back at the end, with no empty bubble on screen.
+    expect([name, frames.slice(at + 1).filter((f) => f[2] >= f[8] - 1 || f[3] > 0)]).toEqual([name, []]);
   }
+}, 120000);
+
+// What the jump's fix must leave alone: a reader who stays at the end (j at the newest turn
+// selects it again, with a scroll to it) and Jump to latest just after a jump, while it lands.
+// Both keep the end in every frame to the end of the drain, and the rows above drain in each.
+test("the opening: through the drain the end stays held while following, after j at the newest turn and after Jump to latest", async () => {
+  const ways = {
+    "j at the newest": (v, cx) => { v.action("next", cx); expect(v.follow).toBe(true); expect(v.scrollTo).not.toBeNull(); return v.sel; },
+    "latest after first": (v, cx, _key, step) => {
+      v.action("first", cx);
+      for (let k = 0; k < 2; k++) { if (v.scrollTo) v.scrollWait = 1; for (const x of cx.timers) x.ms -= 16; step(); }
+      expect(lastList.range.start).toBeLessThan(5);
+      v.action("latest", cx);
+      return v.sel;
+    },
+  };
+  for (const [name, go] of Object.entries(ways)) {
+    const { v, frames } = await leaveDuringDrain(go);
+    expect([name, frames.length > 30, v.staleRows.length]).toEqual([name, true, 0]);
+    // The end drawn in every frame from the fourth, with no empty bubble. Before it, j's scroll to
+    // the newest turn's head shows for one frame, as at the commit before this fix.
+    expect([name, frames.slice(3).filter((f) => f[2] !== f[8] || f[3] > 0)]).toEqual([name, []]);
+    expect([name, frames.filter((f, k) => f[0] > 0 && f[0] >= (frames[k - 1]?.[0] ?? Infinity))]).toEqual([name, []]);
+  }
+}, 60000);
+
+// A jump while the list is still hidden comes only from a command (keys, presses and the wheel
+// wait): the list is still shown at its end, following, and the end held through the drain.
+test("the opening: a command's jump while the list is hidden still shows it at its end and holds the end", async () => {
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    const { v, cx, step } = await plainOpening(2400);
+    step();
+    expect(v.openActive()).toBe(true);
+    v.command("first", cx);
+    const frames = [];
+    for (let k = 0; k < 400 && (v.openActive() || v.staleRows?.length); k++) {
+      if (v.scrollTo) v.scrollWait = 1;
+      for (const x of cx.timers) x.ms -= 16;
+      frames.push(step());
+    }
+    const s0 = frames.findIndex((f) => f.shown);
+    expect(s0).toBeGreaterThan(0);
+    expect(s0).toBeLessThanOrEqual(30);
+    expect(v.follow).toBe(true);
+    // The frame that shows the list and every one after ask for the end.
+    expect(frames.slice(s0).filter((f) => !f.end)).toEqual([]);
+  } finally { H.listWindow = null; }
 }, 30000);
 
 test("the opening: a wheel up once the parts are measured, with rows still to reshape, takes the place on screen", async () => {

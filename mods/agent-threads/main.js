@@ -9142,6 +9142,10 @@ export default class Threads extends View {
     // frame is already asked for (render).
     // A reader at the end through a re-wrap stays at the end: in this frame, every frame, until
     // the place is let go (holdDone).
+    // A jump away from the end (first, #n, a step, a pin, the outline) ends the hold on the
+    // end: while rows above were still reshaped, the end was held and the jump dropped once
+    // its wait was over (SCROLL_WAIT_MS).
+    if (this.scrollTo && !this.follow) this.toBottom = false;
     if (this.anchor?.end && rows.length && !this.scrollTo) { this.pinningUntil = Date.now() + 1000; this.askEnd(); }
     const unsettled = this.shapeLeft > 0 || this.staleRows?.length || this.rowJob;
     if (!(this.toBottom || this.scrollTo) || !unsettled) this.scrollWait = 0;
