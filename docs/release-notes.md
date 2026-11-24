@@ -4,13 +4,20 @@ Newest first. Each release's full list of pull requests is in [CHANGELOG.md](../
 
 ## 1.2.0
 
-A Trajectory pane beside the chat, sender rules you can see and test, search that steps through its matches, and a large session that opens at its end. It needs the same Herdr and tools as 1.1.0. The panes that drag by the edge you grab (the Threads pane, the Chat with the Trajectory and the Pinned column) need Herdr 0.1.16 or 0.1.17; on another version they keep the sizes and drags they had in 1.1.0.
+Open a large session at its end in seconds, see the Trajectory in a pane of its own, step through search matches, and add sender rules. It needs the same Herdr and tools as 1.1.0. The panes that drag by the edge you grab (the Threads pane, and the Chat with the Trajectory and the Pinned column) need Herdr 0.1.16 or 0.1.17; on another version they keep the sizes and drags they had in 1.1.0.
+
+### What you will notice first
+
+- A large session opens at its end in a few seconds. A 499 MB session opens in about 7 seconds where it took about 18, on the test machine with Herdr 0.1.18. A loading state shows how far the read has got, and the list no longer drops into Herdr's slow state when many long pasted prompts are on screen together.
+- The Trajectory has a pane of its own, to the right of the chat, with the session as a ledger of its turns and steps.
+- Search steps through its matches newest first: `n` goes to the next older one and `Shift n` to the newer one.
+- Sender rules have a page in Settings, a mark on the messages they match, and a count of the prompts a rule would take before you keep it.
+- Unpin a pin in one click, and keep up to seven pins.
 
 ### The chat view
 
 - A search starts at its newest match and centres it. `n` steps to the next older match and `Shift n` to the newer one, and two arrows beside the count do the same. The count is your place among the matches, counted from the newest: "1 of 4 · newest first", then "4 of 4 · first mention" at the oldest. The arrow with nothing left that way is dimmed, and nothing wraps round. The selected turn's matches have a stronger fill, as strong as the text on it allows.
 - A session opens at its end and stays still. While a long session is read, the pane shows a loading state in place of rows: how much is read, the turns so far, the agent and model, when the session started and was last active, how long it spans, its prompts, tool calls, tokens and pins, and your newest prompt. Nothing in it moves as figures arrive. A session that reads in under 0.3 s never shows it.
-- A large session reads in growing calls, so it opens sooner, and the list no longer drops into Herdr's slow state when many long pasted prompts are on screen together.
 - When a background task finishes after a turn has ended and the agent writes a reply for you, that reply is now a row of its own in the chat, with one quiet line, "Background task finished", where a message would be. Before, it showed only inside the turn above, under the latest update, and each new notice wrote over the last one's reply. A search finds these replies, and the rail gives them a tick when Agent messages on the rail is on.
 - A long hyphenated name in an open turn's blue bubble breaks after a "-" and no longer inside a word. A plain bubble breaks as before, so a copy never picks up a hidden character.
 - A turn read before the session is read to its end is no longer shown as running with a huge elapsed time.
@@ -63,6 +70,10 @@ A Trajectory pane beside the chat, sender rules you can see and test, search tha
 - A background update's step now carries its start time (`timestamp`), where it had none.
 - A call from an OpenCode, Pi or Antigravity session now says whether it failed and when it ended, as one from Claude Code does. Before, every result in those exports read `no_result`, even with its output there, so a failed call looked like a good one. A call whose outcome the transcript does not record leaves the flag out. For Antigravity that is every finished call except one recorded as an error, and a step still running has no result.
 - A background task's notice after a finished turn is a turn of its own in the file: an empty user step whose `extra.sender` is `{ "kind": "task-notification" }`, then the agent's steps and reply. Before, its steps were added to the turn above, and that turn's end and duration stretched to cover them.
+
+### Known limits
+
+- A search on a very long session can be slow. A fix is in review.
 
 ## 1.1.0
 
