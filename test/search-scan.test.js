@@ -280,6 +280,74 @@ test("a rows build stopped anywhere, building or sizing, first slice or later, e
   ]);
 }, 120000);
 
+// A build stopped while sizing the last row of its last slice, and the running turn ending and a new
+// turn coming in before it resumes (the build goes on: only the newest turns changed). The
+// sizes and index entries the stopped slice left are for rows that are now different, so they
+// are cut too: the build ends with the rows, heights and index one build of the new turns makes.
+test("a build stopped while sizing, with turns coming in before it resumes, ends with one build's rows, heights and index", async () => {
+  const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
+  const { v, cx, s } = await longPane(600);
+  // The newest turn is running, selected, with its steps open: rows of their own, which go
+  // when it ends.
+  T.apply(s, { k: "p", o: "human", t: "Turn 600: please rename the cart total for order 600.", ts });
+  for (let i = 0; i < 4; i++) {
+    T.apply(s, { k: "t", t: `Looking at part ${i}.` });
+    T.apply(s, { k: "u", n: "Bash", id: `c${i}` });
+  }
+  T.apply(s, { k: "t", t: "Working on it." });
+  v.sel = `0:${s.turns.length}`;
+  settleRows(v, cx);
+  const liveKeys = v.baseRows.filter((r) => r.key.includes(`0:${s.turns.length}`) && r.key !== `0:${s.turns.length}`).map((r) => r.key);
+  expect(liveKeys.length).toBeGreaterThan(2);
+  const lastKey = v.baseRows.at(-1).key;
+  const { height } = v;
+  let stopIn = false;
+  let stopped = 0;
+  v.height = function (...a) {
+    // The last row, in a slice that resumes the build: every row before it, the running
+    // turn's too, is sized.
+    if (this.rowJob?.from?.own && stopIn && a[0]?.key === lastKey) { stopIn = false; stopped++; throw new Error("interrupted"); }
+    return height.apply(this, a);
+  };
+  COST.built = 0.05;
+  try {
+    priced(v, () => {
+      v.keptFor().rows.clear();
+      v.rowsKey = null;
+      v.rowBuild = null;
+      stopIn = true;
+      for (let k = 0; k < 100 && !stopped; k++) {
+        try { v.render(cx); } catch (e) { if (String(e?.message) !== "interrupted") throw e; v.renderOpen = true; }
+        cx.flush(0);
+      }
+      expect(stopped).toBe(1);
+      expect(v.rowJob).not.toBe(null);
+      // Before it resumes: the running turn ends with a longer reply, and a turn comes in.
+      T.apply(s, { k: "t", t: "Renamed it.\n\nThe cart total now rounds once per order, and the test covers the old case.\n\nNothing else changed." });
+      T.apply(s, { k: "d", ms: 1000, ts });
+      T.apply(s, { k: "p", o: "human", t: "Turn 601: please check the queue helper.", ts });
+      for (let k = 0; k < 100; k++) {
+        v.render(cx);
+        cx.flush(0);
+        if (!v.rowJob) break;
+      }
+    });
+  } finally { COST.built = PRICE.built; v.height = height; }
+  expect(v.rowJob).toBe(null);
+  const sig = () => v.baseRows.map((r, i) => `${r.kind}|${r.key}|${v.baseSizes[i]}`);
+  const index = () => [...v.baseIndex].map(([k, i]) => `${k}@${i}`).sort();
+  const got = { rows: sig(), index: index() };
+  // Each index entry is its row's place, and the running turn's step rows are gone.
+  expect([...v.baseIndex].filter(([k, i]) => v.baseRows[i]?.key !== k)).toEqual([]);
+  expect(liveKeys.filter((k) => v.baseIndex.has(k) || v.baseRows.some((r) => r.key === k))).toEqual([]);
+  // One build of the same turns.
+  v.keptFor().rows.clear();
+  v.rowsKey = null;
+  v.rowBuild = null;
+  settleRows(v, cx);
+  expect(got).toEqual({ rows: sig(), index: index() });
+}, 120000);
+
 // ---- one set of matches, kept across draws ----
 // The search's matches are found once for each change and kept: the field's count, its place,
 // its two steps and n / Shift n read them, and a draw with nothing changed checks no turn.
