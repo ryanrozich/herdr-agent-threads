@@ -849,10 +849,17 @@ export function jumpTarget(q) {
 // between words, where one character can be a word: Han, Hiragana, Katakana, Hangul, Thai,
 // Lao, Khmer, Myanmar (by the Script property). One letter matched nearly every turn of a long
 // session, slowly, and found nothing worth the wait (the owner, 24 Nov).
-const ONE_CHAR_WORD = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]$/u;
-export function searchable(q) {
+// The pattern is built at load in a try, not written as a literal: an engine without Script
+// property escapes would reject a literal as the file loads, and the whole mod with it. There
+// (make throws) it is null, and a search is two code points or more in every script.
+const ONE_CHAR_SRC = "^[\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}\\p{Script=Thai}\\p{Script=Lao}\\p{Script=Khmer}\\p{Script=Myanmar}]$";
+export function oneCharTest(make = (src, flags) => new RegExp(src, flags)) {
+  try { return make(ONE_CHAR_SRC, "u"); } catch { return null; }
+}
+const ONE_CHAR_WORD = oneCharTest();
+export function searchable(q, one = ONE_CHAR_WORD) {
   const n = [...q].length;
-  return n >= 2 || (n === 1 && ONE_CHAR_WORD.test(q));
+  return n >= 2 || (n === 1 && one != null && one.test(q));
 }
 
 // ---- collapsed rows -------------------------------------------------------------------
