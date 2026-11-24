@@ -2911,8 +2911,8 @@ export default class Threads extends View {
   // are. False when one changes what the row is made of (pasted images), for a full rebuild.
   reshapeStale(status) {
     this.shapeStart();
-    this.shapeLeft = 0;
-    this.otherLeft = 0;
+    // Work left in open turns (otherLeft) is theirs to count: only their builds give it up.
+    this.shapeLeft = this.otherLeft ?? 0;
     this.shapeInView(status);
     const left = [];
     // Nearest the newest first when following, where the view is. Once this draw's time is
@@ -3114,10 +3114,11 @@ export default class Threads extends View {
       for (const k of now[i]) if (!b.sets[i].has(k)) keys.add(turnOf(k));
       for (const k of b.sets[i]) if (!now[i].has(k)) keys.add(turnOf(k));
     }
-    // New call details, or interim texts and estimates left out of time in open turns.
+    // New call details, or interim texts and estimates left out of time in open turns. The
+    // request (againOpen) and the work it stands for (otherLeft) are given up only once the
+    // rebuild below has finished: a draw stopped anywhere in it leaves both for the next.
     const again = this.againOpen;
-    this.againOpen = false;
-    if (again) this.otherLeft = 0;
+    const before = again ? (this.otherLeft ?? 0) : 0;
     if ((this.callVer ?? 0) !== b.callVer || again) {
       for (const k of this.open) keys.add(k);
       for (const r of this.baseRows) if (r.live) keys.add(r.turnKey ?? r.key);
@@ -3169,6 +3170,11 @@ export default class Threads extends View {
       stale.clear();
       for (const i of moved) stale.add(i);
       if (d) marks = marks.map((m) => (m.row > a || (m.dayRow != null && m.dayRow > a) ? { ...m, row: m.row > a ? m.row + d : m.row, dayRow: m.dayRow != null && m.dayRow > a ? m.dayRow + d : m.dayRow } : m));
+    }
+    // Built: what is left in the open turns is what this build counted.
+    if (again) {
+      this.againOpen = false;
+      this.otherLeft = Math.max(0, (this.otherLeft ?? 0) - before);
     }
     this.rowJob = null;
     this.staleRows = [...stale].sort((x, y) => x - y);
