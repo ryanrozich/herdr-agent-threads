@@ -20072,6 +20072,46 @@ test("the opening: once the list shows, the rows left drain behind it, the end h
   } finally { H.listWindow = null; }
 }, 30000);
 
+test("the opening: once the list shows, it stays at its end while the rows above drain, through a height far above changing", async () => {
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    const { v, cx, step } = await plainOpening(2400);
+    for (let k = 0; v.openActive() && k < 400; k++) step();
+    expect(v.openActive()).toBe(false);
+    expect(v.staleRows.length).toBeGreaterThan(400);
+    // The list keeps its offset in px, so a row above the view that changes height moves what
+    // is on screen unless the same frame asks for the end again.
+    const above = () => v.slotsMemo.slice(0, v.viewRange[0]).reduce((x, y) => x + y, 0);
+    const sel = v.sel;
+    // A turn far above the view, shaped, whose reply block the probe then measures taller.
+    const far = v.baseRows.findIndex((r, i) => i < v.nearSpan()[0] - 200 && r.kind === "turn" && r.shape?.md != null && !r.shape.blank);
+    expect(far).toBeGreaterThanOrEqual(0);
+    let was = above();
+    const frames = [];
+    while (v.staleRows.length && frames.length < 400) {
+      let grew = false;
+      if (frames.length === 5) {
+        const part = v.cmdFor(v.baseRows[far]);
+        const h0 = v.baseSizes[far];
+        v.probed(part.key, v.partSig(part), { height: (h0 + 600) * v.zoom() }, cx);
+        grew = v.baseSizes[far] > h0;
+      }
+      const x = step();
+      const now = above();
+      frames.push({ grew, moved: now !== was, end: x.end, bottom: v.bottomShown, follow: v.follow, sel: v.sel });
+      was = now;
+    }
+    expect(v.staleRows).toEqual([]);
+    expect(frames[5].grew).toBe(true);
+    expect(frames[5].moved).toBe(true);
+    // Heights above the view changed in most frames (each row reshaped there), and in every
+    // frame the end was asked for in that frame, the reader still following, the end on screen
+    // and the selection where it was.
+    expect(frames.filter((f) => f.moved).length).toBeGreaterThan(frames.length / 2);
+    for (const f of frames) expect([f.end, f.bottom, f.follow, f.sel]).toEqual([true, true, true, sel]);
+  } finally { H.listWindow = null; }
+}, 30000);
+
 test("the drain uses its shaping time: a pass reshapes rows until the draw's budget is spent, in every frame", async () => {
   H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
   try {
