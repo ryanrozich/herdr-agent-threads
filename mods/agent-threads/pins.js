@@ -15,7 +15,7 @@ import { turnIds, turnId } from "./core/ids.js";
 // The turn ids live with the reader (core/ids.js); pins and their tests use them from here too.
 export { turnIds, turnId };
 
-export const PIN_LIMIT = 5; // the keys 1 to 5
+export const PIN_LIMIT = 7; // the keys 1 to 7
 export const PIN_TEXT = 80; // characters of the prompt kept, shown when the turn is gone
 const MAX_SESSIONS = 200;
 const MAX_AGE = 90 * 86400000;

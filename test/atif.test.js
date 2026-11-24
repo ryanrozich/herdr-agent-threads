@@ -165,6 +165,28 @@ test("atif: the OpenCode command line takes each call's output, outcome and end 
   same("opencode-cli.json", t);
 });
 
+test("atif: the Pi command line takes each call's output, outcome and end time from calls.sh, as the golden file has it", () => {
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), pi, "pi"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const results = t.steps.flatMap((st) => st.observation?.results ?? []);
+  expect(results.map((r) => [r.source_call_id, r.content, r.extra])).toEqual([
+    ["c1", "3 matches", { result_ts: "2026-11-01T09:20:09.000Z", tool_result_is_error: false }],
+  ]);
+  same("pi-cli.json", t);
+});
+
+test("atif: the Antigravity command line takes each call's output and end time from calls.sh, and a DONE step leaves the outcome out, as the golden file has it", () => {
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), agy, "antigravity"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const results = t.steps.flatMap((st) => st.observation?.results ?? []);
+  expect(results.map((r) => [r.source_call_id, r.content, r.extra])).toEqual([
+    ["s1.0", "(tool output)", { result_ts: "2026-11-01T09:40:04.000Z" }],
+    ["s3.0", "(tool output)", { result_ts: "2026-11-01T09:40:07.000Z" }],
+    ["s7.0", "(tool output)", { result_ts: "2026-11-01T09:41:04.000Z" }],
+  ]);
+  same("antigravity-cli.json", t);
+});
+
 test("atif: the check above refuses what Harbor's models refuse: a field ATIF lacks, a step out of order, a result for a call outside its step", () => {
   const t = atif(readFile(codex, "codex"), { agent: "codex" });
   expect(problems(t)).toEqual([]);
