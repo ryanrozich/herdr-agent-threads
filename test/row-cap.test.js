@@ -1203,6 +1203,30 @@ test("after a render Herdr stopped, a wheel still drops the jump that waits and 
   expect(got).toEqual(want);
 });
 
+// Every frame a reader sees, drawn between the landing's timed asks too (drawBetweenAsks).
+test("past the cap, a jump held while the cut moves lands from the held place: every frame drawn shows the turn, at the held place or the landed one", async () => {
+  const got = {};
+  const want = {};
+  for (const [name, go] of [
+    ["rail", (v, cx) => v.railJump("0:65", cx)],
+    ["pin", (v, cx) => { v.pinnedList = () => [{ key: "0:65", turn: v.findTurn("0:65"), pin: { n: 65 }, s: v.current(), state: "done" }]; v.goPin(0, cx); }],
+    ["next", (v, cx) => { v.sel = "0:64"; v.action("next", cx); }],
+  ]) {
+    const { v, cx, sim } = await cutScene();
+    H.drawBetweenAsks = true;
+    go(v, cx);
+    const from = sim.frames.length;
+    settleList(v, cx, sim);
+    const frames = sim.frames.slice(from);
+    const places = frames.map((f) => Math.round(f.off)).filter((o, k, a) => k === 0 || o !== a[k - 1]);
+    got[name] = { missing: frames.filter((f) => !shownIn(v, f).includes("0:65")).map((f) => Math.round(f.off)), places: places.length <= 2 ? "two at most" : places };
+    want[name] = { missing: [], places: "two at most" };
+    H.drawBetweenAsks = false;
+    H.listWindow = null;
+  }
+  expect(got).toEqual(want);
+});
+
 test("past the cap, a pin's place that is gone falls back to the turn's head while the return waits, under a moved cut", async () => {
   const { v, cx, sim } = await cutScene();
   v.pinnedList = () => [{ key: "0:65", turn: v.findTurn("0:65"), pin: { n: 65, anchor: ["md", "99.3"] }, s: v.current(), state: "done" }];
