@@ -220,8 +220,10 @@ function body(name) {
   const next = SRC.slice(at + 1).search(/^ {2}(async )?[A-Za-z_]\w*\([^)]*\) \{$/m);
   return SRC.slice(at, next < 0 ? undefined : at + 1 + next);
 }
+// Whether this source calls readerMoved.
+const callsReaderMoved = (src) => src.includes("readerMoved");
 test("no scroll the pane makes itself counts as the reader's", () => {
-  const found = Object.fromEntries(PANE.map((n) => [n, body(n) == null ? "missing" : body(n).includes("readerMoved") ? "counts" : "no"]));
+  const found = Object.fromEntries(PANE.map((n) => [n, body(n) == null ? "missing" : callsReaderMoved(body(n)) ? "counts" : "no"]));
   expect(found).toEqual(Object.fromEntries(PANE.map((n) => [n, "no"])));
 });
 
@@ -315,4 +317,54 @@ test("a scroll the list reports counts once, and not again after a wheel", async
   const n1 = moves(v);
   v.stickCheck(rows, false, 5);
   expect({ bar, wheel: n1 - n0 - bar, after: moves(v) - n1 }).toEqual({ bar: 1, wheel: 1, after: 0 });
+});
+
+// The outline and the Pinned view scroll on the same list: a scroll it reports with no wheel
+// since the last frame (a drag on its bar) counts once there too, a wheel there counts once
+// (the frame after it does not count it again), and the pane's own scrolls there (a scroll
+// asked for, the way down to the end) do not count.
+const VIEWS = {
+  "the outline": async () => {
+    const { v, cx } = await pane(fixture("--extra", "30"));
+    settleRows(v, cx);
+    v.action("outline", cx);
+    return { v, cx };
+  },
+  "the Pinned view": async () => {
+    const { v, cx } = await pinsShown(["--extra", "10"], [1, 2, 3, 4, 5, 6, 7]);
+    return { v, cx };
+  },
+};
+for (const [where, make] of Object.entries(VIEWS)) test(`in ${where}, a scroll the list reports counts once, a wheel once, and the pane's own scrolls not at all`, async () => {
+  const { v, cx } = await make();
+  v.listH = 100;
+  v.render(cx);
+  const rows = v.rows();
+  v.follow = false;
+  v.scrollTo = null;
+  v.scrollBusyUntil = 0;
+  v.toBottom = false;
+  v.pinningUntil = 0;
+  const step = (f) => { const n0 = moves(v); f(); return moves(v) - n0; };
+  v.stickCheck(rows, false, 20);
+  const got = {
+    view: v.view === "pinned" ? "pinned" : v.outlined() ? "outline" : "list",
+    bar: step(() => v.stickCheck(rows, false, 10)),
+    wheel: step(() => { v.listWheel({ delta: { y: 120 } }); v.stickCheck(rows, false, 7); }),
+    asked: step(() => { v.scrollTo = { key: rows.at(-1).key, how: "center" }; v.stickCheck(rows, false, 4); v.scrollTo = null; }),
+    toEnd: step(() => { v.toBottom = true; v.stickCheck(rows, false, 2); v.toBottom = false; }),
+  };
+  expect(got).toEqual({ view: where === "the outline" ? "outline" : "pinned", bar: 1, wheel: 1, asked: 0, toEnd: 0 });
+});
+
+// The check on the pane's own scrolls reads the source: a comment naming readerMoved is not a
+// call, and a call is one even after a string holding "//".
+test("the source check counts a call to readerMoved, not a comment naming it", () => {
+  const cases = {
+    comment: "  read() {\n    // readerMoved is not called here\n    this.follow = true;\n  }\n",
+    block: "  read() {\n    /* this.readerMoved() */\n    this.follow = true;\n  }\n",
+    call: "  read() {\n    this.readerMoved(); // the reader's\n  }\n",
+    afterString: "  read() {\n    const u = \"https://example.com\"; this.readerMoved();\n  }\n",
+  };
+  expect(Object.fromEntries(Object.entries(cases).map(([k, src]) => [k, callsReaderMoved(src)]))).toEqual({ comment: false, block: false, call: true, afterString: true });
 });
