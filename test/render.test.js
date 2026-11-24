@@ -6881,6 +6881,22 @@ test("replies of long lines, long paragraphs or no blank line draw in time at th
   expect(got).toEqual(got.map(([name, scale]) => [name, scale, 0, 1, true, true, true]));
 }, 120000);
 
+// In the light window after a stopped draw, a draw that builds the open turns gives a reply's
+// new rows (partRow) SHAPE_MIN_MS, and the split gets the same: a capped reply opened with its
+// first draw stopped goes on splitting in the light draw after it, still well inside a draw's
+// time. (The light draws after that one build nothing until the window's end asks.)
+test("an open reply's split goes on in the light window after a stopped draw, in the light draw's time", async () => {
+  const { v, cx, keys } = await openLong(shortParas(4000));
+  v.probeDue = function () { this.probeLeft = 0; return []; };
+  const split = () => { let n = 0; for (const m of v.partTurns?.values() ?? []) for (const job of m.split.values()) n += job.n; return n; };
+  // The parts split by the end of each frame, and whether it was light.
+  const seen = [];
+  const r = costedFrames(v, cx, 400, await cardDone(v, keys), { stopAfter: 1, onFrame: () => seen.push([v.light, split()]) });
+  costLog("capped, the split in light frames", { ...r, seen: seen.slice(0, 4) });
+  const i = seen.findIndex(([light]) => light);
+  expect([r.frames[0].ok, i, seen[1][1] > seen[0][1], r.frames[1].ok && r.frames[1].ms < 25, r.settled > 0]).toEqual([false, 1, true, true, true]);
+}, 60000);
+
 // Parts held through the light window after a stopped draw go on in the draw after it: a
 // timer asks for the open turns to be built again (againOpen), for the work left in them
 // (otherLeft). Herdr stops that draw inside the rebuild (stopAt, once, in the first draw after
