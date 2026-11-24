@@ -4895,8 +4895,10 @@ export default class Threads extends View {
   //   draws (payOwed) run only as their draw's first shaping unit, alone: nothing else is
   //   shaped in that draw (unitAlone, counted in aloneRun). Such a run may pass the limit once;
   //   what it shaped is kept if the stop comes after it. Not in the frames after a stopped
-  //   render (shapeMax -1), in the drain not past the line unless its row is on screen, not
-  //   where the time already spent would have it cut (cutWhereNow), and not while it runs: a
+  //   render (shapeMax -1), not after another unit of its draw (a row on screen is then owed
+  //   and counted, so the next draw tries it first), in the drain not past the line unless its
+  //   row is on screen, not where the time already spent would have it cut (cutWhereNow), and
+  //   not while it runs: a
   //   running turn's reply is reshaped at each update, and each would pass the limit, so it
   //   keeps the shape it had until it ends. With a rate far too high every turn can never
   //   fit: each runs alone, a draw each, and teaches the rate down (shapeLearn).
