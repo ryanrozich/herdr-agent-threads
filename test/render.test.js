@@ -20389,6 +20389,39 @@ test("the opening: once the list shows, it stays at its end while the rows above
   } finally { listWindow = null; }
 }, 30000);
 
+test("the opening: scrolled up mid-chat while the rows above drain, the row at the top edge and its offset stay put as they are reshaped", async () => {
+  // The list as Herdr keeps it: an offset in px (off), and the rows drawn from it. A scroll to
+  // the end applies to the heights of the draw that asked for it.
+  let off = 0;
+  let end = false;
+  const place = () => { const z = lastList.sizes; let i = 0, y = 0; while (i < z.length - 1 && y + z[i] <= off) y += z[i++]; return [lastList.keys[i], off - y]; };
+  listWindow = (n) => { const z = lastList.sizes; if (end) { end = false; off = Math.max(0, z.reduce((x, y) => x + y, 0) - 600); } let a = 0, y = 0; while (a < n - 1 && y + z[a] <= off) y += z[a++]; let b = a; while (b < n && y < off + 600) y += z[b++]; return { start: a, end: b }; };
+  try {
+    const { v, step } = await plainOpening(2400);
+    v.listH = 600;
+    v.scroll = { scroll_to_bottom() { end = true; }, scroll_to_item() { throw new Error("no scroll to a row while the place is held"); } };
+    for (let k = 0; v.openActive() && k < 400; k++) step();
+    expect(v.openActive()).toBe(false);
+    step();
+    // One wheel up, to a turn mid-chat with rows still to reshape above it (the oldest are
+    // reshaped first once the reader is not following).
+    const to = lastList.sizes.slice(0, v.staleRows.at(-1) - 20).reduce((x, y) => x + y, 0);
+    const dy = Math.round(off - to);
+    off -= dy / v.zoom();
+    v.listWheel({ delta: { y: dy } });
+    expect(v.follow).toBe(false);
+    step();
+    const at = place();
+    const sizes = v.baseSizes.slice();
+    const stale = v.staleRows.length;
+    expect(stale).toBeGreaterThan(400);
+    for (let k = 0; v.staleRows.length && k < 400; k++) { step(); expect(place()).toEqual(at); }
+    // Rows above it were reshaped to other heights meanwhile.
+    const ai = v.baseIndex.get(at[0]);
+    expect(v.baseSizes.slice(0, ai).filter((h, i) => h !== sizes[i]).length).toBeGreaterThan(100);
+  } finally { listWindow = null; }
+}, 30000);
+
 test("the drain uses its shaping time: a pass reshapes rows until the draw's budget is spent, in every frame", async () => {
   listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
   try {
