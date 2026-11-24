@@ -443,6 +443,29 @@ export function itemBox(a, b, f, i, tx, w, wall, scale, len, upTo = null) {
   if (open) box.open = true;
   return box;
 }
+// Turn ti's step nearest px x of the view in a lane, within 4 px: { i, d } (i null for none).
+function nearStep(L, h, ti, x, lane, nowMs) {
+  const z = L.z ?? 1;
+  const wall = L.geo?.walls[ti] ?? wallOf(h);
+  const tx = L.turns[ti].x * z - (L.x0 ?? 0);
+  const tw = L.turns[ti].w * z;
+  // The running turn's unfinished bars end at now, not at its room's end.
+  const upTo = ti === L.geo?.live && h.t0 != null ? growEnd(tx, tw, wall, h.t0, nowMs) : null;
+  // The tracks the layout worked out for this turn; a turn it did not draw as bars, here.
+  const tk = L.tracks?.has(h) ? L.tracks.get(h) : L.scale === "steps" ? null : tlTracks(h);
+  let best = null;
+  let bestD = 4;
+  const len = stepN(h);
+  for (let i = 0; i < len; i++) {
+    // A row with no lane (an interrupted turn's Interrupted row) is no bar.
+    if (!laneKeys(h.steps[i]) || (lane && LEDGER_KINDS[h.steps[i].lk]?.lane !== lane)) continue;
+    const b = stepBox(h, i, tk?.[i], tx, tw, wall, L.scale, len, upTo);
+    if (!b) continue;
+    const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
+    if (d < bestD || (d === 0 && bestD === 0 && b.track === 1)) { best = i; bestD = d; }
+  }
+  return { i: best, d: bestD };
+}
 // The turn and step under px x of the strip in a lane: { turn, key } (key: the step's row,
 // or the turn's heading when no step's bar is within 4 px). heads in the layout's order; x in
 // px of the view (zoomed and panned).
@@ -458,28 +481,24 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
   // Past the turn into its break: the nearer turn. The press stays where it is, so a step is
   // found only within 4 px of it.
   if (fx > T[lo].x + T[lo].w && T[lo + 1] && T[lo + 1].x - fx < fx - (T[lo].x + T[lo].w)) lo++;
-  const t = T[lo];
   const h = heads[lo];
-  if (!h || h.key !== t.key) return null;
-  const wall = L.geo?.walls[lo] ?? wallOf(h);
-  const tx = t.x * z - x0;
-  const tw = t.w * z;
-  // The running turn's unfinished bars end at now, not at its room's end.
-  const upTo = lo === L.geo?.live && h.t0 != null ? growEnd(tx, tw, wall, h.t0, nowMs) : null;
-  // The tracks the layout worked out for this turn; a turn it did not draw as bars, here.
-  const tk = L.tracks?.has(h) ? L.tracks.get(h) : L.scale === "steps" ? null : tlTracks(h);
-  let best = null;
-  let bestD = 4;
-  const len = stepN(h);
-  for (let i = 0; i < len; i++) {
-    // A row with no lane (an interrupted turn's Interrupted row) is no bar.
-    if (!laneKeys(h.steps[i]) || (lane && LEDGER_KINDS[h.steps[i].lk]?.lane !== lane)) continue;
-    const b = stepBox(h, i, tk?.[i], tx, tw, wall, L.scale, len, upTo);
-    if (!b) continue;
-    const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
-    if (d < bestD || (d === 0 && bestD === 0 && b.track === 1)) { best = i; bestD = d; }
+  if (!h || h.key !== T[lo].key) return null;
+  const near = nearStep(L, h, lo, x, lane, nowMs);
+  // No bar of the turn under the press: in a turn under 6 px wide an unfinished call's bar
+  // starts left of the turn (itemBox), over the break and the turns before, so a bar of a later
+  // turn under the press is its answer. A turn under 2 px is drawn as one span per lane from
+  // its own x, so none of its bars reaches back.
+  if (near.d > 0) {
+    for (let j = lo + 1; j < T.length; j++) {
+      const tx = T[j].x * z - x0;
+      const tw = T[j].w * z;
+      if (Math.min(tx, tx + tw - 6) > x) break;
+      if (tw < 2 || heads[j]?.key !== T[j].key) continue;
+      const o = nearStep(L, heads[j], j, x, lane, nowMs);
+      if (o.d === 0) return { turn: heads[j].key, key: heads[j].steps[o.i].key };
+    }
   }
-  return { turn: h.key, key: best != null ? h.steps[best].key : h.key };
+  return { turn: h.key, key: near.i != null ? h.steps[near.i].key : h.key };
 }
 // The timeline for a draw: the turns placed and the view laid out, each made again only when
 // what it depends on changes, and the running turn's growing bars at nowMs. prev: the last
