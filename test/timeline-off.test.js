@@ -269,6 +269,44 @@ test("timeline from nothing, a width change while the build runs: the build star
   sameStrip(s.M, TL.timelineModel(null, off, 1143, "clock", now, null));
 });
 
+// ---- the room growing a step ----
+// While a turn runs its room on the strip is TL_ROOM_MIN, then TL_ROOM_GROW times that at each
+// step (timeline.js liveRoom): six steps in its first two minutes, about fourteen in an hour.
+test("timeline working on, the running turn's room growing a step: that draw places nothing and lays out only the last turn, the places kept and marked the old scale's; the bounded build places the strip again over the draws after and ends as a whole build", () => {
+  for (const n of [2000, 5600]) {
+    const { on } = session("open", n);
+    const t0 = on.at(-1).t0;
+    const r0 = TL.liveRoom(600000);
+    // A second before the step and a second after it.
+    const a = t0 + r0 - 1000;
+    const b = t0 + r0 + 1000;
+    const prev = TL.timelineModel(null, on, CW, "clock", a, null);
+    expect(prev.geo.room).toBe(r0);
+    const m = made();
+    const M = TL.timelineModel(prev, on, CW, "clock", b, null);
+    expect([n, since(m)]).toEqual([n, { geo: 0, layout: 0, tail: 1 }]);
+    expect(M.geo.room).toBe(r0 * TL.TL_ROOM_GROW);
+    expect(M.geo.stale).toBe(true);
+    expect(M.geo.turns.slice(0, -1).every((t, ti) => t === prev.geo.turns[ti])).toBe(true);
+    expect(M.geo.turns.at(-1).w).toBe(Math.max(prev.geo.min, r0 * TL.TL_ROOM_GROW * prev.geo.m));
+    // Drawn: the step's draw starts the build and takes no step of it; the next draws do.
+    const c = slowClock();
+    const m2 = made();
+    const st = TL.tlDraw(prev, null, on, CW, b, c.until(), c.clock);
+    expect(since(m2)).toEqual({ geo: 0, layout: 0, tail: 1 });
+    expect([st.J?.total, st.M.geo.stale]).toEqual([0, true]);
+    const { s, shown } = drawOut(st, on, CW, b, c);
+    expect(s.J).toBe(null);
+    expect(shown.length).toBeGreaterThan(1);
+    for (const x of shown.slice(0, -1)) expect(x.M.L).toBe(st.M.L);
+    sameStrip(s.M, TL.timelineModel(null, on, CW, "clock", b, null));
+    // Steady after, in the same room.
+    const m3 = made();
+    const t = TL.tlDraw(s.M, s.J, on, CW, b + 1000, c.until(), c.clock);
+    expect([t.M.L === s.M.L, t.J, since(m3)]).toEqual([true, null, { geo: 0, layout: 0, tail: 0 }]);
+  }
+});
+
 // ---- on the pane ----
 // A Trajectory pane docked along the bottom, w px wide, its rows built whole.
 async function dockPane(file, w) {
