@@ -224,11 +224,6 @@ const HITS_TAIL_MAX = 2500;
 // longest sessions the figures use, so a step still kept then is waiting on a session that
 // changes before every draw (hitsTail), not on work left.
 const STEP_DRAWS = 100;
-// A kept step asks for a draw every frame (scanStep's 0 ms timer, and the 120 ms watch's if
-// that one is lost), so no draw for this long while one is kept means Herdr is not drawing the
-// pane: it is hidden (another tab, the window minimised). An idle pane keeps no step, and its
-// gaps between draws say nothing.
-const STEP_GAP = 1000;
 // The hold (REWRAP_PAUSE_MS) is for a conversation whose last full re-wrap, at a column width
 // not kept, took more than this much of the pane's own draw time; before one has finished,
 // for one of more than HOLD_TURNS turns. A short one re-wraps at every step of a drag.
@@ -9215,11 +9210,9 @@ export default class Threads extends View {
     // A step still kept after STEP_DRAWS draws going on with it is dropped, and the field says
     // there is no further match that way (stepEnd) while that match stays selected.
     // The reader moving the list or leaving the view since the step was kept (readerMoves, noted
-    // when it was kept) drops it with no words, the selection left where it is. The pane hidden
-    // has no event: the first draw after a gap of STEP_GAP counts it as the reader's, here.
+    // when it was kept) drops it with no words, the selection left where it is.
     let stepped = false;
     if (cx && h.step != null) {
-      if (t0 - (h.step.at ?? t0) > STEP_GAP) this.readerMoved();
       if ((this.readerMoves ?? 0) !== h.step.moves) h.step = null;
       else if (h.step.key === this.sel && this.selMatches()) {
         stepped = true;
@@ -9405,11 +9398,11 @@ export default class Threads extends View {
     // A step that cannot land yet keeps itself (h.step, with its way): each draw after it goes
     // on with it, a slice each (scanStep), until it lands. A key, a new selection or a change
     // to the search calls it off.
-    // It notes the reader's count as it was kept (after the key's own, which set no step off),
-    // and the time of its last slice.
+    // It notes the reader's count as it was first kept, after the key's own (readerMoves): a
+    // move since then calls it off (scanStep).
     const draws = h.step?.draws ?? 0;
     const moves = h.step?.moves ?? this.readerMoves ?? 0;
-    const keep = () => { h.step = { key: this.sel, older, draws, moves, at: now() }; return true; };
+    const keep = () => { h.step = { key: this.sel, older, draws, moves }; return true; };
     // An older step from a match in a tail being checked again, not placed yet: the turns back
     // from it to the tail's next turn, not checked again yet, are checked here, one slice at
     // most (tailBack). It lands on the first match there; a slice that ends first keeps the

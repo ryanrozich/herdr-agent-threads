@@ -1401,16 +1401,15 @@ for (const how of ["a key", "a new selection"]) test(`an older step going on by 
 
 // A step going on by itself is called off by anything the reader does to move the list or
 // leave the view, with the selection left where it is: the wheel over the list, a scroll the
-// list reports with no wheel (its scroll bar), the rail's wheel, a press on a rail end's dot,
-// the pin button on a rail card, and the pane hidden (no draw for 30 s). Each route as its
-// handler runs it.
+// list reports with no wheel (its scroll bar), the rail's wheel, a press on a rail end's dot
+// and the pin button on a rail card. Each route as its handler runs it. The pane hidden is
+// not here: it has no event, and a long gap between draws is not shown to mean it (a rig row).
 const LEAVES = {
   "the wheel": (v, cx) => v.listWheel({ delta: { y: 3000 } }),
   "a scroll the list reports": (v, cx) => { const rows = v.rows(); v.stickCheck(rows, v.bottomShown, (v.stickStart ?? 40) - 20); },
   "the rail's wheel": (v, cx) => { v.railCut = true; v.railWheel({ delta_lines: { y: 3 } }, cx); },
   "a rail end's dot": (v, cx) => v.railReveal(0, cx),
   "a rail card's pin button": (v, cx) => { v.togglePin(v.sel, cx); cx.notify(); },
-  "the pane hidden": (v, cx) => { paid.frames += 1500; },
 };
 for (const [how, go] of Object.entries(LEAVES)) test(`an older step going on by itself is called off by ${how}, with no words and the selection left where it is`, async () => {
   const z = await zebraTail();
