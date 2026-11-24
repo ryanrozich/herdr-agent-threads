@@ -1523,10 +1523,13 @@ test("an older step going on by itself back through queued turns lands on the ne
 
 // A step that cannot land while the session keeps changing: queued turns back from the
 // selection, and one more queued before every draw, so the step's check back starts again from
-// the selection each time and never gets far enough. After STEP_DRAWS (100) draws going on
-// with it, it is dropped, and the field says there is no older match, as the step's own
-// button does; the next key takes the words away.
-test("a step going on by itself that has not landed within 100 draws is dropped, and the field says there is no older match", async () => {
+// the selection each time and never gets far enough. An older match is there all the while
+// (tail turn 800). After STEP_DRAWS (100) draws going on with it, the step is dropped with no
+// words: the selection stays where it is, and the field does not say there is no older match,
+// since the step gave up and did not reach the end. The older button is still there, and a
+// press, once the turns stop coming, starts a new step, which lands on that match (at once,
+// or kept and landed by the draws after it).
+test("a step going on by itself that has not landed within 100 draws is dropped with no words, the selection left where it is, and the older button starts a new one", async () => {
   const z = await zebraTail({ queuedFrom: 1000 });
   const { v, cx, s, ts, last } = z;
   const r = { draws: 0 };
@@ -1546,14 +1549,14 @@ test("a step going on by itself that has not landed within 100 draws is dropped,
     }
     r.step = v.hitsNow().step ?? null;
     r.field = fieldText(v);
-    v.action("pin", cx);
-    v.action("pin", cx);
-    r.after = fieldText(v);
+    const press = olderButton(v)?.find((c) => c[0] === "on_click")?.at(-1) ?? null;
+    r.button = Boolean(press);
+    press?.(null, cx);
+    r.again = v.sel === z.nearest || (v.sel === last && Boolean(v.hitsNow().step));
+    for (let k = 0; k < 40 && v.sel === last; k++) drawOnce(v, cx);
   }); } finally { X = 1; }
-  await v.pinChain;
-  delete recordFiles[PINS];
-  expect({ stayed: r.stayed, draws: r.draws, step: r.step, sel: v.sel, field: r.field }).toEqual({ stayed: true, draws: 100, step: null, sel: last, field: "No older match" });
-  expect(r.after).not.toBe("No older match");
+  expect({ stayed: r.stayed, draws: r.draws, step: r.step, button: r.button, again: r.again, landed: v.sel }).toEqual({ stayed: true, draws: 100, step: null, button: true, again: true, landed: z.nearest });
+  expect(r.field).not.toMatch(/No (older|newer) match/);
 }, 300000);
 
 // A draw going on with a step that runs scan slices itself (an older step past the oldest
