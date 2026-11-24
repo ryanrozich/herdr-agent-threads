@@ -424,12 +424,16 @@ function layTurn(S, ti) {
     if (c.input) add(`${c.user ? "input|user|0" : c.agent ? "input|agent|0" : "input|context|0"}${o}`, x, x1);
     if (c.model) add(`model|model|0${o}`, x, x1);
     if (c.tools) add(`${c.failed ? "tools|failed|0" : "tools|tools|0"}${o}`, x, x1);
-    if (c.failed && x >= S.failEnd) { out.fails.push(x + w / 2); S.failEnd = x + 6; }
+    // A failure mark is drawn at its bar's centre, and spaced by it from the last, 6 px or
+    // more, across turns as inside one.
+    const fx = x + w / 2;
+    if (c.failed && fx >= S.failEnd) { out.fails.push(fx); S.failEnd = fx + 6; }
   } else {
     const live = ti === G.live;
     const len = stepN(h);
     // The turn's tracks, on the clock: the last layout's for the same heading, else worked out.
     let tk = null;
+    let marks = null;
     if (scale !== "steps") {
       tk = kept?.get(h);
       if (tk === undefined) tk = tlTracks(h);
@@ -448,7 +452,17 @@ function layTurn(S, ti) {
       }
       const ip = range ? range.pos.get(r.key) : null;
       add(range && !(ip != null && ip >= range.ia && ip <= range.ib) ? `${k}|o` : k, b.x0, b.x1, Boolean(b.open));
-      if (r.failed && b.x0 >= S.failEnd) { out.fails.push((b.x0 + b.x1) / 2); S.failEnd = b.x0 + 6; }
+      if (r.failed) {
+        if (!marks) marks = [];
+        marks.push((b.x0 + b.x1) / 2);
+      }
+    }
+    // The turn's failure marks left to right by their bars' centres, where they are drawn (a
+    // call run earlier can be listed after a later one), each 6 px or more from the last. So
+    // every failed bar has a mark within 6 px of its centre.
+    if (marks) {
+      marks.sort((p, q) => p - q);
+      for (const fx of marks) if (fx >= S.failEnd) { out.fails.push(fx); S.failEnd = fx + 6; }
     }
     // Ticks inside a wide turn: on the clock its time from the start, by steps its step
     // numbers. Only those in view.
