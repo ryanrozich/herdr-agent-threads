@@ -337,6 +337,8 @@ test("timeline bar starts: a step that starts before its turn does is drawn from
   // Straight from tl: a turn 100 px in, 100 px wide, 10 s long.
   expect(itemBox([-5000, 1000, 0], 0, 100, 100, 10000, "clock", 1)).toEqual({ x0: 100, x1: 110, track: 0 });
   expect(itemBox([-5000, -4000, 0], 0, 100, 100, 10000, "clock", 1)).toEqual({ x0: 100, x1: 103, track: 0 });
+  // A turn narrower than a bar's least width: the bar still ends at the turn's end.
+  expect(itemBox([0, Number.NaN, 2], 0, 100, 4, 10000, "clock", 1)).toEqual({ x0: 98, x1: 104, track: 0, open: true });
 });
 
 test("timeline running turn: a room for a time with no bound is the least room, and the strip stays placed", () => {
