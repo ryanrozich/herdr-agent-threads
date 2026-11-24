@@ -247,31 +247,46 @@ test("replies of long lines, long paragraphs or no blank line draw in time at th
 }, 120000);
 
 // In the light window after a stopped draw, a draw that builds the open turns gives a reply's
-// new rows (partRow) SHAPE_MIN_MS, and the split SHAPE_MIN_MS of its own after them: a capped
-// reply opened with its first draw stopped shows parts it had split and goes on splitting in
-// the light draw after it, still well inside a draw's time. (The light draws after that one
-// build nothing until the window's end asks.)
+// split SHAPE_MIN_MS: a capped reply opened with its first draw stopped goes on splitting in the
+// light draw after it, still well inside a draw's time. (The light draws after that one build
+// nothing until the window's end asks.)
+const splitCount = (v) => { let n = 0; for (const m of v.partTurns?.values() ?? []) for (const job of m.split.values()) n += job.n; return n; };
+const partsShown = (v, key) => v.baseRows.filter((x) => x.kind === "md" && x.key.startsWith(`md:${key}:`)).length;
 test("an open reply's split goes on in the light window after a stopped draw, in the light draw's time", async () => {
   const { v, cx, keys } = await openLong(shortParas(4000));
   v.probeDue = function () { this.probeLeft = 0; return []; };
-  const split = (w = v) => { let n = 0; for (const m of w.partTurns?.values() ?? []) for (const job of m.split.values()) n += job.n; return n; };
-  // The parts split and shown by the end of each frame, and whether it was light.
+  // The parts split by the end of each frame, and whether it was light.
   const seen = [];
-  const shown = () => v.baseRows.filter((x) => x.kind === "md" && x.key.startsWith(`md:${keys}:`)).length;
-  const r = costedFrames(v, cx, 400, await cardDone(v, keys), { stopAfter: 1, onFrame: () => seen.push([v.light, split(), shown()]) });
+  const r = costedFrames(v, cx, 400, await cardDone(v, keys), { stopAfter: 1, onFrame: () => seen.push([v.light, splitCount(v)]) });
   costLog("capped, the split in light frames", { ...r, seen: seen.slice(0, 4) });
   const i = seen.findIndex(([light]) => light);
-  expect([r.frames[0].ok, i, seen[1][1] > seen[0][1], seen[1][2] > 0, r.frames[1].ok && r.frames[1].ms < 25, r.settled > 0]).toEqual([false, 1, true, true, true, true]);
-  // Stopped inside the rebuild the shape timer asked for (againOpen), as it builds the card: the
-  // request stands, and the light draw after it builds the card again and splits on.
-  const o = await openLong(shortParas(4000));
-  o.v.probeDue = v.probeDue;
-  const seen2 = [];
+  expect([r.frames[0].ok, i, seen[1][1] > seen[0][1], r.frames[1].ok && r.frames[1].ms < 25, r.settled > 0]).toEqual([false, 1, true, true, true]);
+}, 60000);
+
+// The light draw's new rows (partRow) have SHAPE_MIN_MS, and the split SHAPE_MIN_MS of its own:
+// in one shared 2 ms the split left no time for a row, and the card showed none of the parts it
+// had through the whole light window.
+test("the light draw after a stopped open shows the parts already split, not only the split's count", async () => {
+  const { v, cx, keys } = await openLong(shortParas(4000));
+  v.probeDue = function () { this.probeLeft = 0; return []; };
+  const seen = [];
+  const r = costedFrames(v, cx, 400, await cardDone(v, keys), { stopAfter: 1, onFrame: () => seen.push([v.light, splitCount(v), partsShown(v, keys)]) });
+  costLog("capped, the parts shown in the light draw", { ...r, seen: seen.slice(0, 4) });
+  expect([r.frames[0].ok, seen[1][0], seen[1][2] > 0, seen[1][1] > seen[0][1]]).toEqual([false, true, true, true]);
+}, 60000);
+
+// Stopped inside the rebuild the shape timer asked for (againOpen), as it builds the card: the
+// request stands, and the light draw after it builds the card again and splits on. With the
+// request given up before the build, the shape timer asks again only at the window's end.
+test("a draw stopped inside the rebuild it was asked for keeps the request, and the light draw after it builds the card", async () => {
+  const { v, cx, keys } = await openLong(shortParas(4000));
+  v.probeDue = function () { this.probeLeft = 0; return []; };
+  const seen = [];
   let once = false;
-  const stopAt = (where) => where === "expanded" && seen2.length === 1 && !once && (once = true);
-  const r2 = costedFrames(o.v, o.cx, 400, await cardDone(o.v, o.keys), { stopAt, onFrame: () => seen2.push([o.v.light, split(o.v)]) });
-  costLog("stopped in the asked rebuild", { ...r2, seen: seen2.slice(0, 5) });
-  expect([once, seen2[1][0], seen2[2][0], seen2[2][1] > seen2[0][1]]).toEqual([true, false, true, true]);
+  const stopAt = (where) => where === "expanded" && seen.length === 1 && !once && (once = true);
+  const r = costedFrames(v, cx, 400, await cardDone(v, keys), { stopAt, onFrame: () => seen.push([v.light, splitCount(v)]) });
+  costLog("stopped in the asked rebuild", { ...r, seen: seen.slice(0, 5) });
+  expect([once, seen[1][0], seen[2][0], seen[2][1] > seen[0][1]]).toEqual([true, false, true, true]);
 }, 60000);
 
 // A part is shown only at its worked-out height: where there is no time to work it out (a
@@ -468,18 +483,22 @@ test("through the light window after a stopped draw the pane draws only a few ti
   costLog("capped, the light window's draws", { ...r, light: inLight });
   // And the window's end brings the next draw that does the work.
   expect([inLight.length <= 10, light.some(([ms, l]) => !l && ms >= 5000)]).toEqual([true, true]);
-  // A stop after the probe's step left it one part to measure (probeLeft 1): a light draw
-  // measures none and asks for no frame for it (on main: 149 draws 33.3 ms apart, on the rig).
-  // With the open's scroll dropped, three light draws: the one after the stop, the one for the
-  // probe's timer the stopped draw had set, and the day pill's. The probe finishes after.
-  const o = await openLong(shortParas(4000));
-  o.v.scrollTo = null;
+}, 60000);
+
+// A stop after the probe's step left it one part to measure (probeLeft 1): a light draw measures
+// none, and on main it set the probe's 16 ms timer again each time (on the rig, main drew 149
+// times 33.3 ms apart through the window). With the open's scroll dropped, three light draws:
+// the one after the stop, the one for the probe's timer the stopped draw had set, and the day
+// pill's. The probe finishes in the first draw after the window.
+test("a stop after the probe's step, with one part left to measure, brings three light draws, not one a frame", async () => {
+  const { v, cx } = await openLong(shortParas(4000));
+  v.scrollTo = null;
   let asks = 0;
-  o.v.probeDue = function () { this.probeLeft = asks++ ? 0 : 1; return []; };
+  v.probeDue = function () { this.probeLeft = asks++ ? 0 : 1; return []; };
   const seen = [];
-  const r2 = costedFrames(o.v, o.cx, 3000, () => false, { stopAfter: 1, secs: 7, onFrame: () => seen.push([o.v.light, o.v.probeLeft]) });
+  const r = costedFrames(v, cx, 3000, () => false, { stopAfter: 1, secs: 7, onFrame: () => seen.push([v.light, v.probeLeft]) });
   const lit = seen.filter(([l]) => l);
-  costLog("a stop after the probe, the light draws", { ...r2, n: lit.length, seen: seen.slice(0, 8) });
+  costLog("a stop after the probe, the light draws", { ...r, n: lit.length, seen: seen.slice(0, 8) });
   expect([lit.length <= 3, lit.every(([, p]) => p === 1), seen.at(-1)[1]]).toEqual([true, true, 0]);
 }, 60000);
 
