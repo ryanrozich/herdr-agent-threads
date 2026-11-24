@@ -6676,28 +6676,29 @@ test("a reply longer than Herdr draws in one Markdown view opens whole: list ite
 const P121 = { line: 0.033, call: 0.004, char: 0.0001, rest: 8, stop: 50 };
 const shortParas = (n) => Array.from({ length: n }, (_, i) => `Paragraph ${i + 1}: the cart total rounds per line, see ACME-${i + 1}.`).join("\n\n");
 const mixedReply = (kb) => { const one = readFileSync(join(root, "test/fixtures/long-reply.md"), "utf8").trim(); const out = []; for (let i = 1; out.join("\n\n").length < kb * 1024; i++) out.push(one, `Copy ${i} is filed as ACME-${i}.`); return out.join("\n\n"); };
+// One reply, or several on the last turns, every one opened.
 async function openLong(text) {
-  const { v, cx } = await pane(fixture("--extra", "2"));
+  const texts = [].concat(text);
+  const { v, cx } = await pane(fixture("--extra", String(Math.max(2, texts.length))));
   v.debug = false;
   const { parseLinks, LINK_TEMPLATES } = await import("../mods/agent-threads/settings.js");
   const l = parseLinks([LINK_TEMPLATES.ticket.rule]);
   v.setLinks(l.rules, l.list, 1);
-  const turn = v.sessions.at(-1).turns.at(-1);
-  turn.after = [text];
-  turn.shapeKey = null;
+  const turns = v.sessions.at(-1).turns.slice(-texts.length);
+  turns.forEach((t, j) => { t.after = [texts[j]]; t.shapeKey = null; });
   v.rowsKey = null;
   settleRows(v, cx);
   dropTimers(v, cx);
-  const key = `${v.sessions.length - 1}:${turn.n}`;
-  v.toggle(key, cx);
-  return { v, cx, key };
+  const keys = turns.map((t) => `${v.sessions.length - 1}:${t.n}`);
+  for (const k of keys) v.toggle(k, cx);
+  return { v, cx, key: keys.at(-1), keys };
 }
 // The open card's parts, settled: each one linked as the rules link it alone, and sized at the
 // height worked out for its text, not the rough one from its length (a table has its own).
 async function cardDone(v, key) {
   const { linkify } = await import("../mods/agent-threads/ui.js");
   const want = new Map();
-  return () => {
+  return () => [].concat(key).every((key) => {
     const i0 = v.baseRows.findIndex((r) => r.key.startsWith(`md:${key}:`));
     if (i0 < 0 || !v.rowsKey || v.rowJob) return false;
     for (let i = i0; v.baseRows[i]?.kind === "md"; i++) {
@@ -6707,7 +6708,7 @@ async function cardDone(v, key) {
       if (r.md !== want.get(r.src).md || r.links !== want.get(r.src).links || (!r.table && (h == null || v.baseSizes[i] !== (r.gap ?? 6) + h))) return false;
     }
     return true;
-  };
+  });
 }
 function costedFrames(v, cx, n, done) {
   const P = P121;
@@ -6773,6 +6774,31 @@ test("an open reply of 18 or 58 parts has every part linked and at its worked-ou
     expect([again.stops, again.linked, again.settled > 0 && again.settled <= 12]).toEqual([0, parts, true]);
     expect(v.baseRows.find((x) => x.key.startsWith(`md:${key}:`)).md).toContain("tickets.example.com/1)");
   }
+}, 60000);
+
+test("eight open replies of 58 parts each, 464 parts in all, draw in time and link each part once", async () => {
+  const { v, cx, keys } = await openLong(Array.from({ length: 8 }, (_, j) => shortParas(4000).replaceAll("Paragraph", `Turn ${j}, paragraph`)));
+  const r = costedFrames(v, cx, 160, await cardDone(v, keys));
+  costLog("8 x 58 parts", r);
+  const parts = v.baseRows.filter((x) => x.kind === "md" && keys.some((k) => x.key.startsWith(`md:${k}:`))).length;
+  expect(parts).toBeGreaterThan(400);
+  expect([r.stops, r.linked]).toEqual([0, parts]);
+  expect(r.settled).toBeGreaterThan(0);
+  expect(r.settled).toBeLessThanOrEqual(100);
+  // Settled, a frame that builds the open turns again links nothing.
+  v.againOpen = true;
+  v.rowsKey = "again";
+  expect(costedFrames(v, cx, 2, () => true).linked).toBe(0);
+  // Kept: the open turns' parts of their replies as they are now. Closed turns go at the next
+  // build of an open one.
+  for (const k of keys.slice(1)) v.toggle(k, cx);
+  costedFrames(v, cx, 1, () => true);
+  v.againOpen = true;
+  v.rowsKey = "again";
+  costedFrames(v, cx, 1, () => true);
+  expect([...v.partLinked.turns.keys()]).toEqual([keys[0]]);
+  expect(v.partMemo(keys[0], v.replyText(v.findTurn(keys[0]))).size).toBe(parts / 8);
+  expect(v.partMemo(keys[0], "Rewritten.").size).toBe(0);
 }, 60000);
 
 test("an open mixed Markdown reply of 16 to 96 KB settles to the card one unbounded build makes: the same rows, text, links and heights", async () => {
