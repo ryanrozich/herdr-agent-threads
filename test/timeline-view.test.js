@@ -462,3 +462,92 @@ test("timeline view: at 2,000 turns the selected step's outline is around its tu
     expect(TL.timelineHit(L, heads, left + w / 2, "tools", Date.now(), 4).key).toBe(key);
   }
 });
+
+test("timeline view: a press above the half-height track gets the full bar there, and on the half track the half bar drawn over it", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "3", "--subagents"), "bottom", 1440);
+  shownFrame(b, cb);
+  const M = b.tlModel;
+  const listed = new Set(b.ledgerRows().map((r) => r.key));
+  // A half-height bar whose middle is over a full bar of its turn, in the Tools lane.
+  let pick = null;
+  for (const r of b.ledgerRows().filter((x) => x.kind === "tr")) {
+    const { box, lane } = barOf(b, r.key);
+    if (!box || box.track !== 1 || TL.TL_LANES[lane] !== "tools") continue;
+    const ti = M.L.index.get(b.turnOfRow(r.key));
+    const h = M.heads[ti];
+    const mid = (box.x0 + box.x1) / 2;
+    // The full bar a press there gets: failed over the rest, then the narrowest.
+    let full = null;
+    h.stepRows.forEach((s, si) => {
+      const o = TL.tlBar(M.L, M.heads, ti, si);
+      if (!o || o.track !== 0 || LEDGER_KINDS[s.lk]?.lane !== "tools" || o.x0 > mid || o.x1 < mid || !listed.has(s.key)) return;
+      const rank = LEDGER_KINDS[s.lk].ink === "failed" ? 2 : 0;
+      const w = o.x1 - o.x0;
+      if (!full || rank > full.rank || (rank === full.rank && w < full.w)) full = { key: s.key, rank, w };
+    });
+    // The half bar must be drawn over the full one: its rank above the full bar's.
+    const halfRank = 1 + (LEDGER_KINDS[r.lk]?.ink === "failed" ? 2 : 0);
+    if (full && full.rank < halfRank && listed.has(r.key)) { pick = { half: r.key, full: full.key, mid, lane }; break; }
+  }
+  expect(pick).not.toBe(null);
+  // 11 px down the lane: on the half track, where the half bar is drawn over the full one.
+  press(b, cb, pick.mid, pick.lane * 16 + 11);
+  expect(b.tsel).toBe(pick.half);
+  // 4 px down: above the half track, only the full bar is there.
+  press(b, cb, pick.mid, pick.lane * 16 + 4);
+  expect(b.tsel).toBe(pick.full);
+});
+
+test("timeline view: the lanes' layers are drawn in the order a press reads them: full bars, then half-height ones, failed ones over the rest", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "3", "--subagents"), "bottom", 1440);
+  const c = shownFrame(b, cb);
+  const rank = (track, ink) => Number(track) + (ink === "failed" ? 2 : 0);
+  const layers = ids(c).filter((id) => /^th-tl-(input|model|tools)-[a-z]+-[01]$/.test(id)).map((id) => { const [, , , ink, track] = id.split("-"); return rank(track, ink); });
+  expect(layers.length).toBeGreaterThan(3);
+  expect(layers).toContain(1);
+  expect(layers.some((r) => r >= 2)).toBe(true);
+  layers.slice(1).forEach((r, i) => expect(r).toBeGreaterThanOrEqual(layers[i]));
+  // The layout's own order is not that one, so it is the draw that orders them.
+  const own = [...b.tlModel.L.spans.keys()].map((k) => { const [, ink, track] = k.split("|"); return rank(track, ink); });
+  expect(own.some((r, i) => i > 0 && r < own[i - 1])).toBe(true);
+});
+
+test("timeline view: a press that reaches the lanes while the strip waits for the session does nothing, even through the element of the frame before", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "3"), "bottom", 1440);
+  const c0 = shownFrame(b, cb);
+  const down = handlerAfterId(c0, "th-tl-lanes", "on_mouse_down");
+  const step = b.ledgerRows().find((r) => r.kind === "tr" && r.lk === "tool" && r.start != null && r.dur > 0);
+  const { box, lane } = barOf(b, step.key);
+  // The rows built again a turn a slice, as on a session read again: the strip waits.
+  b.ledgerMemo = null;
+  b.ledgerJob = null;
+  b.turnLedger = new WeakMap();
+  b.buildMax = () => -1;
+  const c = frame(b, cb);
+  expect(ids(c)).toContain("th-tl-wait");
+  expect(ids(c)).not.toContain("th-tl-lanes");
+  b.tsel = null;
+  const x = (box.x0 + box.x1) / 2;
+  down({ local_position: { x, y: lane * 16 + 8 }, position: { x, y: lane * 16 + 8 } }, cb);
+  expect(b.tsel).toBe(null);
+  expect(b.tscrollTo ?? null).not.toBe(step.key);
+});
+
+test("timeline view: a press on a turn the filter leaves out entirely does nothing: its heading is not in the list either, so there is no row to select", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "3", "--subagents"), "bottom", 1440);
+  shownFrame(b, cb);
+  const all = b.ledgerRows();
+  // Failed only: the turns with no failed call leave the list, their headings too.
+  b.tfilter = { ...ALL_ROWS, failed: true };
+  frame(b, cb);
+  const listed = new Set(b.ledgerRows().map((r) => r.key));
+  const step = all.find((r) => r.kind === "tr" && r.lk === "tool" && r.start != null && r.dur > 0 && !listed.has(b.turnOfRow(r.key)));
+  expect(step).toBeDefined();
+  const { box, lane } = barOf(b, step.key);
+  const before = b.ledgerRows().find((r) => r.kind === "tr").key;
+  b.tsel = before;
+  b.tscrollTo = null;
+  press(b, cb, (box.x0 + box.x1) / 2, lane * 16 + 8);
+  expect(b.tsel).toBe(before);
+  expect(b.tscrollTo).toBe(null);
+});
