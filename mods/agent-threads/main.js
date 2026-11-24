@@ -10074,10 +10074,18 @@ export default class Threads extends View {
     if (memo.size > MD_MEMO) memo.delete(memo.keys().next().value);
     return parts;
   }
+  // An open reply's part, as mdParts gives it, kept with its row (on the turn's record) and not
+  // in mdMemo: a capped card's 58 parts, drawn, pushed 58 of the closed rows' texts out of it.
+  partViews(r) {
+    const m = (this.partView ??= new WeakMap());
+    let parts = m.get(r);
+    if (!parts) m.set(r, (parts = mdChunks(escapeDollars(r.md))));
+    return parts;
+  }
   // One TextView, or several stacked a paragraph apart when the Markdown is too long for one.
-  mdView(id, md, selectable) {
+  mdView(id, md, selectable, kept = null) {
     if (this.liteDraw) return div().w_full().text_color(theme().foreground).child(String(md ?? ""));
-    const parts = this.mdParts(md);
+    const parts = kept ?? this.mdParts(md);
     if (parts.length === 1) return TextView.markdown(id, parts[0]).selectable(selectable).w_full();
     return v_flex().w_full().gap(this.paraGap()).children(parts.map((p, i) => TextView.markdown(`${id}-${i}`, p).selectable(selectable).w_full()));
   }
@@ -11621,7 +11629,7 @@ export default class Threads extends View {
             .child(div().min_w(0).child("Herdr could not draw this part as Markdown, so it shows as plain text.")))
           .child(this.readBlock(div()).text_color(t.foreground).child(r.src ?? r.md));
         return this.readBlock(div().mt(r.gap ?? 6))
-          .child(this.tableBlock(this.mdView(tv(`th-md-${r.key}`), r.md, this.replySelectable()), this.tableExtra(r)));
+          .child(this.tableBlock(this.mdView(tv(`th-md-${r.key}`), r.md, this.replySelectable(), this.partViews(r)), this.tableExtra(r)));
       case "seltext": {
         const st = this.selEditor?.st;
         return v_flex().mt(6)
