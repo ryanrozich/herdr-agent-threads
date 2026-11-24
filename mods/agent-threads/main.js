@@ -5294,25 +5294,28 @@ export default class Threads extends View {
   stickCheck(rows, prevShown, start) {
     const same = rows === this.stickRows;
     const prevStart = this.stickStart;
-    this.stickRows = rows;
-    this.stickStart = start;
-    if (!rows.length) return;
+    // The frame's rows, start and wheel count are kept once the count is done (seen): a draw
+    // stopped before it leaves them as they were, so the next frame counts the scroll.
+    const seen = () => { this.stickRows = rows; this.stickStart = start; this.stickWheelN = this.wheelN ?? 0; };
+    if (!rows.length) { seen(); return; }
     const now = Date.now();
     const busy = Boolean(this.scrollTo) || now < (this.scrollBusyUntil ?? 0);
     const moved = same && prevStart != null && start !== prevStart;
-    // A scroll of theirs with no wheel since the last frame (the list's own bar) moved the list
-    // too, in every view, the outline and the Pinned view as well: the wheel counted its own
-    // (listWheel). The pane's own scrolls (a scroll asked for or settling, the way down to the
-    // end, a pin's landing) do not count.
     const wheeled = (this.wheelN ?? 0) !== (this.stickWheelN ?? 0);
-    this.stickWheelN = this.wheelN ?? 0;
     const pinning = this.toBottom || now < (this.pinningUntil ?? 0);
-    if (moved && !busy && !pinning && !wheeled) this.readerMoved();
-    if (this.view === "pinned" || this.outlined()) return;
+    const view = this.view === "pinned" || this.outlined();
+    // On the way down to the end or a pin's landing, the top row moving is the pane's own.
     if (pinning) {
-      if (this.bottomShown && !this.toBottom) this.pinningUntil = 0;
+      seen();
+      if (!view && this.bottomShown && !this.toBottom) this.pinningUntil = 0;
       return;
     }
+    // A scroll of theirs with no wheel since the last frame (the list's own bar) moved the list
+    // too, in every view, the outline and the Pinned view as well: the wheel counted its own
+    // (listWheel). A scroll asked for or settling (busy) is the pane's own, and does not count.
+    if (moved && !busy && !wheeled) this.readerMoved();
+    seen();
+    if (view) return;
     if (moved && !busy) this.scrolledBy(start < prevStart ? 1 : -1, now);
     const up = now - (this.upAt ?? 0) < 1000;
     const down = now - (this.downAt ?? 0) < 1000;
@@ -6488,7 +6491,8 @@ export default class Threads extends View {
   // Returns false when the action did nothing (so Escape can reach Herdr).
   action(name, cx) {
     this.stickStep = null; // a key decides, not a frame drawn before it
-    if (READER_ACTIONS.has(name) || /^(go|pick|search):/.test(name)) this.readerMoved();
+    // The trajectory action while the Trajectory shows leaves it, and leaveTraj counts that.
+    if ((READER_ACTIONS.has(name) && !(name === "trajectory" && this.traj)) || /^(go|pick|search):/.test(name)) this.readerMoved();
     if (this.textSel && !["copy", "quote", "keys"].includes(name)) this.textSel = null;
     const rows = this.rows();
     const keys = this.turnKeys(rows);
@@ -11776,7 +11780,10 @@ export default class Threads extends View {
     this.tscrolled = false;
     this.tscrollTo = this.tsel;
   }
+  // Every way back to the Chat counts here once (y, Esc, its Chat button, a command): the Chat
+  // scrolls to the Trajectory's turn.
   leaveTraj() {
+    this.readerMoved();
     this.traj = false;
     this.keysOpen = false;
     const k = this.turnOfRow(this.tsel);
@@ -12146,7 +12153,7 @@ export default class Threads extends View {
         .when(form === "line" && this.pw() >= HEAD_ICON_MIN, (el) => el.child(icon()).child(div().flex_1()))
         .when(form !== "line" || this.pw() < HEAD_ICON_MIN, (el) => el.justify_center())
         .child(this.iconButton(t, "th-settings", "sliders-horizontal", "Settings (,)", this.headerClick("settings"), this.settingsOpen))
-        .child(this.iconButton(t, "th-traj-chat", "messages", "Back to the Chat (y)", (_e, cx) => { this.readerMoved(); this.leaveTraj(); cx.notify(); }));
+        .child(this.iconButton(t, "th-traj-chat", "messages", "Back to the Chat (y)", (_e, cx) => { this.leaveTraj(); cx.notify(); }));
     }
     return h_flex().id("th-traj-heading").flex_none().h(LEDGER_HEAD).px(10).gap(8).items_center().border_b(1).border_color(t.border)
       .child(svg(ICON("list")).size(14).flex_none().text_color(t.muted))
@@ -12159,7 +12166,7 @@ export default class Threads extends View {
       .child(div().flex_1())
       .child(this.iconButton(t, "th-settings", "sliders-horizontal", "Settings (,)", this.headerClick("settings"), this.settingsOpen))
       .when(this.traj && !this.trajPane, (el) => el.child(this.labelButton(t, "th-traj-chat", "Chat", "Back to the Chat (y)",
-        (_e, cx) => { this.readerMoved(); this.leaveTraj(); cx.notify(); })));
+        (_e, cx) => { this.leaveTraj(); cx.notify(); })));
   }
 
   // The filter buttons: Input, Model and Tools each with their swatch, Failed with a red dot,
