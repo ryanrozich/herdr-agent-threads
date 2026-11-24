@@ -2174,3 +2174,146 @@ test("a press's open 300 ms on is dropped by a jump made in the wait: a rail cli
   expect(turns(sim.last())).toContain("0:25");
   H.listWindow = null;
 });
+
+// ---- the window's memos over a live session: what a change past the window's start reads ----
+
+// The session's rows read by RowWindow.outside and by the day pill (stickyDay), counted. The
+// base rows are given through one proxy per array, so every identity the pane keeps still
+// holds, and only reads made inside those two are counted.
+function memoReads(v) {
+  const n = { outside: 0, day: 0 };
+  let inside = null;
+  const proxies = new WeakMap();
+  const counted = (rows) => {
+    if (!rows || typeof rows !== "object") return rows;
+    if (!proxies.has(rows)) proxies.set(rows, new Proxy(rows, { get(t, k) { if (inside && typeof k === "string" && k >= "0" && k <= "9~") n[inside]++; return t[k]; } }));
+    return proxies.get(rows);
+  };
+  let raw = v.baseRows;
+  Object.defineProperty(v, "baseRows", { configurable: true, get: () => counted(raw), set: (x) => { raw = x; } });
+  const within = (name, fn) => (...args) => { const was = inside; inside = name; try { return fn(...args); } finally { inside = was; } };
+  v.win.outside = within("outside", v.win.outside.bind(v.win));
+  v.stickyDay = within("day", v.stickyDay.bind(v));
+  return n;
+}
+// A session of n short turns, the newest still running, on two days: the first 100 turns on
+// the first. The day bands come with the second day.
+async function runningSession(n, cap) {
+  const ev = [];
+  for (let i = 0; i < n; i++) {
+    const ts = new Date(Date.UTC(2026, 10, i < 100 ? 1 : 2, 9, 0, 0) + i * 1000).toISOString();
+    ev.push({ k: "p", o: "human", t: `Prompt ${i}: check order ${i}.`, ts }, { k: "t", t: `Reply ${i}: the order is fine.` });
+    if (i < n - 1) ev.push({ k: "d", ts });
+  }
+  const r = await scripted(ev);
+  r.v.debug = false;
+  r.v.win.cap = { ...r.v.win.cap, ...cap };
+  r.v.width = 560; r.v.rootH = 1100; r.v.listH = 1000;
+  return r;
+}
+// The pill a drawn frame shows with row `key` at the top of the list: the list's own drawing
+// names the top (topKey), and the next frame draws the pill for it.
+function drawnPill(v, cx, key) {
+  const i = v.rows().findIndex((r) => r.key === key);
+  expect(i).toBeGreaterThanOrEqual(0);
+  H.listWindow = () => ({ start: i, end: i + 6 });
+  try { draw(v, cx); draw(v, cx); } finally { H.listWindow = null; }
+  expect(v.topKey).toBe(key);
+  return v.stickyNow;
+}
+// The band the window's first turn is under, from the session's rows as they are now.
+function bandNow(v) {
+  const all = v.allRows();
+  const head = v.rows().find((r) => v.baseIndex.has(r.key) && TURN_ROW.has(r.kind));
+  return { head, band: all.slice(0, all.indexOf(head)).findLast((r) => r.kind === "day") ?? null };
+}
+
+test("a live event in a long session, following: the counts outside the window and the window's day are kept, and no row outside the window is read", async () => {
+  const { v, cx, s } = await runningSession(1500, { slide: 600, block: 50, stop: 660 });
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  v.jumpLatest(true);
+  frames(v, cx);
+  expect(v.win.at.a).toBeGreaterThan(900);
+  const n = memoReads(v);
+  const { head, band } = bandNow(v);
+  expect(band?.kind).toBe("day");
+  expect(drawnPill(v, cx, head.key)).toBe(band);
+  expectOutsideRight(v);
+  const per = [];
+  for (let e = 0; e < 4; e++) {
+    const rows = v.allRows();
+    n.outside = 0;
+    n.day = 0;
+    apply(s, { k: "t", t: `More ${e}: the order is still fine.` });
+    frames(v, cx);
+    // Each event built the newest rows again in a new array, the rows before them kept.
+    expect(v.allRows()).not.toBe(rows);
+    const now = bandNow(v);
+    expect(drawnPill(v, cx, now.head.key)).toBe(now.band);
+    per.push({ outside: n.outside, day: n.day });
+    expectOutsideRight(v);
+  }
+  expect(per).toEqual(Array.from({ length: 4 }, () => ({ outside: 0, day: 0 })));
+});
+
+test("a new turn and live events while the reader sits in an older window: no row after the window is read, and Show later's count follows", async () => {
+  const { v, cx, s } = await capSession(150, SMALL);
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  v.jumpLatest(true);
+  frames(v, cx);
+  v.action("first", cx);
+  frames(v, cx);
+  const n = memoReads(v);
+  const was = expectOutsideRight(v);
+  expect(was.later).toBeGreaterThan(80);
+  const ts = new Date(Date.UTC(2026, 10, 1, 9, 0, 0) + 150 * 1000).toISOString();
+  const reads = [];
+  // A new turn, still running, then three live events on it.
+  for (const e of [{ k: "p", o: "human", t: "Prompt 150: check order 150.", ts }, { k: "t", t: "Reply 150: looking." }, { k: "t", t: "Reply 150: still looking." }, { k: "t", t: "Reply 150: the order is fine." }]) {
+    n.outside = 0;
+    apply(s, e);
+    frames(v, cx);
+    reads.push(n.outside);
+    expect(v.win.at.a).toBe(0);
+  }
+  expect(expectOutsideRight(v)).toEqual({ earlier: 0, later: was.later + 1 });
+  expect(reads).toEqual([0, 0, 0, 0]);
+});
+
+test("a card opened and closed above the window, and one inside it, keep the counts and the window's day right, each read only the card's rows", async () => {
+  // Three days of 50 turns each, the window starting partway through the second.
+  const { v, cx } = await capSession(150, SMALL, -1, 25, (i) => Math.floor(i / 50));
+  v.jumpLatest(true);
+  frames(v, cx);
+  for (let k = 0; k < 14 && bandNow(v).band && v.rows().some((r) => r.kind === "day" && v.rows().indexOf(r) < v.rows().indexOf(bandNow(v).head)); k++) { v.showMore(false); frames(v, cx); }
+  const first = bandNow(v);
+  expect(v.rows().includes(first.band)).toBe(false);
+  expect(first.band.key).not.toBe(v.allRows().find((r) => r.kind === "day").key);
+  expect(drawnPill(v, cx, first.head.key)).toBe(first.band);
+  const was = expectOutsideRight(v);
+  const n = memoReads(v);
+  const step = (fn) => {
+    n.outside = 0;
+    n.day = 0;
+    const at = v.win.at.a;
+    fn();
+    frames(v, cx);
+    const now = bandNow(v);
+    expect(drawnPill(v, cx, now.head.key)).toBe(now.band);
+    expect(now.band.key).toBe(first.band.key);
+    expect(expectOutsideRight(v)).toEqual(was);
+    return { moved: v.win.at.a - at, outside: n.outside, day: n.day };
+  };
+  // Above the window, on the first day: every row of the window, and its day band, moves on.
+  const above = step(() => v.open.add("0:5"));
+  expect(above.moved).toBeGreaterThan(0);
+  const back = step(() => v.open.delete("0:5"));
+  expect(back.moved).toBe(-above.moved);
+  // Inside the window: the rows after the card move on, the window's start does not.
+  const inside = step(() => v.open.add(v.turnKeys(v.rows())[3]));
+  expect(inside.moved).toBe(0);
+  for (const x of [above, back, inside]) {
+    expect(x.outside).toBe(0);
+    expect(x.day).toBe(0);
+  }
+});
