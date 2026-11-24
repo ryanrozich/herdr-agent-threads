@@ -2837,6 +2837,9 @@ export default class Threads extends View {
   buildStep(status, key, rest, other = null) {
     let job = this.rowJob;
     if (job && job.key !== key) job = job.rest === rest && this.jobGoesOn(job) ? job : null;
+    // A splice of an open turn's rows that Herdr stopped halfway (spliceRows) left the rows and
+    // their index apart: a splice from there found the turn in no row, and the card never drew.
+    if (this.splicing) { this.splicing = false; this.rowsKey = null; }
     if (!job && other != null && this.spliceRows(status, key, rest, other)) return;
     if (job) {
       job.key = key;
@@ -3240,6 +3243,9 @@ export default class Threads extends View {
     }
     runs.sort((x, y) => y.a - x.a);
     this.shapeStart();
+    // From here to its end the rows, their sizes and their index change together: a draw Herdr
+    // stops in between leaves them apart, and the next build is of every row (buildStep).
+    this.splicing = true;
     const stale = new Set(this.staleRows ?? []);
     let marks = b.marks;
     for (const { k, a, z, r } of runs) {
@@ -3279,6 +3285,7 @@ export default class Threads extends View {
     this.buildStale = this.staleRows;
     this.rowBuild = { ...b, rest, marks, sets: now.map((x) => new Set(x)), callVer: this.callVer ?? 0 };
     this.rowsKey = key;
+    this.splicing = false;
     this.fitKey = null;
     this.probeList();
     if (this.reselect || this.selHidden()) this.reselectVisible();
