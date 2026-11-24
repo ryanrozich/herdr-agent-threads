@@ -10,7 +10,7 @@
 // random orders of made-up bars, checked against their union after every add.
 import { test, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newSession, apply, parseChunk, nextChunk } from "../mods/agent-threads/core/turns.js";
@@ -44,7 +44,11 @@ const seen = [];
 function fixtures(make) {
   const dir = mkdtempSync(join(tmpdir(), "threads-tlorder-"));
   seen.push(dir);
-  return make(dir);
+  try {
+    return make(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 const { short, many } = fixtures((dir) => ({
   short: session(dir, "order", "--only", "0", "--order"),
