@@ -1007,6 +1007,38 @@ test("Latest or a jump key pressed after an open card asks for its scrolls goes 
   expect(seen).toEqual([[null, true, ["top part", "top head"]], ["latest", true, ["bottom"]], ["prev", true, []]]);
 }, 60000);
 
+// The same for the other moves a person makes: a wheel, and a jump to another turn (a rail
+// tick, a pin, the outline, a search step, which all go by scrollTo). The card's two scrolls
+// are not made after them; the jump's own are.
+test("a wheel or a jump to another turn made after an open card asks for its scrolls: the card's scrolls are not made after it", async () => {
+  const seen = [];
+  for (const move of ["wheel", "jump"]) {
+    const { v, cx, key, keys } = await openLong([shortParas(300), "Short reply."], true);
+    const card = keys[0];
+    costedFrames(v, cx, 40, () => true);
+    dropTimers(v, cx);
+    const asks = [];
+    const ask = v.askScroll;
+    v.askScroll = function (i, how) { asks.push(this.rowsMemo?.[i]?.key ?? "?"); return ask.call(this, i, how); };
+    v.toggle(card, cx);
+    const waits = () => cx.timers.some((x) => x.ms === 48);
+    for (let k = 0; k < 50 && !waits(); k++) { draw(v, cx); if (!waits()) cx.flush(0); }
+    const asked = waits() && asks.length === 0;
+    if (move === "wheel") v.listWheel({ delta: { y: -120 } });
+    else v.scrollTo = { key, how: "head", flash: true };
+    draw(v, cx);
+    cx.flush(16);
+    draw(v, cx);
+    draw(v, cx);
+    cx.flush(48);
+    draw(v, cx);
+    draw(v, cx);
+    const ofCard = asks.filter((k) => k === card || k.startsWith(`md:${card}:`) || k.startsWith(`mr:${card}:`)).length;
+    seen.push([move, asked, ofCard, move === "jump" ? asks.includes(key) : true]);
+  }
+  expect(seen).toEqual([["wheel", true, 0, true], ["jump", true, 0, true]]);
+}, 60000);
+
 test("a stop after the probe's step, with one part left to measure, brings three light draws, not one a frame", async () => {
   const { v, cx } = await openLong(shortParas(4000));
   v.scrollTo = null;
