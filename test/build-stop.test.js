@@ -130,8 +130,20 @@ test("a full build Herdr stops after its rows are in and before its record is ma
   dropTimers(v, cx);
   let armed = true;
   let keyAfter;
+  // Where the stop fell: the new rows, sizes and index in, and the old record still standing.
+  let fell = null;
+  const record = v.rowBuild;
   const probeList = v.probeList;
-  v.probeList = function (...a) { if (armed && this.rowJob == null) { armed = false; keyAfter = this.rowsKey; throw STOP; } return probeList.apply(this, a); };
+  v.probeList = function (...a) {
+    if (armed && this.rowJob == null) {
+      armed = false;
+      keyAfter = this.rowsKey;
+      const R = this.baseRows;
+      fell = [R.some((x) => x.key.startsWith(`md:${key}:`)), this.baseSizes.length === R.length, this.baseIndex.size === R.length && R.every((x, i) => this.baseIndex.get(x.key) === i), this.rowBuild === record];
+      throw STOP;
+    }
+    return probeList.apply(this, a);
+  };
   // The open is built by a full build, not a splice.
   v.spliceRows = () => false;
   v.toggle(key, cx);
@@ -147,7 +159,7 @@ test("a full build Herdr stops after its rows are in and before its record is ma
   const agree = v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i);
   v.rowsKey = null;
   settleRows(v, cx);
-  expect([armed, run.stops, keyAfter ?? null, full > 0, agree, got === v.baseRows.map((x) => x.key).join("\n")]).toEqual([false, 1, null, true, true, true]);
+  expect([armed, run.stops, keyAfter ?? null, fell, full > 0, agree, got === v.baseRows.map((x) => x.key).join("\n")]).toEqual([false, 1, null, [true, true, true, true], true, true, true]);
 }, 60000);
 
 // With the index entry made first, Herdr's stop can fall after it and before the row's size:
