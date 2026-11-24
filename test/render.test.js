@@ -19754,7 +19754,7 @@ test("the opening: while the session is read there are no rows and no scrolling,
   expect(v.isLive(s, 0, 0)).toBe(false);
 });
 
-test("the opening: the list shows at its end, still, with every row shaped (no empty bubbles), and the end held while parts above are measured", async () => {
+test("the opening: the list shows at its end, still, with every row near it shaped (no empty bubbles), and the end held while parts above are measured", async () => {
   H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
   try {
     const { v, cx, go } = await openingPane(busy());
@@ -19788,9 +19788,10 @@ test("the opening: the list shows at its end, still, with every row shaped (no e
     expect(v.headerText()).not.toBe("Reading…");
     // Every frame before was the list hidden under the loading state.
     for (const f of frames.slice(0, -1)) expect(drawnText(f)).toContain("Reading this session");
-    // Shown: built, shaped, at the end, with no blank shape anywhere in the list.
+    // Shown: built, at the end, with no blank shape near it (nearSpan).
     expect(v.rowJob).toBeNull();
-    expect(v.rowsMemo.some((r) => r.shape?.blank)).toBe(false);
+    const [a, b, off] = v.nearSpan();
+    expect(v.rowsMemo.slice(a + off, b + off).some((r) => r.shape?.blank)).toBe(false);
     expect(v.bottomShown).toBe(true);
     expect(v.partsWaiting(v.rowsMemo, ...v.viewRange)).toBe(false);
     // Each condition alone holds it back: a part in view unmeasured, the end off screen, or a
@@ -19808,18 +19809,28 @@ test("the opening: the list shows at its end, still, with every row shaped (no e
     v.lastRange = `${String(lr).split("/")[0]}/${rows.length - 1}`;
     expect(v.openReady(rows)).toBe(false);
     v.lastRange = lr;
-    // A rows build still going, a row left with an old shape, a row left to reshape.
+    // A rows build still going, or near the end a row left with an old shape (stale) or a
+    // blank one. Further up, neither holds it back: those rows are shaped after it shows.
     const job = v.rowJob;
     v.rowJob = { made: "up" };
     expect(v.openReady(rows)).toBe(false);
     v.rowJob = job;
+    expect(a).toBeGreaterThan(0);
     const stale = v.staleRows;
-    v.staleRows = [rows.length - 1];
-    expect(v.openReady(rows)).toBe(false);
+    for (const [i, held] of [[b - 1, true], [a, true], [a - 1, false], [0, false]]) {
+      v.staleRows = [i];
+      expect([i, v.openReady(rows)]).toEqual([i, !held]);
+      const r = v.baseRows[i];
+      const sh = r.shape;
+      v.staleRows = stale;
+      r.shape = { ...sh, blank: true };
+      expect([i, v.openReady(rows)]).toEqual([i, !held]);
+      r.shape = sh;
+    }
     v.staleRows = stale;
     const left = v.shapeLeft;
     v.shapeLeft = 1;
-    expect(v.openReady(rows)).toBe(false);
+    expect(v.openReady(rows)).toBe(true);
     v.shapeLeft = left;
     expect(v.openReady(rows)).toBe(true);
     // Parts above the end are still to measure: each frame asks for the end in that frame.
@@ -19951,6 +19962,171 @@ test("the opening: with nothing left to measure, the frame that shows the list a
   expect(asked.at(-1)[0]).toBe(false);
   expect(v.openHold).toBe(false);
 });
+
+// A long plain chat: n turns of a typed prompt and a Markdown reply, nothing else. Made-up words.
+const plainFiles = {};
+function plainChat(n) {
+  if (plainFiles[n]) return plainFiles[n];
+  const at = (k) => new Date(Date.UTC(2026, 9, 1, 8, 0, 0) + k * 60000).toISOString();
+  const say = (k, len) => Array.from({ length: len }, (_, j) => ["kazo", "the cart", "**total**", "zerb", "`sum()`", "agrees", "with", "quil"][(k + j) % 8]).join(" ");
+  const lines = [];
+  for (let k = 0; k < n; k++) {
+    lines.push({ type: "user", uuid: `u${k}`, timestamp: at(2 * k), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: `Turn ${k + 1}: ${say(k, 8 + (k % 20))}` } });
+    lines.push({ type: "assistant", uuid: `a${k}`, timestamp: at(2 * k + 1), sessionId: "s", message: { id: `m${k}`, role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: `${say(k, 30)}\n\n- ${say(k + 1, 8)}\n- ${say(k + 2, 8)}\n\n${say(k + 3, 30)}` }], usage: { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 900, cache_creation_input_tokens: 30 } } });
+    lines.push({ type: "system", subtype: "turn_duration", durationMs: 4000, uuid: `d${k}`, timestamp: at(2 * k + 1), sessionId: "s" });
+  }
+  const file = join(mkdtempSync(join(tmpdir(), "threads-plain-")), "p.jsonl");
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  plainFiles[n] = file;
+  return file;
+}
+// A plain chat of n turns read whole, under the loading state, its rows not built yet. Each
+// reshape costs 1 ms more on the shaping clock and a draw has 12 ms for it (shapeBudget), so
+// a draw reshapes 12 rows on any machine, as a slow one would: most rows are left to drain.
+// Debug is off (measure() would rebuild the rows in every draw).
+async function plainOpening(n) {
+  const { v, cx, go } = await openingPane(plainChat(n));
+  v.debug = false;
+  v.opening.at -= 1000;
+  v.shapeBudget = 12;
+  const reshape = v.reshape;
+  v.reshape = function (...a) { this.shapeSpent = (this.shapeSpent ?? 0) + 1; return reshape.apply(this, a); };
+  go(() => false);
+  await settle(v);
+  let bottoms = 0;
+  v.scroll = { scroll_to_bottom() { bottoms++; }, scroll_to_item() {} };
+  // One frame as Herdr draws it (timers due, then a draw), with the rows left before and after.
+  const step = () => {
+    cx.flush(16);
+    const before = v.staleRows?.length ?? 0;
+    const b0 = bottoms;
+    const shown = !v.openActive();
+    const f = frame(v, cx);
+    return { before, after: v.staleRows?.length ?? 0, end: bottoms > b0, shown, f };
+  };
+  return { v, cx, step };
+}
+// The rows the opening waits for, worked out here: the rows drawn last and 40 (SHAPE_NEAR) each
+// side, as indexes of the built rows (the list puts a spacer or a gap first), then in the list.
+function nearRows(v) {
+  if (!v.viewRange || !v.baseRows?.length) return null;
+  const off = ["spacer", "gap"].includes(v.rowsMemo?.[0]?.kind) ? 1 : 0;
+  return [Math.max(0, v.viewRange[0] - off - 40), Math.min(v.baseRows.length, v.viewRange[1] - off + 40), off];
+}
+// Those rows settled: every row built, none of them stale or blank, none with a part to measure.
+function spanSettled(v) {
+  const span = nearRows(v);
+  if (v.rowJob || !span) return false;
+  const [a, b, off] = span;
+  if ((v.staleRows ?? []).some((i) => i >= a && i < b)) return false;
+  for (let i = a; i < b; i++) if (v.baseRows[i].shape?.blank) return false;
+  return !v.partsWaiting(v.rowsMemo, a + off, b + off);
+}
+
+test("the opening: a long plain chat shows within a few frames of its read, once the rows near the end are shaped and measured", async () => {
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    const { v, step } = await plainOpening(2400);
+    const frames = [];
+    while (v.openActive() && frames.length < 400) frames.push(step());
+    expect(v.openActive()).toBe(false);
+    // Shown in a few frames, while most rows still wait for their shape: before, the list was
+    // held until every row was shaped, at 12 a frame.
+    expect(frames.length).toBeLessThanOrEqual(30);
+    expect(v.staleRows.length).toBeGreaterThan(400);
+    // What it shows is settled: built, the rows drawn and SHAPE_NEAR either side shaped and
+    // measured, at the end.
+    expect(spanSettled(v)).toBe(true);
+    expect(v.nearSpan()).toEqual(nearRows(v));
+    const [a, b, off] = nearRows(v);
+    expect(b).toBe(v.baseRows.length);
+    expect(a).toBe(v.viewRange[0] - off - 40);
+    expect(v.bottomShown).toBe(true);
+    for (const r of v.rowsMemo.slice(v.viewRange[0], v.viewRange[1])) expect(r.shape?.blank).toBeFalsy();
+    // Every frame before was the list hidden under the loading state.
+    for (const x of frames.slice(0, -1)) expect(drawnText(x.f)).toContain("Reading this session");
+  } finally { H.listWindow = null; }
+}, 30000);
+
+test("the opening: once the list shows, the rows left drain behind it, the end held in every frame, until every row is shaped", async () => {
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    const { v, step } = await plainOpening(2400);
+    for (let k = 0; v.openActive() && k < 400; k++) step();
+    expect(v.openActive()).toBe(false);
+    const left = v.staleRows.length;
+    expect(left).toBeGreaterThan(400);
+    const behind = [];
+    while ((v.staleRows.length || v.shapeLeft > 0) && behind.length < 400) behind.push(step());
+    // Drained in about left / 12 frames, each drawing the list (no loading state), at its end.
+    expect(v.staleRows).toEqual([]);
+    expect(behind.length).toBeLessThanOrEqual(Math.ceil(left / 10) + 5);
+    for (const x of behind) {
+      expect(drawnText(x.f)).not.toContain("Reading this session");
+      expect(x.end).toBe(true);
+    }
+    expect(v.bottomShown).toBe(true);
+    expect(v.rowsMemo.some((r) => r.shape?.blank)).toBe(false);
+    expect(v.openActive()).toBe(false);
+    expect(v.headerText()).not.toBe("Reading…");
+  } finally { H.listWindow = null; }
+}, 30000);
+
+test("the drain uses its shaping time: a pass reshapes rows until the draw's budget is spent, in every frame", async () => {
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    const { v, step } = await plainOpening(2400);
+    const frames = [];
+    while ((v.openActive() || v.staleRows?.length) && frames.length < 400) frames.push(step());
+    expect(v.staleRows).toEqual([]);
+    // Every frame that started with rows to spare reshaped 12 (1 ms each, 12 ms a draw): none
+    // stopped early, none was left without a pass.
+    // (The first frame after the read has none: its pass is asked for by that frame.)
+    const full = frames.slice(1).filter((x) => x.before >= 24 && x.after <= x.before);
+    expect(full.length).toBeGreaterThan(80);
+    for (const x of full) expect(x.before - x.after).toBeGreaterThanOrEqual(11);
+    // One pass on its own: it stops once the budget is spent, with the rest left as they were.
+    v.width -= 40;
+    for (let k = 0; k < 20 && v.rowJob; k++) step();
+    v.rowsKey = null;
+    v.rows();
+    while (v.rowJob) { v.renders++; v.rows(); }
+    const was = v.staleRows.length;
+    expect(was).toBeGreaterThan(100);
+    v.shapeSpent = 0;
+    v.reshapeStale(v.status());
+    expect(was - v.staleRows.length).toBeGreaterThanOrEqual(11);
+    expect(was - v.staleRows.length).toBeLessThanOrEqual(13);
+    expect(v.shapeSpent).toBeGreaterThan(12);
+  } finally { H.listWindow = null; }
+}, 30000);
+
+test("the opening: a stopped draw once the rows near the end are settled does not hold the list for the 5 s of plain draws after it", async () => {
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    const { v, cx, step } = await plainOpening(2400);
+    // Herdr stops the first draw that finds the rows near the end settled, before it shows them.
+    const ready = v.openReady;
+    let stopped = false;
+    v.openReady = function (rows) {
+      if (!stopped && spanSettled(this)) { stopped = true; throw new Error("stopped"); }
+      return ready.call(this, rows);
+    };
+    for (let k = 0; !stopped && k < 400; k++) {
+      try { step(); } catch (e) { if (e.message !== "stopped") throw e; v.renderOpen = true; cx.timers = []; v.shapeNext = false; v.buildNext = false; v.probeNext = false; if (v.opening) v.opening.next = false; }
+    }
+    expect(stopped).toBe(true);
+    expect(v.openActive()).toBe(true);
+    expect(v.staleRows.length).toBeGreaterThan(400);
+    // The next draws are plain for CUT_MS, reshaping nothing; the list shows in the first.
+    const after = [];
+    while (v.openActive() && after.length < 60) after.push(step());
+    expect(v.cutUntil).toBeGreaterThan(performance.now());
+    expect(v.openActive()).toBe(false);
+    expect(after.length).toBe(1);
+    expect(after[0].before - after[0].after).toBe(0);
+  } finally { H.listWindow = null; }
+}, 30000);
 
 // The opening ends with any state other than its own once the session is read, failed or gone:
 // the status row is the session's again, the agent's state shows, and the list's keys act.

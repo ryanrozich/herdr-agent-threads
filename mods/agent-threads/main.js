@@ -151,6 +151,10 @@ const SHAPE_MS = 12;
 // Rows reshaped first, from the one at the top of the pane down, so what is on screen
 // changes in the first frame.
 const SHAPE_FIRST = 40;
+// The rows near the view: the rows drawn last and this many rows above and below them
+// (nearSpan). The opening shows the list once they are shaped and measured (openReady); the
+// rows further up are shaped after it shows.
+const SHAPE_NEAR = 40;
 // The hidden probe (probe) draws at most this many parts in one frame, nearest the top of
 // the pane first. Opening the work of a turn with hundreds of steps put every interim text
 // in one draw, and it ran past Herdr's time ("This view could not be re-rendered",
@@ -9332,15 +9336,36 @@ export default class Threads extends View {
       .child(body.opacity(0))
       .child(v_flex().absolute().top(0).left(0).right(0).bottom(0).bg(t.background).when(!quiet, (el) => el.child(this.openView(t, s))));
   }
-  // Ready to show: every row built and shaped, and the list last drawn with them at its end
-  // with every part in view measured (or tried three times, as the probe gives up). A short
-  // session waits for the same, under the background alone (the rig showed its first rows
-  // move twice in 25 ms when they were shown as soon as they were built).
+  // Ready to show: every row built, the list last drawn with them at its end, and the rows near
+  // it (nearSpan) shaped, none left stale or blank, with every part measured (or tried three
+  // times, as the probe gives up). The rows further up are reshaped after the list shows, with
+  // the end held while they are (render): a long plain chat left 5,400 rows to reshape after
+  // its read, and the list waited 42 to 106 s for them on the rig. A short session waits for
+  // the same, under the background alone (the rig showed its first rows move twice in 25 ms
+  // when they were shown as soon as they were built).
   openReady(rows) {
-    if (this.rowJob || this.staleRows?.length || this.shapeLeft > 0 || !rows.length) return false;
+    if (this.rowJob || !rows.length) return false;
     const n = Number(String(this.lastRange ?? "").split("/")[1]);
     if (n !== rows.length || !this.bottomShown || !this.viewRange) return false;
-    return !this.partsWaiting(rows, this.viewRange[0], this.viewRange[1]);
+    const span = this.nearSpan();
+    if (!span) return false;
+    const [a, b, off] = span;
+    if (this.staleRows?.some((i) => i >= a && i < b)) return false;
+    // A blank shape is a row never shaped. (A shape kept as numbers only is shaped: its row
+    // is made whole when drawn.)
+    for (let i = a; i < b; i++) if (this.baseRows[i].shape?.blank) return false;
+    return !this.partsWaiting(rows, a + off, b + off);
+  }
+  // The rows near the view, [from, to) in baseRows: the rows drawn last and SHAPE_NEAR either
+  // side, with off, what the list puts before baseRows' first row (a spacer or a gap), so
+  // [from + off, to + off) in rowsMemo. Null before the list is drawn.
+  nearSpan() {
+    const rows = this.baseRows ?? [];
+    const vr = this.viewRange;
+    if (!vr || !rows.length) return null;
+    const memo = this.rowsMemo ?? [];
+    const off = memo[0]?.kind === "spacer" || memo[0]?.kind === "gap" ? 1 : 0;
+    return [Math.max(0, vr[0] - off - SHAPE_NEAR), Math.min(rows.length, vr[1] - off + SHAPE_NEAR), off];
   }
   // Whether a part in rows a..b is still to be measured, by the probe's own test (probeDue).
   partsWaiting(rows, a, b) {
