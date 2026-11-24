@@ -68,7 +68,7 @@ import {
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
-  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, updatesText, stats, segments, threadMatches, remarkSenders, ruleSender, typedTurn, RULE_TEXT,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, readCap, replaced, reply, updatesText, stats, segments, threadMatches, remarkSenders, ruleSender, typedTurn, RULE_TEXT,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount, turnSums, sumsStats,
   noteSkip, skipNote,
 } from "./core/turns.js";
@@ -133,7 +133,13 @@ function mark(key, size) {
 const IMG_DIR = `data/${MOD}/images`;
 // Bytes per extractor call. A 6.7 MB busy transcript reads in 4 calls, so the header's
 // percentage moves, and each call's parse and apply run in slices (read()).
+// A read's first extractor call takes CHUNK, so the first figures (and the opening's newest
+// prompt) come at once; each later call of that read takes twice the last, up to READ_CHUNK
+// (2, 4, 8, 16 MiB), so a short session's bar still steps. A call starts about a dozen
+// processes whatever its size, two thirds of a 2 MiB call's time, so fewer, larger calls read
+// a long transcript several times as fast. A read of new bytes starts at CHUNK again.
 const CHUNK = 2 * 1024 * 1024;
+const READ_CHUNK = 16 * 1024 * 1024;
 const SLICE_MS = 8; // synchronous work before read() yields to the app
 // The opening (openGate): a pane whose list is ready within OPEN_QUIET_MS of its first draw
 // goes straight to it, and paints nothing before; a longer one shows the loading state
@@ -151,6 +157,8 @@ const SHAPE_MS = 12;
 // Rows reshaped first, from the one at the top of the pane down, so what is on screen
 // changes in the first frame.
 const SHAPE_FIRST = 40;
+// Turns at least this long (prompt and reply, in characters) teach the shaping rate (shapeLearn).
+const SHAPE_LEARN = 4000;
 // The hidden probe (probe) draws at most this many parts in one frame, nearest the top of
 // the pane first. Opening the work of a turn with hundreds of steps put every interim text
 // in one draw, and it ran past Herdr's time ("This view could not be re-rendered",
@@ -2467,6 +2475,7 @@ export default class Threads extends View {
         do {
           this.readAgain = false;
           let chunk = CHUNK;
+          let cap = READ_CHUNK;
           let retried = false;
           const count = s.turns.length;
           const wasLoaded = s.loaded;
@@ -2498,6 +2507,7 @@ export default class Threads extends View {
               // replaced: read it again from the top.
               this.restart(s);
               chunk = CHUNK;
+              cap = READ_CHUNK;
               continue;
             }
             if (c.head && !s.head) s.head = c.head;
@@ -2519,7 +2529,8 @@ export default class Threads extends View {
             if (c.events.length) grew = true;
             s.offset += c.used;
             s.partial = false;
-            chunk = nextChunk(s, c.used, chunk, CHUNK);
+            if (s.offset < s.size) cap = readCap(cap, c.cut, chunk, CHUNK);
+            chunk = nextChunk(s, c.used, chunk, Math.min(cap, chunk * 2));
             if (!s.loaded) cx.notify();
             // Once a session (peek holds the session peeked): another one on the list is
             // statted and peeked again.
@@ -2991,7 +3002,10 @@ export default class Threads extends View {
       const r = this.baseRows[i];
       if (r?.kind !== "turn" || !r.turn) continue;
       const sh = this.shape(r.turn);
-      if (this.shapeStale) { left.push(i); continue; }
+      // Left for its expected cost (shapeCost) or out of time: the rest wait too, unlooked at.
+      // Going on past a turn left for its cost, with the time not yet spent, called shape() for
+      // every row still to reshape in that one draw: 5,500 of them, 40 to 50 ms, on the rig.
+      if (this.shapeStale) { this.shapeLeft += order.length - k - 1; for (; k < order.length; k++) left.push(order[k]); break; }
       if (sh === r.shape) continue;
       if (Boolean(sh.thumbs) !== Boolean(r.shape?.thumbs)) return false;
       const nr = { ...r, shape: sh };
@@ -4734,16 +4748,31 @@ export default class Threads extends View {
     const fast = { key, look, p: turn.prompt.length, t: text.length, live, tools: turn.tools, int: Boolean(turn.interrupted), by: turn.answeredBy, inn: turn.answeredIn, img: turn.images?.length ?? 0, ag: Boolean(turn.agent), sv: this.sendersVer };
     if (turn.shapeKey === key) { turn.shapeFast = fast; this.keepShape(turn); return turn.shapeMemo; }
     // Out of time for this draw: the shape it had (a row never shaped yet, as when agent
-    // messages are turned on, a blank one-line row), and the next frame reshapes it.
-    if ((this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return turn.shapeMemo ?? this.blankShape(); }
+    // messages are turned on, a blank one-line row), and the next frame reshapes it. A turn
+    // whose shaping would take the draw past its time (shapeCost) waits too, unless it is the
+    // draw's first: one turn with a pasted 200 KB prompt took 20 to 40 ms on the rig, and on
+    // top of the draw's 12 ms it ran past Herdr's time.
+    const spent = this.shapeSpent ?? 0;
+    const cost = this.shapeCost(turn, text);
+    if (spent > this.shapeMax() || (spent > 0 && spent + cost > this.shapeMax())) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return turn.shapeMemo ?? this.blankShape(); }
     const t0 = now();
     const sh = this.reshape(turn, live, q, P, why, text);
+    this.shapeLearn(turn, text, now() - t0);
     turn.shapeKey = key;
     turn.shapeMemo = sh;
     turn.shapeFast = fast;
     this.keepShape(turn);
     this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
     return sh;
+  }
+  // What shaping a turn is expected to cost, in ms: its length at the rate learned from long
+  // turns shaped before (shapeLearn); 0 until one has been.
+  shapeCost(turn, text) { return (turn.prompt.length + text.length) * (this.shapeRate ?? 0); }
+  // The rate from each long turn shaped: it rises at once and falls back by a tenth a turn,
+  // so one slow turn is not forgotten by the next fast one.
+  shapeLearn(turn, text, ms) {
+    const n = turn.prompt.length + text.length;
+    if (n >= SHAPE_LEARN) this.shapeRate = Math.max(ms / n, (this.shapeRate ?? 0) * 0.9);
   }
   // A turn's shape kept under its look, for the last WIDTHS_KEPT looks it was shaped at, the
   // last used last: a drag back to a width seen before reshapes nothing. A turn that changed

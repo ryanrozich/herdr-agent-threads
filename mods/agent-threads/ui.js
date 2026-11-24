@@ -2820,7 +2820,9 @@ export const keepingWeight = (p1, p2, n0) => weightFor(weightLine(p1, p2), n0);
 // (src/window.rs; move_divider, if Herdr PR 1365 is in it) changes only the two panes beside
 // the divider and leaves every other weight in the row as it was: 1365 sets each other
 // visible weight pane's weight to its width in px, which puts a stored k out by hundreds.
-export const WEIGHT_HERDR = ["0.1.16", "0.1.17"];
+// 0.1.18 (tag v0.1.18) has drag_to, layout.resize, the splits and the close's weight move
+// as 0.1.17 has them, and no move_divider: 1365 is not in it.
+export const WEIGHT_HERDR = ["0.1.16", "0.1.17", "0.1.18"];
 // Whether this Herdr's version (updates().app.version) is one WEIGHT_HERDR lists, exactly.
 export function weightHerdr(version) {
   return typeof version === "string" && WEIGHT_HERDR.includes(version);
