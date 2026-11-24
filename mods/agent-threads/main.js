@@ -88,7 +88,7 @@ import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, pars
 import { MOD } from "./name.js";
 import {
   LEDGER_ROW, LEDGER_HEAD, LEDGER_FILTERS, LEDGER_KINDS, ledgerTurn, headParts, ledgerTotals, barFrac, coarse, rowTimes, trajCompact, compactRow, COMPACT_PAD, HEAD_ICON_MIN,
-  trajInks, SUB_ALPHA, ALL_ROWS, filterRows, filterButtons, toggleFilter, ledgerStatus, detailOf, turnRunning, slantPoints, sessionHasEnds,
+  WIDE_MIN, trajInks, SUB_ALPHA, ALL_ROWS, filterRows, filterButtons, toggleFilter, ledgerStatus, detailOf, turnRunning, slantPoints, sessionHasEnds,
   BAR_W, BAR_H, BAR_SLANT, LINE_H, LINE_SLANT, trajLayout, rowsLeft,
 } from "./ledger.js";
 import { VERSION, versionLine, parseBuild } from "./version.js";
@@ -1403,7 +1403,7 @@ export default class Threads extends View {
     this.setPrefs(next);
     this.prefsSaving = (this.prefsSaving ?? 0) + 1;
     // Not written: the pane shows the file as it is, and the card says why.
-    const refuse = (text, why) => { this.rulesPending = { links: null, senders: null }; this.applyPrefs(text); this.prefsError = why; };
+    const refuse = (text, why) => { this.rulesPending = { links: null, senders: null }; this.prefsMerged = false; this.applyPrefs(text); this.prefsError = why; };
     const chain = (this.prefsChain ?? Promise.resolve()).then(async () => {
       const why = writable(this.prefsRaw) ? fits?.(this.prefsRaw) : null;
       if (why) { refuse(this.prefsRaw, why); return; }
@@ -1415,7 +1415,7 @@ export default class Threads extends View {
         const text = await readTextFile(this.prefsPath()).catch(() => null);
         // The file holds a hand edit that does not parse: leave it, keep the change in the
         // pane only, and say so.
-        if (!writable(text)) { this.prefsRaw = text; this.prefsError = NOT_SAVED; return; }
+        if (!writable(text)) { this.prefsRaw = text; this.prefsError = NOT_SAVED; this.prefsMerged = false; return; }
         const late = fits?.(text);
         if (late) { refuse(text, late); return; }
         const merged = { ...parseSettings(text).values, ...patch };
@@ -1423,10 +1423,13 @@ export default class Threads extends View {
           await saveSettings(appHome(), merged, text, extra);
           this.prefsRaw = settingsText(merged, text, extra);
           this.prefsError = null;
-          this.applyPrefs(this.prefsRaw);
+          // Applied when the queue is done (below): a save queued behind this one is live in
+          // the pane already, and may write over this text before then.
+          this.prefsMerged = true;
         } catch (e) {
           this.prefsRaw = text;
           this.prefsError = `Could not save settings.json: ${clean(String(e?.message ?? e))}`;
+          this.prefsMerged = false;
         }
       }
     });
@@ -1434,8 +1437,13 @@ export default class Threads extends View {
     cx.spawn(async (cx) => {
       await chain;
       this.prefsSaving--;
-      // An edit made in an editor while the save ran.
-      if (!this.prefsSaving) this.readPrefs(cx);
+      if (!this.prefsSaving) {
+        // A save written on top of a changed file, with none after it failed or refused: the
+        // pane takes what the file holds now, extras too.
+        if (this.prefsMerged) { this.prefsMerged = false; this.applyPrefs(this.prefsRaw, cx); }
+        // An edit made in an editor while the save ran.
+        this.readPrefs(cx);
+      }
       cx.notify();
     });
     return chain;
@@ -11902,7 +11910,8 @@ export default class Threads extends View {
     }
     const L = trajLayout(x, "bottom", this.tdetail ?? true);
     const h = headParts({ calls: 1, tokens: 1 }, L.listW);
-    return `|${L.side}${L.cols.start ? "s" : ""}${L.cols.bar ? "b" : ""}${L.cols.filters ? "f" : ""}${h.calls ? "c" : ""}${h.tokens ? "t" : ""}`;
+    // The filter bar spans the pane, and from WIDE_MIN its Failed and User buttons say more.
+    return `|${L.side}${L.cols.start ? "s" : ""}${L.cols.bar ? "b" : ""}${L.cols.filters ? "f" : ""}${x >= WIDE_MIN ? "w" : ""}${h.calls ? "c" : ""}${h.tokens ? "t" : ""}`;
   }
   // Whether the detail shows: as the person last left it, or by the layout until then (open at
   // its right, closed under the ledger). Along the bottom under 700 px there is none.
