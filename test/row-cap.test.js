@@ -2578,3 +2578,29 @@ test("a rail landing's lift 48 ms on, and its end 120 ms on, are dropped by a ne
   expect(two.v.landLift).toBe(lift);
   H.listWindow = null;
 });
+
+test("a press's open 300 ms on is dropped by any scroll made in the wait, one from outside the list too: a pin's return to #30 stays on #30", async () => {
+  noPins();
+  const { v, cx } = await capSession(150, SMALL);
+  const sim = simList(v);
+  const turns = (f) => shownIn(v, f).filter((k) => /^0:\d+$/.test(k));
+  v.action("first", cx);
+  settleList(v, cx, sim);
+  v.click("0:10", cx);
+  const wait = cx.timers.filter((x) => x.ms === 300);
+  cx.timers = cx.timers.filter((x) => x.ms !== 300);
+  expect(wait.length).toBe(1);
+  // In the wait, a pin's return (a press on a pin, which is no press on the list): #30, in the
+  // same window, so #10 is still in its rows.
+  v.pinnedList = () => [{ key: "0:30", turn: v.findTurn("0:30"), pin: { n: 30 }, s: v.current(), state: "done" }];
+  v.goPin(0, cx);
+  settleList(v, cx, sim);
+  expect(turns(sim.last())).toContain("0:30");
+  expect(v.rows().some((r) => r.key === "0:10")).toBe(true);
+  for (const x of wait) x.fn(cx);
+  settleList(v, cx, sim);
+  expect(v.open.has("0:10")).toBe(false);
+  expect(v.sel).toBe("0:30");
+  expect(turns(sim.last())).toContain("0:30");
+  H.listWindow = null;
+});
