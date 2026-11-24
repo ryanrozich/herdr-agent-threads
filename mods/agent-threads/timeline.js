@@ -484,7 +484,9 @@ function nearStep(L, h, ti, x, lane, nowMs) {
 // The turn and step under px x of the strip in a lane: { turn, key } (key: the step's row,
 // or the turn's heading when no step's bar is within 4 px). heads in the layout's order; x in
 // px of the view (zoomed and panned). Where bars are under the press, the one drawn on top
-// (nearStep); with none, the nearest of the turn under the press within 4 px.
+// (nearStep), of the turn under the press, the later turns whose bars reach back to it and the
+// earlier turns under 2 px whose 1 px span reaches it; with none, the nearest of the turn
+// under the press within 4 px.
 export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
   const T = L.turns;
   if (!T.length || !Number.isFinite(x)) return null;
@@ -510,6 +512,19 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
     const tx = T[j].x * z - x0;
     if (tx - 4 > x) break;
     if (T[j].w * z < 2 || heads[j]?.key !== T[j].key) continue;
+    const o = nearStep(L, heads[j], j, x, lane, nowMs);
+    if (o.d === 0 && (win.d > 0 || o.r > win.r || (o.r === win.r && o.w < win.w))) win = o;
+  }
+  // A turn under 2 px is drawn 1 px wide from its x, so where a turn and its break are under
+  // 1 px together its span runs over the next turns' starts. So the turns before that are drawn
+  // to the press are looked at too, nearest first, and one of their spans under the press
+  // answers when it is drawn on top. A turn 2 px or wider ends before the next begins, so the
+  // first turn before whose drawn end is left of the press ends the look: at most the turns
+  // that start within 1 px left of the press.
+  for (let j = lo - 1; j >= 0; j--) {
+    const tw = T[j].w * z;
+    if (T[j].x * z - x0 + Math.max(tw, 1) < x) break;
+    if (tw >= 2 || heads[j]?.key !== T[j].key) continue;
     const o = nearStep(L, heads[j], j, x, lane, nowMs);
     if (o.d === 0 && (win.d > 0 || o.r > win.r || (o.r === win.r && o.w < win.w))) win = o;
   }
