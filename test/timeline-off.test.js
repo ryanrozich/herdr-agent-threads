@@ -234,6 +234,26 @@ test("timeline working off, the heads change while the build runs: an event in t
   }
 });
 
+test("timeline working off, the width changing every draw while the build runs: each draw starts it again at that width and shows the old strip at its own width; the draw after the width settles ends it, a whole build there", () => {
+  const { on, off, now } = session("open");
+  const prev = TL.timelineModel(null, on, CW, "clock", now, null);
+  const c = slowClock();
+  let st = TL.tlDraw(prev, null, off, CW, now, c.until(), c.clock);
+  const L0 = st.M.L;
+  // As in a drag: a new width each draw, 30 draws, narrower then wider.
+  const widths = Array.from({ length: 30 }, (_, k) => (k < 15 ? CW - 17 * (k + 1) : CW - 255 + 23 * (k - 14)));
+  for (const cw of widths) {
+    const J = st.J;
+    st = TL.tlDraw(st.M, st.J, off, cw, now, c.until(), c.clock);
+    expect([st.M.cw, st.M.L === L0, st.J !== J, st.J.cw, st.J.total]).toEqual([CW, true, true, cw, 0]);
+  }
+  // Settled: with a step budget the build fits, the next draw ends it.
+  const cw = widths.at(-1);
+  st = TL.tlDraw(st.M, st.J, off, cw, now, Infinity, c.clock);
+  expect(st.J).toBe(null);
+  sameStrip(st.M, TL.timelineModel(null, off, cw, "clock", now, null));
+});
+
 // ---- on the pane ----
 // A Trajectory pane docked along the bottom, w px wide, its rows built whole.
 async function dockPane(file, w) {
@@ -478,4 +498,51 @@ test("timeline view: a stop inside a step of the build from nothing: that frame 
   const M = b.tlModel;
   expect(M).toBeTruthy();
   sameStrip(M, TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null));
+});
+
+// The clock held still: no budget runs out.
+function stillNow(f) {
+  const real = performance.now;
+  const t = real.call(performance);
+  performance.now = () => t;
+  try { return f(); } finally { performance.now = real; }
+}
+
+test("timeline view: the pane's width changing every frame while the working-off build runs: the build starts again each frame, the strip keeps its old layout, drawn in a slot of the new width: past the old layout's end the slot is blank, and narrower than that end the newest turns are cut off at its right edge; the frame after the width settles shows the new strip", async () => {
+  try {
+    const { b, cb } = await openPane(400);
+    offFrame(b, cb);
+    slowNow(() => frame(b, cb));
+    expect(b.tlJob).toBeTruthy();
+    const L0 = b.tlModel.L;
+    const cw0 = b.tlModel.cw;
+    expect(cw0).toBe(TL.tlStrip(1440));
+    // The old layout's right end, its last turn's: working off shortened that turn on the old
+    // scale, so it ends well left of the old strip's edge.
+    const last = TL.tlBox(L0, L0.turns.length - 1);
+    const end0 = last.x + last.w;
+    expect(end0).toBeLessThan(cw0 / 2);
+    const seen = [];
+    for (const w of [1400, 1100, 800, 640, 560, 640, 900, 1300, 1700]) {
+      b.width = w;
+      b.paneW = w;
+      const J = b.tlJob;
+      const c = stillNow(() => frame(b, cb));
+      expect([w, b.tlJob !== J, b.tlJob?.cw, b.tlJob?.total, b.tlModel.cw, b.tlModel.L === L0]).toEqual([w, true, TL.tlStrip(w), 0, cw0, true]);
+      const lanes = own(c, "th-tl-lanes");
+      seen.push({ w, slot: lanes.find((e) => e[0] === "w")[1], clip: lanes.some((e) => e[0] === "overflow_hidden"), cut: end0 > TL.tlStrip(w) });
+    }
+    // The slot follows the pane and clips; the layout in it is the old one.
+    for (const x of seen) expect([x.w, x.slot, x.clip]).toEqual([x.w, TL.tlStrip(x.w), true]);
+    expect(seen.filter((x) => x.cut).map((x) => x.w)).toEqual([640, 560, 640]);
+    // Settled at 1,700: the next frame ends the build.
+    stillNow(() => frame(b, cb));
+    expect(b.tlJob).toBe(null);
+    const M = b.tlModel;
+    expect(M.cw).toBe(TL.tlStrip(1700));
+    sameStrip(M, TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null));
+  } finally {
+    setSystemTime();
+    H.state.terminals[0].status = "idle";
+  }
 });
