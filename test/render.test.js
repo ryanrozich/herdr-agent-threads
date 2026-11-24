@@ -13,24 +13,24 @@ import { turnIds } from "../mods/agent-threads/pins.js";
 import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf, COMPACT_PAD as COMPACT_PAD_T } from "../mods/agent-threads/ledger.js";
 
 import {
-  H,
-  MD_MAX,
-  ROW,
-  Threads,
   afterPress,
   alphaForTest,
   app,
   bubbleMax,
+  busy,
   calls,
   closed,
   columnWidth,
   dayKey,
   draw,
+  drawnText,
   dropTimers,
   editors,
   fakeH,
   fixture,
   focusCalls,
+  frame,
+  H,
   hcBy,
   herdrSettings,
   herdrVersion,
@@ -42,18 +42,22 @@ import {
   log,
   makeCx,
   marks,
+  MD_MAX,
   mdSources,
   modDir,
   never,
   openAt,
+  openingPane,
   overlays,
   pane,
+  paneWith,
   pinWrites,
   probeFrame,
   railLook,
   rec,
   recordFiles,
   root,
+  ROW,
   rowHeight,
   scripted,
   settingsWrites,
@@ -67,8 +71,10 @@ import {
   stillAt,
   stubHas,
   theme,
+  Threads,
   thumbSize,
   tileRow,
+  until,
   views,
   work,
   worked,
@@ -2539,7 +2545,6 @@ test("the repo comes from git remote get-url origin in the terminal's folder", a
 
 // ---- round 3: S1, the read never stalls ---------------------------------------------------
 
-let busyFile = null;
 test("debug on: a long session's rows settle, and then no next draw is asked for", async () => {
   const { v, cx } = await pane(fixture("--extra", "300"));
   expect(v.debug).toBe(true);
@@ -2583,26 +2588,6 @@ test("debug on: a long session's rows settle, and then no next draw is asked for
   expect(v.timing).toStartWith(`rows ${v.buildMs.toFixed(1)} ms`);
 }, 30000);
 
-const busy = () => (busyFile ??= fixture("--busy", "130"));
-
-// A pane on file whose cx is set up by prep before init (hooks must be in place for the read).
-async function paneWith(file, prep, tries = 200) {
-  H.state = {
-    terminals: [{ address: "t4", status: "idle", name: "claude" }],
-    panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
-    props: { terminal: "t4", transcript: file, debug: true }, shared: {},
-  };
-  const v = new Threads();
-  const cx = makeCx();
-  prep?.(cx, v);
-  v.init(state.props, cx);
-  if (tries) await settle(v, tries);
-  return { v, cx };
-}
-async function until(f, what, n = 400) {
-  for (let i = 0; i < n; i++) { if (f()) return; await new Promise((r) => setTimeout(r, 10)); }
-  throw new Error(`timed out waiting for ${what}`);
-}
 
 // Runs in a child bun; the parent test below starts it and checks what it wrote.
 // The child's clock (performance.now, which the read's budgets read too: SLICE_MS, BUILD_MS,
@@ -3044,7 +3029,6 @@ function probeEntries(calls) {
   }
   return out;
 }
-function frame(v, cx) { H.rec = []; v.render(cx); const c = rec; H.rec = null; return c; }
 
 test("V3b: the open card's text parts are measured in the probe, and the list uses the measure", async () => {
   const { v, cx } = await pane(fixture("--extra", "2", "--latest", "--commands", "--blocks"));
@@ -19676,21 +19660,6 @@ test("a terminal at px beside the pair is never resized: its width holds through
 });
 
 // ---- the opening (TRD-94): the pane's first session opens at its end, still ----
-// A pane armed by a draw before its session is read, whose read stops (each step waits) while
-// hold() says so. step(f) lets it go on until f() holds, then stops it again.
-async function openingPane(file, holdAt = () => true) {
-  let hold = holdAt;
-  const waiting = [];
-  const { v, cx } = await paneWith(file, (cx) => {
-    cx.sleepHook = () => (hold(v) ? new Promise((r) => waiting.push(r)) : new Promise((r) => setTimeout(r, 0)));
-  }, 0);
-  await until(() => v.current() && v.reading, "the read");
-  draw(v, cx);
-  const go = (f) => { hold = f; for (const r of waiting.splice(0)) r(); };
-  return { v, cx, go, waiting };
-}
-// The text a draw gave its elements.
-const drawnText = (calls) => calls.filter(([n, x]) => n === "child" && typeof x === "string").map(([, x]) => x);
 // A transcript whose first turn has its end in the second chunk: tool results of 100 KB each
 // fill the first 2 MiB, then the reply and the turn's end. Made-up words only.
 function endInChunk2() {

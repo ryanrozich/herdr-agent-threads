@@ -306,6 +306,46 @@ export async function pane(file) {
 
 export function draw(v, cx) { v.render(cx); v.report(); return v; }
 
+// ---- Pane helpers the render tests and the topic files share ----
+// The busy fixture, made once per process (as app is: reset() leaves it).
+let busyFile = null;
+export const busy = () => (busyFile ??= fixture("--busy", "130"));
+// A pane on file whose cx is set up by prep before init (hooks must be in place for the read).
+export async function paneWith(file, prep, tries = 200) {
+  state = {
+    terminals: [{ address: "t4", status: "idle", name: "claude" }],
+    panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
+    props: { terminal: "t4", transcript: file, debug: true }, shared: {},
+  };
+  const v = new Threads();
+  const cx = makeCx();
+  prep?.(cx, v);
+  v.init(state.props, cx);
+  if (tries) await settle(v, tries);
+  return { v, cx };
+}
+export async function until(f, what, n = 400) {
+  for (let i = 0; i < n; i++) { if (f()) return; await new Promise((r) => setTimeout(r, 10)); }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+export function frame(v, cx) { rec = []; v.render(cx); const c = rec; rec = null; return c; }
+// A pane armed by a draw before its session is read, whose read stops (each step waits) while
+// hold() says so. step(f) lets it go on until f() holds, then stops it again.
+export async function openingPane(file, holdAt = () => true) {
+  let hold = holdAt;
+  const waiting = [];
+  const { v, cx } = await paneWith(file, (cx) => {
+    cx.sleepHook = () => (hold(v) ? new Promise((r) => waiting.push(r)) : new Promise((r) => setTimeout(r, 0)));
+  }, 0);
+  await until(() => v.current() && v.reading, "the read");
+  draw(v, cx);
+  const go = (f) => { hold = f; for (const r of waiting.splice(0)) r(); };
+  return { v, cx, go, waiting };
+}
+// The text a draw gave its elements.
+export const drawnText = (calls) => calls.filter(([n, x]) => n === "child" && typeof x === "string").map(([, x]) => x);
+
 export async function scripted(events) {
   const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, cx } = await pane(fixture("--only", "1"));
