@@ -1708,6 +1708,31 @@ test("shaping: in a rows build, a turn never shaped whose expected cost would ta
   } finally { p.end(); }
 }, 300000);
 
+// A limit, pinned as it is: the owed row is paid before the draw's rows build (payOwed, then
+// rows()), and the build's slice is not cut by the time the owed row took. A turn of about 30
+// ms on screen meets a 25 ms build and is owed; in the next draw it is paid first (30 ms, and
+// 10 after the rows fit 50) and then that draw builds for x ms. With x 0 or 8 the draw ends
+// in time; with 15 or 25 it passes 50 ms and is stopped, once the owed row's shape is stored,
+// so the row is kept. A fix caps the build by the time left, or pays the owed row after rows().
+test("shaping: an owed row is paid before the draw's rows build, whose slice does not count its time: with 15 ms of build or more after a 30 ms owed row the draw is stopped, and the row is kept", async () => {
+  const got = [];
+  for (const x of [0, 8, 15, 25]) {
+    const p = await pricedDrain();
+    try {
+      const t = p.turns.at(-3);
+      p.begin();
+      p.setBuild(25);
+      p.restale(t, 30000);
+      const met = p.step();
+      expect([x, met.log.some((r) => r.turn === t), p.v.lineOwed?.key === p.v.baseRows.find((r) => r.turn === t)?.key]).toEqual([x, false, true]);
+      p.setBuild(x);
+      const paid = p.step();
+      got.push([x, paid.log[0]?.turn === t, paid.stopped, t.shapeKey != null]);
+    } finally { p.end(); }
+  }
+  expect(got).toEqual([[0, true, false, true], [8, true, false, true], [15, true, true, true], [25, true, true, true]]);
+}, 300000);
+
 // The neighbour test's cut, with one more row left to reshape in every draw (restaled each
 // frame, its text the same), as a drain, a search being typed or another owed row makes. Each
 // draw reshapes that row before the cut turn reaches its run alone, so the turn, on screen, is
