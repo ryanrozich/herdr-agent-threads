@@ -2534,3 +2534,47 @@ test("a new session picked from an older window opens at its own end: its rows, 
     H.listWindow = null;
   }
 });
+
+test("a rail landing's lift 48 ms on, and its end 120 ms on, are dropped by a newer jump: neither moves the newer landing", async () => {
+  // A rail jump lands with a lift (room over the first row, for the turn's top to sit level
+  // with its tick), set 48 ms on and taken off 120 ms on.
+  const { v, cx, sim } = await cutScene();
+  v.probeDue = () => [];
+  v.railJump("0:65", cx);
+  for (let k = 0; k < 4 && v.scrollTo; k++) draw(v, cx);
+  expect(v.scrollTo).toBe(null);
+  expect(v.landed.lift).toBeGreaterThan(0);
+  const late = cx.timers;
+  cx.timers = [];
+  delete v.probeDue;
+  // Before they run, #20 lands, with no lift of its own.
+  v.command("search:#20", cx);
+  v.command("escape", cx);
+  settleList(v, cx, sim);
+  expect(shownIn(v, sim.last())).toContain("0:20");
+  expect(v.landLift ?? 0).toBe(0);
+  const at = Math.round(sim.off);
+  // The first landing's 16 and 48 ms timers: no lift comes back.
+  for (const x of late.filter((x) => x.ms <= 48)) x.fn(cx);
+  expect(v.landLift ?? 0).toBe(0);
+  expect(offs(v, cx, sim, 3)).toEqual([at, at, at]);
+  H.listWindow = null;
+  // And a newer rail landing with a lift of its own keeps it past the first one's 120 ms end.
+  const two = await cutScene();
+  two.v.probeDue = () => [];
+  two.v.railJump("0:65", two.cx);
+  for (let k = 0; k < 4 && two.v.scrollTo; k++) draw(two.v, two.cx);
+  const ends = two.cx.timers.filter((x) => x.ms === 120);
+  expect(ends.length).toBe(1);
+  two.cx.timers = [];
+  two.v.railJump("0:66", two.cx);
+  for (let k = 0; k < 4 && two.v.scrollTo; k++) draw(two.v, two.cx);
+  const lift = two.v.landed.lift;
+  expect(lift).toBeGreaterThan(0);
+  for (const x of two.cx.timers.filter((x) => x.ms <= 48)) x.fn(two.cx);
+  two.cx.timers = two.cx.timers.filter((x) => x.ms > 48);
+  expect(two.v.landLift).toBe(lift);
+  for (const x of ends) x.fn(two.cx);
+  expect(two.v.landLift).toBe(lift);
+  H.listWindow = null;
+});
