@@ -20919,7 +20919,10 @@ test("past the cap, down from an open turn cut below lands on the next turn in t
     v.action("next", cx);
     probeFrame(v, cx);
     expect(v.sel).toBe("0:42");
+    // The list cut anew holds #42's head (it keeps the newest items, #42's among them); what
+    // the first frame shows of it is the offset's to decide.
     expect(v.rows()[0].key).toBe("capped");
+    expect(inList(v, "0:42")).toBe(true);
     expect(shown(sim.last())).toContain("0:42");
     // Where it lands in that frame is where it stays: the scroll after it moves nothing.
     const first = sim.last().off;
@@ -20984,4 +20987,33 @@ test("past the cap, a jump from a reader down in one cut turn to the next open t
     expect(ends()).toEqual(["capped", "capped-later"]);
     expect(shownIn(v, sim.last())).toContain("0:62");
   } finally { listWindow = null; }
+});
+
+test("past the cap, the later note at the list's end has the Jump to latest pill's room under its text", async () => {
+  const { v, cx } = await capSession(150, { max: 40 }, 140, 80);
+  v.open.add("0:141");
+  v.command("search:#141", cx);
+  frames(v, cx, 6);
+  const note = v.estimate({ kind: "note" });
+  expect(v.rows().at(-1).key).toBe("capped-later");
+  expect(v.pillShown()).toBe(true);
+  // The pill is 28 px tall, 10 px over the list's end (PILL_H, PILL_GAP).
+  expect(v.sizesMemo.at(-1)).toBe(note + 28 + 10);
+  // The earlier note at the top keeps its own height.
+  v.click("capped-later", cx);
+  frames(v, cx);
+  expect(v.rows()[0].key).toBe("capped");
+  expect(v.sizesMemo[0]).toBe(note);
+  // At the end of the turn the later note is gone, and the tail is last.
+  for (let i = 0; i < 10 && v.rows().at(-1).key === "capped-later"; i++) { v.click("capped-later", cx); frames(v, cx); }
+  expect(v.rows().at(-1).kind).toBe("tail");
+  // Another note at the list's end (the Pinned view with no pins) keeps its own height. Pins
+  // other tests left on this session's file are not this test's.
+  v.view = "pinned";
+  v.pinnedList = () => [];
+  v.fitKey = null;
+  draw(v, cx);
+  const last = v.rows().at(-1);
+  expect(last.key).toBe("pins:none");
+  expect(v.sizesMemo.at(-1)).toBe(v.height(last));
 });

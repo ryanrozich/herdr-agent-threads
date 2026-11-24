@@ -2735,6 +2735,10 @@ export default class Threads extends View {
       const cap = capList(rows, sizes, this.win.cap.max, this.estimate({ kind: "note" }), at);
       this.capCut = cap.cut;
       if (cap.cut) { this.capFired++; rows = cap.rows; sizes = cap.sizes; }
+      // The later note is the list's last item, so the Jump to latest pill shows over it (the
+      // list's end is not on screen): it takes the pill's room under its text. In the Pinned
+      // view and the outline, which draw no pill, that is only room.
+      if (rows.at(-1)?.key === "capped-later") sizes[sizes.length - 1] += PILL_H + PILL_GAP;
       // Where the cut starts, by the first item it keeps (each way of cutting starts at a place
       // of its own): a cut that moved (or came or went) since the list was last laid out gives
       // it other items under the offset in px it keeps (render, capLaid).
