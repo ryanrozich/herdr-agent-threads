@@ -196,3 +196,65 @@ test("a rows build stopped inside the slice that resumes it ends with the rows o
   expect(new Set(keys).size).toBe(keys.length);
   expect(sig()).toEqual(whole);
 }, 120000);
+
+// The same at every place a slice can be stopped: while it builds rows or while it sizes them,
+// in the first slice, in a slice that resumes the build, and in a sizing pass carried over to
+// the next frame. Each stop ends with the rows one build makes, each once, at their heights.
+test("a rows build stopped anywhere, building or sizing, first slice or later, ends with the rows one build makes", async () => {
+  const { v, cx } = await longPane(600);
+  const sig = () => v.baseRows.map((r, i) => `${r.kind}|${r.key}|${v.baseSizes[i]}`);
+  const whole = sig();
+  const railSig = () => v.railTurns.map((r) => r.key).join(",");
+  const rail = railSig();
+  // A turn's rows 0.05 ms and a row's height 0.02 ms: a slice builds about 200 turns and runs
+  // out of time sizing them, so the sizing goes on in the next frame.
+  COST.built = 0.05;
+  const { turnRows, height, buildRows } = v;
+  let unit = 0;
+  let stopAt = -1;
+  let rowsFrame = -1;
+  let sized = 0;
+  const phases = new Set();
+  const stop = (self, what) => {
+    if (++unit !== stopAt) return;
+    const job = self.rowJob;
+    phases.add(`${what} in ${!job.from ? "the first slice" : job.from.own ? "a resumed slice" : "a kept-rows slice"}${what === "sizing" && rowsFrame !== self.renders ? ", carried over" : ""}`);
+    throw new Error("interrupted");
+  };
+  v.turnRows = function (...a) { stop(this, "building"); return turnRows.apply(this, a); };
+  v.height = function (...a) { if (this.rowJob) { stop(this, "sizing"); sized++; } return height.apply(this, a); };
+  v.buildRows = function (...a) { rowsFrame = this.renders; return buildRows.apply(this, a); };
+  const base = clock;
+  const failed = [];
+  try {
+    // Cold, with no closed turn's rows kept from an earlier build: 1,203 units a build (600
+    // turns built, 603 rows sized), a stop every 47th. Warm, with them kept: 605 units (5 rows
+    // are sized again), a stop every 23rd.
+    for (const [cold, step, end] of [[true, 47, 1200], [false, 23, 600]]) {
+      for (stopAt = cold ? 23 : 11; stopAt < end; stopAt += step) {
+        if (cold) v.keptFor().rows.clear();
+        unit = 0;
+        let stops = 0;
+        priced(v, () => {
+          performance.now = () => base() + sized * 0.02;
+          sized = 0;
+          v.rowsKey = null;
+          v.rowBuild = null;
+          for (let k = 0; k < 100; k++) {
+            try { v.render(cx); } catch (e) { if (String(e?.message) !== "interrupted") throw e; stops++; v.renderOpen = true; }
+            cx.flush(0);
+            if (!v.rowJob && k > 0) break;
+          }
+        });
+        const keys = v.baseRows.map((r) => r.key);
+        if (stops !== 1 || v.rowJob || new Set(keys).size !== keys.length || sig().join("\n") !== whole.join("\n") || railSig() !== rail) failed.push({ cold, stopAt, stops, rows: keys.length });
+      }
+    }
+  } finally { COST.built = PRICE.built; Object.assign(v, { turnRows, height, buildRows }); }
+  expect(failed).toEqual([]);
+  expect([...phases].sort()).toEqual([
+    "building in a resumed slice", "building in the first slice",
+    "sizing in a resumed slice", "sizing in a resumed slice, carried over",
+    "sizing in the first slice", "sizing in the first slice, carried over",
+  ]);
+}, 120000);

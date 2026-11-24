@@ -2816,7 +2816,17 @@ export default class Threads extends View {
       this.cachedH = left.cachedH;
       this.cacheNew = left.cacheNew;
     } else {
+      // A slice Herdr stopped (its draw ran past the limit) leaves what it built past where
+      // job.from says the next one starts, as job.from moves only when a slice ends: the rows
+      // added to the arrays a resumed slice was handed, and the sizes and index entries of the
+      // rows it had sized. Cut back to that start, so no turn's rows are built twice.
+      const keep = job.from ? job.from.row : 0;
+      if (job.out) for (let i = keep; i < job.sizes.length; i++) { const k = job.out[i]?.key; if (job.index.get(k) === i) job.index.delete(k); }
+      if (job.sizes.length > keep) job.sizes.length = keep;
+      if (job.from?.own) { job.from.rows.length = job.from.row; job.from.railRows.length = job.from.rail; }
+      job.out = null;
       out = this.buildRows(status, job.from, until);
+      job.out = out;
       if (job.from?.before && job.from.dayRow != null && !this.buildInfo.resume) job.sizes[job.from.dayRow] = this.height(out[job.from.dayRow]);
     }
     // Each new row's height, inside the slice's time too: at a narrow width the heights of
