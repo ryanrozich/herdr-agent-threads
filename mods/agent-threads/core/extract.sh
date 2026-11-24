@@ -8,7 +8,7 @@
 # whole lines read), then extract.jq's events. Reads only the bytes between offset and
 # offset+max-bytes, so a 700 MB transcript is never loaded at once. A cut-off last line is
 # left for the next call. Output stays under 6 MiB (exec allows 8): a chunk whose events
-# come to more is read again at half the size.
+# come to more is read again at half the size, and its chunk line says "cut":true.
 # Cursor sometimes writes its whole transcript again rather than adding to it. For a Cursor
 # file the same read also takes up to 4 KB before the offset: the file line carries their
 # cksum as "anchor", and a closing {"k":"settle","id"} names the 4 KB the next read starts
@@ -69,6 +69,7 @@ fi
 tmp=$(mktemp "${TMPDIR:-/tmp}/agent-threads.XXXXXX")
 out=$(mktemp "${TMPDIR:-/tmp}/agent-threads.XXXXXX")
 trap 'rm -f "$tmp" "$out"' EXIT INT TERM
+cut=0
 while :; do
   # dd seeks the open file to the offset without reading; head reads on from there. $tmp
   # starts with the <pre> bytes before the offset (Cursor only).
@@ -144,9 +145,11 @@ while :; do
   fi
   [ "$(wc -c < "$out" | tr -d ' ')" -gt "$limit" ] && [ "$max" -gt 65536 ] || break
   max=$((max / 2))
+  cut=1
 done
 skip_note=
 if [ "$skipped" -gt 0 ]; then used=$skipped; skip_note=",\"skipped\":$skipped"; fi
+if [ "$cut" = 1 ]; then skip_note="$skip_note,\"cut\":true"; fi
 if [ "$harness" = cursor ]; then
   end=$((pre + used))
   n=$((end < 4096 ? end : 4096))

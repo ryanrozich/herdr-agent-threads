@@ -2460,6 +2460,7 @@ export default class Threads extends View {
               // replaced: read it again from the top.
               this.restart(s);
               chunk = CHUNK;
+              cap = READ_CHUNK;
               continue;
             }
             if (c.head && !s.head) s.head = c.head;
@@ -2481,7 +2482,7 @@ export default class Threads extends View {
             if (c.events.length) grew = true;
             s.offset += c.used;
             s.partial = false;
-            if (s.offset < s.size) cap = readCap(cap, c.used, chunk, CHUNK);
+            if (s.offset < s.size) cap = readCap(cap, c.cut, chunk, CHUNK);
             chunk = nextChunk(s, c.used, chunk, Math.min(cap, chunk * 2));
             if (!s.loaded) cx.notify();
             // Once a session (peek holds the session peeked): another one on the list is

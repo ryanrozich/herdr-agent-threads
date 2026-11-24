@@ -171,20 +171,63 @@ test("a Cursor line longer than the ceiling is read whole, and the session goes 
   expect(s.turns[2].after.join("")).toBe("Turn 3 is done.");
 });
 
-test("readCap: a call the extractor cut to half or less (its output over 6 MiB) halves the rest of the read's calls, never below the first call's size", () => {
+test("readCap: a call the extractor cut (its output over 6 MiB, it says cut) halves the rest of the read's calls, never below the first call's size", () => {
   const MiB = 2 ** 20;
-  // Read whole: the cap stays.
-  expect(readCap(16 * MiB, 16 * MiB - 300, 16 * MiB, 2 * MiB)).toBe(16 * MiB);
-  // The first 2 MiB call, read whole: still 16 MiB after.
-  expect(readCap(16 * MiB, 2 * MiB - 10, 2 * MiB, 2 * MiB)).toBe(16 * MiB);
-  // Cut to 8 MiB of 16: 8 MiB a call from then on, so the cut is not paid again each call.
-  expect(readCap(16 * MiB, 8 * MiB - 50, 16 * MiB, 2 * MiB)).toBe(8 * MiB);
-  expect(readCap(8 * MiB, 8 * MiB - 50, 8 * MiB, 2 * MiB)).toBe(8 * MiB);
-  // Cut to a quarter: halved once a call, down to the first call's size and no lower.
-  expect(readCap(16 * MiB, 4 * MiB, 16 * MiB, 2 * MiB)).toBe(8 * MiB);
-  expect(readCap(2 * MiB, MiB, 2 * MiB, 2 * MiB)).toBe(2 * MiB);
-  // Nothing read (a line longer than the call): nextChunk grows that call; the cap stays.
-  expect(readCap(16 * MiB, 0, 16 * MiB, 2 * MiB)).toBe(16 * MiB);
-  // A call grown past the cap to get by a long line, then read short: never above the cap.
-  expect(readCap(8 * MiB, 10 * MiB, 64 * MiB, 2 * MiB)).toBe(8 * MiB);
+  // Not cut: the cap stays, however little the call read.
+  expect(readCap(16 * MiB, false, 16 * MiB, 2 * MiB)).toBe(16 * MiB);
+  expect(readCap(16 * MiB, false, 2 * MiB, 2 * MiB)).toBe(16 * MiB);
+  // Cut, from 16 MiB: 8 MiB a call from then on, so the cut is not paid again each call.
+  expect(readCap(16 * MiB, true, 16 * MiB, 2 * MiB)).toBe(8 * MiB);
+  expect(readCap(8 * MiB, true, 8 * MiB, 2 * MiB)).toBe(4 * MiB);
+  // Down to the first call's size and no lower.
+  expect(readCap(2 * MiB, true, 2 * MiB, 2 * MiB)).toBe(2 * MiB);
+  // A call grown past the cap to get by a long line, then cut: never above the cap.
+  expect(readCap(8 * MiB, true, 64 * MiB, 2 * MiB)).toBe(8 * MiB);
 });
+
+// A call that stops short of a line longer than the rest of it reads little with nothing cut;
+// only a call whose output came to more than 6 MiB says cut.
+test("extract.sh says cut only when it read a call again at half its size", () => {
+  const MiB = 2 ** 20;
+  const d = mkdtempSync(join(tmpdir(), "threads-cut-"));
+  const at = (i) => new Date(Date.parse("2026-11-01T10:00:00Z") + i * 1000).toISOString();
+  const rec = (i, o) => JSON.stringify({ uuid: `00000000-0000-4000-9500-${String(i).padStart(12, "0")}`, timestamp: at(i), sessionId: "s-cut", ...o });
+  // 3 MiB of short turns, then a 14 MiB tool result: a 16 MiB call reads the short turns only.
+  const sparse = join(d, "sparse.jsonl");
+  const fd = openSync(sparse, "w");
+  let i = 0;
+  for (let n = 0; n < 3 * MiB; ) {
+    const l = `${rec(++i, { type: "user", message: { role: "user", content: `Turn ${i}: check the cart totals for month ${i}.` } })}\n`;
+    writeSync(fd, l);
+    n += l.length;
+  }
+  writeSync(fd, `${rec(++i, { type: "assistant", message: { id: "m-long", role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: "t-long", name: "Read", input: { file_path: "cart/log.txt" } }] } })}\n`);
+  writeSync(fd, `${rec(++i, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t-long", content: "zo".repeat(7 * MiB) }] } })}\n`);
+  closeSync(fd);
+  const call = (f, max) => {
+    const out = spawnSync("sh", [join(core, "extract.sh"), f, "0", String(max)], { encoding: "utf8", maxBuffer: 1 << 28 }).stdout;
+    return { c: parseChunk(out), line: out.split("\n").find((l) => l.startsWith('{"k":"chunk"')) };
+  };
+  const a = call(sparse, 16 * MiB);
+  expect(a.c.used).toBeGreaterThan(3 * MiB - 200);
+  expect(a.c.used).toBeLessThan(3 * MiB + 500);
+  expect(a.c.cut).toBeUndefined();
+  expect(a.line).not.toContain("cut");
+  // 140 replies of 100 KB of plain words: an 8 MiB call prints more than 6 MiB, so it is read
+  // again at 4 MiB and says so.
+  const dense = join(d, "dense.jsonl");
+  const words = "kaz vel orin tam sula pero dint ".repeat(3300);
+  const lines = [];
+  for (let k = 0; k < 140; k++) {
+    lines.push(rec(2 * k, { type: "user", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: `Turn ${k + 1}: write it out` } }));
+    lines.push(rec(2 * k + 1, { type: "assistant", message: { id: `m${k}`, role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: words }] } }));
+  }
+  writeFileSync(dense, `${lines.join("\n")}\n`);
+  const b = call(dense, 8 * MiB);
+  expect(b.c.used).toBeLessThanOrEqual(4 * MiB);
+  expect(b.c.used).toBeGreaterThan(3 * MiB);
+  expect(b.c.cut).toBe(true);
+  // A call small enough not to be cut does not say cut.
+  const e = call(dense, 2 * MiB);
+  expect(e.c.cut).toBeUndefined();
+}, 60000);

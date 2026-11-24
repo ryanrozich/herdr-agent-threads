@@ -679,7 +679,7 @@ export function parseLine(out, line) {
   if (!line) return;
   const e = JSON.parse(line);
   if (e.k === "file") { out.size = e.size; out.head = e.head ?? null; if ("anchor" in e) out.anchor = e.anchor; }
-  else if (e.k === "chunk") { out.used = e.used; out.rewind = Boolean(e.rewind); if (e.noperl) out.noPerl = true; if (e.skipped > 0) out.skipped = e.skipped; }
+  else if (e.k === "chunk") { out.used = e.used; out.rewind = Boolean(e.rewind); if (e.noperl) out.noPerl = true; if (e.skipped > 0) out.skipped = e.skipped; if (e.cut) out.cut = true; }
   else if (e.k === "missing") out.missing = true;
   else out.events.push(e);
 }
@@ -894,12 +894,14 @@ export function threadMatches(turns, turn, q) {
   return false;
 }
 
-// The largest call left for this read, after a call that asked for chunk and used bytes. A
-// call cut to half or less was read again at half size by the extractor (its output came to
-// more than 6 MiB: a transcript dense with text), so the rest of the read asks for half,
-// down to floor, the read's first call's size, rather than pay that again every call.
-export function readCap(cap, used, chunk, floor) {
-  return used > 0 && used * 2 <= chunk ? Math.max(floor, Math.min(cap, chunk / 2)) : cap;
+// The largest call left for this read, after a call that asked for chunk. A call the
+// extractor cut (its output came to more than 6 MiB, so it read the call again at half size,
+// and its chunk line says so) means text dense enough to be cut again: the rest of the read
+// asks for half, down to floor, the read's first call's size, rather than pay that every
+// call. A call that read little for another reason (the next line is longer than the rest of
+// the call) was not cut, and the cap stays.
+export function readCap(cap, cut, chunk, floor) {
+  return cut ? Math.max(floor, Math.min(cap, chunk / 2)) : cap;
 }
 
 // After one extractor call: the chunk size for the next call, or 0 when caught up.
