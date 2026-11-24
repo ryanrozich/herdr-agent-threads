@@ -159,6 +159,10 @@ const SHAPE_MS = 12;
 const SHAPE_FIRST = 40;
 // Turns at least this long (prompt and reply, in characters) teach the shaping rate (shapeLearn).
 const SHAPE_LEARN = 4000;
+// The rows near the view: the rows drawn last and this many rows above and below them
+// (nearSpan). The opening shows the list once they are shaped and measured (openReady); the
+// rows further up are shaped after it shows.
+const SHAPE_NEAR = 40;
 // The hidden probe (probe) draws at most this many parts in one frame, nearest the top of
 // the pane first. Opening the work of a turn with hundreds of steps put every interim text
 // in one draw, and it ran past Herdr's time ("This view could not be re-rendered",
@@ -181,6 +185,28 @@ const CUT_WATCH_MS = 250;
 // left of it, each down to its floor, so a machine where the rest of a draw is slow does
 // less of both per frame and stays clear of Herdr's 50 ms stop.
 const FRAME_AIM_MS = 30;
+// Past this long since a render began no reshape of the drain starts in it (pastLine), not
+// even for a row on screen: a draw that started late, with time left of its shaping budget,
+// ran into Herdr's 50 ms stop with one more pasted prompt (9 ms at 45 KB, 40 ms at 200 KB).
+// Past it only the drain's first reshape of the draw may start, of a row on screen, and only if
+// it is expected to end in time (lineCut). The first one refused is reshaped first in the next
+// frame (lineOwed).
+const NEAR_CUT_MS = 35;
+// Herdr stops a draw at about 50 ms (50 to 53 measured on the rig, so 50 is its low end). No
+// reshape of the drain starts whose expected end, with the rest of the draw after it (frameBase
+// less what of it has run), passes it less HOST_MARGIN_MS (fitsHost). The margin is for the
+// estimate, not measured: the rate a character learned from long turns (shapeLearn) is off on
+// a turn unlike them, and frameBase is the last draw's.
+const HOST_MS = 50;
+const HOST_MARGIN_MS = 3;
+// The draws the lightest base is taken over (lightBase): the least frameBase of the last 64,
+// about a second of frames while the pane is busy.
+const LIGHT_DRAWS = 64;
+// The draws a row on screen may be refused by the fit check (lineCut, payOwed) before it runs
+// alone once, as a draw's first unit (payOwed), whatever lightBase says: a row that fits only a
+// lighter draw than the pane makes is not left unshaped for as long as such draws go on. Not
+// measured.
+const OWED_DRAWS = 64;
 const SHAPE_MIN_MS = 2;
 const BUILD_MIN_MS = 3;
 const SCROLL_WAIT_MS = 2000;
@@ -1142,6 +1168,16 @@ export default class Threads extends View {
       traj: this.trajReport(),
       // Each fall back to px of the row with the Trajectory open (rowFell), and its reason.
       rowFalls: { n: this.rowFallN ?? 0, last: this.rowFalls ?? [] },
+      // Rows on screen left as they were because the draw was past NEAR_CUT_MS (pastLine).
+      nearCut: this.nearCut ?? 0,
+      // Walks that began past NEAR_CUT_MS, the most draws in a row, and rows owed and reshaped
+      // first in the next draw (payOwed).
+      lateWalks: this.lateWalks ?? 0, lateRun: this.lateRunMax ?? 0, owed: this.owedPaid ?? 0,
+      // Draws whose owed row did not fit either (payOwed: draws, not rows), owed rows run alone
+      // once refused OWED_DRAWS draws, turns run alone (shapeHeld), reshapes found cut
+      // (shapeMark) when run alone and when run with others, and refusals of a cut turn since.
+      owedHeldDraws: this.owedHeldDraws ?? 0, owedAlone: this.owedAlone ?? 0, alone: this.aloneRun ?? 0,
+      aloneCut: this.aloneCut ?? 0, sharedCut: this.sharedCut ?? 0, cutHeld: this.cutHeld ?? 0,
       landed: this.landed ? { key: this.landed.key, j: this.landed.j, y: this.landed.y, lift: this.landed.lift ?? 0 } : null,
       outline: this.outlined(), outlineBack: this.outlineBack ? { sel: this.outlineBack.sel ?? null, top: this.outlineBack.top ?? null } : null,
       header: this.headerText(), state: this.agentStateNow()?.word ?? null, unseen: this.unseen, bottomShown: this.bottomShown, pill: this.pillShown(), follow: Boolean(this.follow), range: this.lastRange ?? null, keysOpen: this.keysOpen,
@@ -2986,26 +3022,76 @@ export default class Threads extends View {
   // Closed rows built with an old or blank shape (out of SHAPE_MS) get their shape where they
   // are. False when one changes what the row is made of (pasted images), for a full rebuild.
   reshapeStale(status) {
+    this.lineOn = true;
+    // A row owed from the last frame and reshaped in this one (payOwed) was the draw's first.
+    this.lineFirst = this.owedAt !== this.renders;
+    this.lineScreen = false;
+    // Walks that began past the line, and the most frames in a row they did (debug report).
+    if (this.renderOpen && this.lateFrame !== this.renders) {
+      this.lateFrame = this.renders;
+      if (now() - (this.renderAt ?? 0) > NEAR_CUT_MS) {
+        this.lateWalks = (this.lateWalks ?? 0) + 1;
+        this.lateRun = (this.lateRun ?? 0) + 1;
+        this.lateRunMax = Math.max(this.lateRunMax ?? 0, this.lateRun);
+      } else this.lateRun = 0;
+    }
+    try { return this.reshapeLeft(status); } finally { this.lineOn = false; this.lineScreen = false; }
+  }
+  reshapeLeft(status) {
     this.shapeStart();
     this.shapeLeft = 0;
     this.otherLeft = 0;
     this.shapeInView(status);
-    const left = [];
-    // Nearest the newest first when following, where the view is. Once this draw's time is
-    // spent the rest wait as they are, without a look at each.
+    // The rows this pass is done with: reshaped, or with nothing to reshape.
+    const done = new Set();
+    // Nearest the newest first when following, where the view is. Not following, the rows in
+    // and near the view first (nearStale), then the rest oldest first: shapeInView shapes the
+    // turns in view but not their rows, and a reader scrolled up saw the rows on screen as
+    // empty bubbles until the walk came to them. Once this draw's time is spent the rest wait
+    // as they are, without a look at each.
     const stale = this.staleRows ?? [];
-    const order = this.follow ? stale.slice().reverse() : stale;
+    const near = this.follow ? null : this.nearStale(stale);
+    const order = this.follow ? stale.slice().reverse() : near ? [...near.rows, ...stale.slice(0, near.lo), ...stale.slice(near.hi)] : stale;
     const cg = order.length ? this.closedLookNow() : null;
+    // The rows drawn are looked at past the draw's time too: the turns shapeInView just shaped
+    // are memo hits, and shape() leaves the others as they are at once. The rest of the rows
+    // near the view come first, within the time. Past NEAR_CUT_MS since the render began
+    // (pastLine) only a row on screen (lineScreen, in view by viewRange; in the opening, the rows
+    // near the end it waits for) may start, the draw's
+    // first that fits (lineCut); one left draws as it was and is first again in the next
+    // frame's walk (nearCut counts them), and the walk stops at the first row off screen.
+    const nearN = near?.drawn ?? 0;
+    const seen = this.nearSpan();
+    const v0 = seen ? this.viewRange[0] - seen[2] : 0;
+    const v1 = seen ? this.viewRange[1] - seen[2] : 0;
+    // While a jump lands (openLand), the rows above the view wait until its place is held.
+    const span = this.openLand ? this.nearSpan() : null;
+    const top = span ? this.viewRange[0] - span[2] : -1;
     for (let k = 0; k < order.length; k++) {
       const i = order[k];
-      if ((this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft += order.length - k; for (; k < order.length; k++) left.push(order[k]); break; }
+      if (i < top) continue;
+      // While the opening is under way, the rows it waits for (the rows near the end, nearSpan)
+      // are the ones it will show.
+      const onScreen = this.openActive() ? seen != null && i >= seen[0] && i < seen[1] : i >= v0 && i < v1;
+      if (k >= nearN && ((this.shapeSpent ?? 0) > this.shapeMax() || (this.pastLine() && !onScreen))) { this.shapeLeft += order.length - k; break; }
       const r = this.baseRows[i];
+      done.add(i);
       if (r?.kind !== "turn" || !r.turn) continue;
+      this.lineScreen = onScreen;
+      this.lineKey = r.key;
       const sh = this.shape(r.turn);
-      // Left for its expected cost (shapeCost) or out of time: the rest wait too, unlooked at.
-      // Going on past a turn left for its cost, with the time not yet spent, called shape() for
-      // every row still to reshape in that one draw: 5,500 of them, 40 to 50 ms, on the rig.
-      if (this.shapeStale) { this.shapeLeft += order.length - k - 1; for (; k < order.length; k++) left.push(order[k]); break; }
+      this.lineScreen = false;
+      this.lineKey = null;
+      // Left for its expected cost or out of time. Past the rows near the view the rest wait
+      // too, unlooked at: going on past a turn left for its cost, with the time not yet spent,
+      // called shape() for every row still to reshape in that one draw: 5,500 of them, 40 to 50
+      // ms, on the rig. The rows near the view are still looked at (memo hits, or left at once).
+      if (this.shapeStale) {
+        done.delete(i);
+        if (k < nearN && this.pastLine()) this.nearCut = (this.nearCut ?? 0) + 1;
+        if (k >= nearN) { this.shapeLeft += order.length - k - 1; break; }
+        continue;
+      }
       if (sh === r.shape) continue;
       if (Boolean(sh.thumbs) !== Boolean(r.shape?.thumbs)) return false;
       const nr = { ...r, shape: sh };
@@ -3017,10 +3103,31 @@ export default class Threads extends View {
         this.keptFor().rows.set(r.key, { turn: r.turn, s: r.s, sig: this.closedSig(r.key, r.turn, r.si, cg), rows: [nr], sizes: [this.baseSizes[i]], at: i, shape: sh });
       }
     }
-    this.staleRows = left;
+    // In index order, as every other list of them is, whatever order the walk took. (Left in
+    // walk order, the next pass's reverse walked them oldest first, every other pass.)
+    this.staleRows = done.size ? stale.filter((i) => !done.has(i)) : stale;
     this.probeList();
     this.fitKey = null;
     return true;
+  }
+  // The rows left to reshape near the view (nearSpan), the ones drawn first (drawn of them) and
+  // then outward from them, and where they sit in stale ([lo, hi)), which is in index order.
+  // Null if none.
+  nearStale(stale) {
+    const span = this.nearSpan();
+    if (!span || !stale.length) return null;
+    const [a, b, off] = span;
+    const at = (x) => { let lo = 0, hi = stale.length; while (lo < hi) { const m = (lo + hi) >> 1; if (stale[m] < x) lo = m + 1; else hi = m; } return lo; };
+    const lo = at(a);
+    const hi = at(b);
+    if (lo === hi) return null;
+    const v0 = this.viewRange[0] - off;
+    const v1 = this.viewRange[1] - off;
+    const d = (i) => (i < v0 ? v0 - i : i >= v1 ? i - v1 + 1 : 0);
+    const rows = stale.slice(lo, hi).sort((x, y) => d(x) - d(y) || x - y);
+    let drawn = 0;
+    while (drawn < rows.length && d(rows[drawn]) === 0) drawn++;
+    return { lo, hi, rows, drawn };
   }
 
   // The index of a list item in rowsMemo, from baseIndex (the list adds a spacer or a gap
@@ -3656,6 +3763,8 @@ export default class Threads extends View {
       if (!L.some((p) => p.key === this.sel)) this.sel = L.find((p) => p.key)?.key ?? null;
     }
     this.follow = false;
+    // A landing still to be held is the other view's: with a selection the switch makes its own.
+    this.openLand = false;
     if (this.sel) this.scrollTo = { key: this.sel, how: "center" };
   }
 
@@ -4740,29 +4849,125 @@ export default class Threads extends View {
       && f.int === Boolean(turn.interrupted) && f.by === turn.answeredBy && f.inn === turn.answeredIn && f.img === (turn.images?.length ?? 0) && f.ag === Boolean(turn.agent) && f.sv === this.sendersVer) return turn.shapeMemo;
     // Out of time and never shaped: no key to build (3 µs a turn, 30 ms a draw with 6,000 rows
     // waiting after renders were stopped through a whole load).
-    if (turn.shapeKey == null && (this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return this.blankShape(); }
+    let held = null;
+    if (turn.shapeKey == null && (held = this.shapeHeld(turn, text, live, true))) return this.shapeRefused(this.blankShape());
     const q = this.filterText();
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
     const key = `${Math.round(this.width)}|${P.textSize}|${this.chars()}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}|${turn.agent ? 1 : 0}|${this.sendersVer}`;
     const fast = { key, look, p: turn.prompt.length, t: text.length, live, tools: turn.tools, int: Boolean(turn.interrupted), by: turn.answeredBy, inn: turn.answeredIn, img: turn.images?.length ?? 0, ag: Boolean(turn.agent), sv: this.sendersVer };
     if (turn.shapeKey === key) { turn.shapeFast = fast; this.keepShape(turn); return turn.shapeMemo; }
-    // Out of time for this draw: the shape it had (a row never shaped yet, as when agent
-    // messages are turned on, a blank one-line row), and the next frame reshapes it. A turn
-    // whose shaping would take the draw past its time (shapeCost) waits too, unless it is the
-    // draw's first: one turn with a pasted 200 KB prompt took 20 to 40 ms on the rig, and on
-    // top of the draw's 12 ms it ran past Herdr's time.
-    const spent = this.shapeSpent ?? 0;
-    const cost = this.shapeCost(turn, text);
-    if (spent > this.shapeMax() || (spent > 0 && spent + cost > this.shapeMax())) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return turn.shapeMemo ?? this.blankShape(); }
+    // Held (shapeHeld): the shape it had (a row never shaped yet, as when agent messages are
+    // turned on, a blank one-line row), and a later frame reshapes it.
+    if (held === null && this.shapeHeld(turn, text, live)) return this.shapeRefused(turn.shapeMemo ?? this.blankShape());
+    if (this.lineOn) this.lineFirst = false;
+    // A reshape in a draw is marked as it starts (only a draw is stopped), whether it runs alone
+    // with it, and the mark comes off once its shape is stored: a mark found at a later draw
+    // means Herdr's stop cut it (shapeHeld).
+    if (this.renderOpen) turn.shapeMark = { sig: this.markSig(turn, text), alone: Boolean(this.unitAlone), cut: false };
     const t0 = now();
     const sh = this.reshape(turn, live, q, P, why, text);
     this.shapeLearn(turn, text, now() - t0);
     turn.shapeKey = key;
     turn.shapeMemo = sh;
     turn.shapeFast = fast;
+    turn.shapeMark = null;
+    turn.refused = null;
     this.keepShape(turn);
     this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
+    this.unitsRun = (this.unitsRun ?? 0) + 1;
+    return sh;
+  }
+  // shape()'s one check: whether turn may not be shaped now. In a draw it reads the turn's
+  // mark first, whatever the estimate (shapeMark, set as each reshape in a draw starts and taken
+  // off once its shape is stored; a mark for other text is dropped):
+  // - A mark left from a run alone: that run was cut by Herdr's stop. Not run again for that
+  //   text: it keeps its last shape (or the blank row of one never shaped) until its text
+  //   changes. A width change alone does not clear the mark, or each step of a divider drag
+  //   would cost a stop. A plain error thrown in that run leaves the mark too.
+  // - A mark left from a run with others: cut once, perhaps by another turn's overrun in the
+  //   same draw, so not held. It runs alone next, as a turn that can never fit does, and only a
+  //   cut on that run holds it. So a text costs at most two stops, and a turn cut in company is
+  //   not held for good.
+  // Then, alone:
+  // - A turn that can never fit (neverFits: its expected cost with the margin and the lightest
+  //   base this pane draws over Herdr's limit), one cut in company, and a row owed OWED_DRAWS
+  //   draws (payOwed) run only as their draw's first shaping unit, alone: nothing else is
+  //   shaped in that draw (unitAlone, counted in aloneRun). Such a run may pass the limit once;
+  //   what it shaped is kept if the stop comes after it. Not in the frames after a stopped
+  //   render (shapeMax -1), not after another unit of its draw (a row on screen is then owed
+  //   and counted, so the next draw tries it first), in the drain not past the line unless its
+  //   row is on screen, not where the time already spent would have it cut (cutWhereNow), and
+  //   not while it runs: a
+  //   running turn's reply is reshaped at each update, and each would pass the limit, so it
+  //   keeps the shape it had until it ends. With a rate far too high every turn can never
+  //   fit: each runs alone, a draw each, and teaches the rate down (shapeLearn).
+  // - Every other turn: within the draw's shaping time, the draw's first whatever its cost and
+  //   any other only if its expected cost fits what is left, and in the drain expected to end
+  //   in time (lineCut, fitsHost). A turn never shaped follows the same rule, so the draw keeps
+  //   its room for the rest of the frame: in a rows build or the drain a 30 ms turn after
+  //   another unit waits, its blank row drawn, for a draw where it comes first (on the rig the
+  //   never-shaped rows a stop's light draws left were drained to 45 to 52 ms a draw, with a
+  //   stop, when only the fit check held them). A row on screen in the drain (lineScreen) is
+  //   the exception: it goes ahead while shaping time is left, held only by the fit check.
+  // Outside a draw nothing is stopped, so the mark is not read there. The rate is learned only
+  // from turns shaped.
+  shapeHeld(turn, text, live, fresh = false) {
+    if (this.unitAlone && this.renderOpen) return true;
+    const max = this.shapeMax();
+    const spent = this.shapeSpent ?? 0;
+    const est = this.hostCost(turn, text);
+    let alone = false;
+    if (this.renderOpen) {
+      const m = turn.shapeMark;
+      if (m && m.sig !== this.markSig(turn, text)) turn.shapeMark = null;
+      else if (m) {
+        if (!m.cut) {
+          m.cut = true;
+          if (m.alone) this.aloneCut = (this.aloneCut ?? 0) + 1;
+          else this.sharedCut = (this.sharedCut ?? 0) + 1;
+        }
+        if (m.alone) { this.cutHeld = (this.cutHeld ?? 0) + 1; return true; }
+        alone = true;
+      }
+      alone ||= this.owedRun === turn || this.neverFits(est);
+    }
+    if (alone) {
+      // Refused for the units this draw ran before it: a row on screen is owed and counted, as
+      // one the fit check refuses (lineCut), so the next draw tries it first (payOwed) and the
+      // release after a second OWED_DRAWS draws reaches it. Else a turn cut in company waited
+      // for a draw that reshaped nothing else, which a drain may not have for its whole length.
+      const after = (this.unitsRun ?? 0) > 0 || spent > 0;
+      if (after || max < 0 || live || (!this.lineScreen && this.pastLine())) {
+        if (after && this.lineScreen && max >= 0 && !live) { this.oweRow(); this.refuse(turn, text); }
+        return true;
+      }
+      // Held by the time spent for a second OWED_DRAWS draws on screen: run all the same, as the
+      // estimate may be too high and nothing else would teach it down. One stop at most.
+      if (this.cutWhereNow(est) && this.refusedN(turn, text) < 2 * OWED_DRAWS) {
+        if (this.lineScreen) { this.oweRow(); this.refuse(turn, text); }
+        return true;
+      }
+      this.unitAlone = true;
+      this.aloneRun = (this.aloneRun ?? 0) + 1;
+      if (this.owedRun === turn) this.owedAlone = (this.owedAlone ?? 0) + 1;
+      return false;
+    }
+    if (spent > max) return true;
+    // After the draw's first unit, any turn whose expected cost does not fit what is left of
+    // the draw's shaping time waits (1.2.0's rule), never-shaped ones too, except a row on
+    // screen in the drain (lineScreen): a blank row on screen is worse than a late one, and
+    // lineCut keeps it inside Herdr's stop.
+    if (spent > 0 && !(fresh && this.lineScreen) && spent + this.shapeCost(turn, text) > max) return true;
+    return this.lineCut(turn, text);
+  }
+  // What a mark is for: the turn's text, by its prompt and reply lengths (as shape()'s fast
+  // check compares them).
+  markSig(turn, text) { return `${turn.prompt.length}|${text.length}`; }
+  // A turn held by shapeHeld: left for a later frame.
+  shapeRefused(sh) {
+    this.shapeLeft = (this.shapeLeft ?? 0) + 1;
+    this.shapeStale = true;
     return sh;
   }
   // What shaping a turn is expected to cost, in ms: its length at the rate learned from long
@@ -4851,6 +5056,110 @@ export default class Threads extends View {
       k++;
       this.shape(s.turns[ti]);
     }
+  }
+  // The render that is drawing began more than NEAR_CUT_MS ago, in the drain (reshapeStale,
+  // lineOn). A rows build has its own time (buildMax).
+  pastLine() { return Boolean(this.lineOn && this.renderOpen) && now() - (this.renderAt ?? 0) > NEAR_CUT_MS; }
+  // A reshape's expected cost for Herdr's stop (fitsHost): shapeCost, or null before a rate has
+  // been learned (shapeLearn).
+  hostCost(turn, text) { return this.shapeRate == null ? null : this.shapeCost(turn, text); }
+  // Whether a run alone of est ms, started now, would be cut while a lighter draw could fit it:
+  // the time this draw has spent, read from the clock, and est pass Herdr's limit less the margin,
+  // and est with the margin alone does not. It waits, with no stop, for a draw with less work
+  // ahead of it (one on screen is owed and counts the draw as refused), up to a second
+  // OWED_DRAWS draws: then it runs alone once all the same (shapeHeld), as the estimate may be
+  // too high. A turn no draw can fit (est and the margin past the limit) still runs once, as a
+  // draw's first unit: its estimate may be wrong.
+  cutWhereNow(est) {
+    return est != null && est + HOST_MARGIN_MS <= HOST_MS && now() - (this.renderAt ?? 0) + est + HOST_MARGIN_MS > HOST_MS;
+  }
+  // Whether a reshape of est ms can fit no draw: est with the margin and the lightest base
+  // this pane draws (lightBase) over Herdr's limit. A turn that would fit a light draw but not
+  // this one is refused (fitsHost) and owed instead, with no stop, for up to OWED_DRAWS draws.
+  neverFits(est) { return est != null && est + this.lightBase() + HOST_MARGIN_MS > HOST_MS; }
+  // The least frameBase of the last LIGHT_DRAWS draws: a draw that shapes and builds nothing
+  // costs about its frameBase, so this is the lightest draw the pane has made of late. The
+  // least, not the last: a heavy draw does not make a turn look as if it could never fit.
+  // Over a window, not for ever: a pane that has grown heavier for good stops counting on a
+  // light draw that no longer comes. 0 before any draw is measured.
+  lightBase() { const b = this.baseLog; return b?.length ? Math.min(...b) : 0; }
+  // Whether a reshape expected to cost est, started now, ends in time: the time so far, est and
+  // the rest of the draw (the last draw's cost apart from shaping and building, frameBase, less
+  // what of it this draw has run) within Herdr's stop less the margin. An unknown cost does not.
+  fitsHost(est) {
+    if (est == null) return false;
+    const t = now() - (this.renderAt ?? 0);
+    const ran = t - Math.max(0, (this.shapeSpent ?? 0) - (this.shapeAtRender ?? 0)) - (this.buildSpent ?? 0);
+    return t + est + Math.max(0, (this.frameBase ?? 0) - ran) + HOST_MARGIN_MS <= HOST_MS;
+  }
+  // In the drain: true when a reshape of turn may not start now. One expected to end past
+  // Herdr's stop never starts (fitsHost); before a rate has been learned, one may, before the
+  // line, as before. Past NEAR_CUT_MS only the draw's first of a row on screen may (lineScreen:
+  // the walk's rows in view, not shapeInView's turns, so not a running turn off screen), if it
+  // fits. The draw's first row on screen refused, in the walk's order (the rows drawn, nearest
+  // first), is owed by its key (lineKey): the next frame tries it before the rows key and the
+  // running turn, behind the same check, while the view has not moved (payOwed).
+  lineCut(turn, text) {
+    if (!this.lineOn || !this.renderOpen) return false;
+    const est = this.hostCost(turn, text);
+    const fits = this.fitsHost(est);
+    const late = this.pastLine();
+    if (late ? this.lineFirst && this.lineScreen && fits : est == null || fits) return false;
+    if (!this.lineScreen) return true;
+    this.oweRow();
+    this.refuse(turn, text);
+    // Past the line the draw's first is spent once a row on screen is refused: the walk goes on
+    // with the rows drawn (memo hits) and stops at the first row off screen.
+    if (late) this.lineFirst = false;
+    return true;
+  }
+  // The walk's row (lineKey) owed to the next frame, if none is owed yet (payOwed).
+  oweRow() {
+    if (!this.lineOwed && this.lineKey != null) this.lineOwed = { key: this.lineKey, view: this.viewRange?.[0], wheel: this.wheelN ?? 0 };
+  }
+  // A row on screen refused by the fit check (lineCut, payOwed) or for the units run before
+  // its run alone (shapeHeld): counted on its turn once a draw, for its text (markSig), until
+  // it is shaped. At OWED_DRAWS, payOwed runs it alone. New text counts from 0: a turn held at
+  // 128 for its old text waits again (a running turn counted while its reply grew, too).
+  refuse(turn, text) {
+    const sig = this.markSig(turn, text);
+    if (turn.refused?.sig !== sig) turn.refused = { n: 0, at: -1, sig };
+    const r = turn.refused;
+    if (r.at === this.renders) return;
+    r.at = this.renders;
+    r.n++;
+  }
+  // The draws turn has been refused for this text (refuse).
+  refusedN(turn, text) { return turn.refused?.sig === this.markSig(turn, text) ? turn.refused.n : 0; }
+  // The row on screen the drain's line refused last frame: reshaped now, ahead of the rows key
+  // and the running turn, if the view has not moved since (no wheel, no jump waiting, the same
+  // top row) and its cost with the rest of the draw fits (fitsHost: Herdr stops on the draw's
+  // total, in either order).
+  payOwed() {
+    const o = this.lineOwed;
+    this.lineOwed = null;
+    if (!o || !this.renderOpen || o.view !== this.viewRange?.[0] || o.wheel !== (this.wheelN ?? 0) || this.scrollTo) return;
+    const i = this.baseIndex?.get(o.key);
+    const turn = i == null ? null : this.baseRows[i]?.turn;
+    if (!turn) return;
+    // The same check as in the walk, from the draw's start: one that fits, or one that can
+    // never fit (shapeHeld runs it alone, the draw's first unit). An unknown cost goes ahead, as
+    // a draw's first does. One that fits a lighter draw but not this one is refused and waits
+    // for the walk to owe it again (owedHeldDraws counts these draws), until it has been refused
+    // OWED_DRAWS draws: then it runs alone (owedRun), whatever lightBase says.
+    const text = this.replyText(turn);
+    const est = this.hostCost(turn, text);
+    const due = this.refusedN(turn, text) >= OWED_DRAWS;
+    if (!due && est != null && !this.neverFits(est) && !this.fitsHost(est)) {
+      this.refuse(turn, text);
+      this.owedHeldDraws = (this.owedHeldDraws ?? 0) + 1;
+      return;
+    }
+    this.owedPaid = (this.owedPaid ?? 0) + 1;
+    this.owedAt = this.renders;
+    if (due) this.owedRun = turn;
+    this.shape(turn);
+    this.owedRun = null;
   }
   reshape(turn, live, q, P, why, text) {
     const cmd = commandParts(turn);
@@ -5222,6 +5531,8 @@ export default class Threads extends View {
     if (this.anchor || this.anchorDue) this.fitKey = null;
     this.anchor = null;
     this.anchorDue = false;
+    // A landing's hold still to take goes with it (pick, restart, a wheel).
+    this.openLand = false;
   }
   // Why a held place is let go now (letGo), or null:
   // - a jump, which puts the view somewhere new;
@@ -5317,7 +5628,7 @@ export default class Threads extends View {
     // Just after the opening, parts above the end are still measured: a scroll up takes the
     // place on screen (takeAnchor), so measures above it move nothing, and takes it again at
     // each wheel while parts wait (the rows above the new top keep the heights they had).
-    if (this.probeLeft > 0 && (this.openHold || this.anchor?.open) && !this.follow) {
+    if (this.openUnsettled() && (this.openHold || this.anchor?.open) && !this.follow) {
       this.openHold = false;
       this.dropAnchor();
       const a = this.takeAnchor();
@@ -5325,6 +5636,9 @@ export default class Threads extends View {
       this.fitKey = null;
     }
   }
+  // Parts still to measure or rows still to reshape once the list shows: either moves rows
+  // above the view, so the end, or the reader's place, is held until neither is left.
+  openUnsettled() { return this.probeLeft > 0 || this.staleRows?.length > 0 || this.shapeLeft > 0; }
   // The person's latest scroll, by direction (dy > 0 is up); the other direction is forgotten.
   scrolledBy(dy, now) {
     this.upAt = dy > 0 ? now : 0;
@@ -7256,7 +7570,12 @@ export default class Threads extends View {
     // One budget a draw; while rows are built over several draws (rowJob), one for them all,
     // as before.
     if (!this.rowJob) this.shapeSpent = 0;
+    // The draw's shaping units so far, and whether one that can never fit ran (shapeHeld).
+    this.unitsRun = 0;
+    this.unitAlone = false;
+    this.owedRun = null;
     const spent = this.shapeSpent ?? 0;
+    this.shapeAtRender = spent;
     this.buildSpent = 0;
     this.shapeFrame = (this.renders ?? 0) + 1;
     this.renderOpen = true;
@@ -7273,6 +7592,8 @@ export default class Threads extends View {
     }
     // The draw's cost apart from reshaping and building rows sets the next draw's time for them.
     this.frameBase = Math.max(0, now() - this.renderAt - Math.max(0, (this.shapeSpent ?? 0) - spent) - (this.buildSpent ?? 0));
+    (this.baseLog ??= []).push(this.frameBase);
+    if (this.baseLog.length > LIGHT_DRAWS) this.baseLog.shift();
     return out;
   }
 
@@ -7307,6 +7628,9 @@ export default class Threads extends View {
       cx.timer.after(Math.max(0, REWRAP_PAUSE_MS - (Date.now() - (this.sizeAt ?? 0))) + 5, (cx) => { this.holdNext = false; cx.notify(); });
     }
     this.react(cx);
+    // A row on screen the drain's line refused last frame, while the draw is young: after the
+    // column's width and the settings (react), which its shape keys on.
+    if (!light) this.payOwed();
     // Here and not in rows(): the timing report changes the selection for a moment.
     if (this.pinVisit && this.sel !== this.pinVisit) this.pinVisit = null;
     if (this.pinResume && this.sel !== this.pinResume.key) this.pinResume = null;
@@ -9191,6 +9515,17 @@ export default class Threads extends View {
     if (s?.loaded && this.sessions.length === 1 && s.turns.length === 0) return noTurns();
     const why = this.holdDone();
     if (why) this.letGo(why, cx);
+    // A jump that landed while rows above it are still reshaped or measured: once its scrolls
+    // and its lift are drawn, the place on screen is held, as a wheel's is (listWheel). Until
+    // then the rows above the view wait (reshapeStale).
+    if (this.openLand && this.follow) this.openLand = false;
+    // Not while the lift is drawn: takeAnchor has no place then, and the landing would end with
+    // no hold. (The lift's 120 ms timer runs before the 130 ms one; this is for any other order.)
+    if (this.openLand === "due" && !this.scrollAsk && !this.landLift) {
+      const a = this.takeAnchor();
+      if (a) { a.open = true; this.anchor = a; this.fitKey = null; }
+      this.openLand = false;
+    }
     const rows = this.rows();
     // The first rows of a session still being built, in slices over several frames (buildStep):
     // no row yet, and no empty state either, which would say there is nothing while the turns
@@ -9220,6 +9555,10 @@ export default class Threads extends View {
     // frame is already asked for (render).
     // A reader at the end through a re-wrap stays at the end: in this frame, every frame, until
     // the place is let go (holdDone).
+    // A jump away from the end (first, #n, a step, a pin, the outline) ends the hold on the
+    // end: while rows above were still reshaped, the end was held and the jump dropped once
+    // its wait was over (SCROLL_WAIT_MS).
+    if (this.scrollTo && !this.follow) this.toBottom = false;
     if (this.anchor?.end && rows.length && !this.scrollTo) { this.pinningUntil = Date.now() + 1000; this.askEnd(); }
     const unsettled = this.shapeLeft > 0 || this.staleRows?.length || this.rowJob;
     if (!(this.toBottom || this.scrollTo) || !unsettled) this.scrollWait = 0;
@@ -9234,8 +9573,11 @@ export default class Threads extends View {
     // slots carry the last measures, which came in after the frame before was laid out (the
     // rig showed a 79 px slip there, and a 15 px one on a short session's first frame shown).
     const partsDue = bottomHeld && (this.openActive() || this.openHold);
-    if (this.openHold && !(this.probeLeft > 0)) this.openHold = false;
-    if ((this.toBottom || this.scrollTo) && (unsettled || partsDue) && (bottomHeld || Date.now() - this.scrollWait < SCROLL_WAIT_MS)) {
+    if (this.openHold && !this.openUnsettled()) this.openHold = false;
+    // A jump during the opening's drain (openHold) does not wait for the rows to settle: the
+    // landing holds its place (openLand) while the rows above are reshaped. Elsewhere it waits
+    // up to SCROLL_WAIT_MS, as before.
+    if ((this.toBottom || this.scrollTo) && (unsettled || partsDue) && (bottomHeld || (!this.openHold && Date.now() - this.scrollWait < SCROLL_WAIT_MS))) {
       // A return's wait for the probe (until, below) starts once the rows are reshaped.
       if (this.scrollTo?.until) this.scrollTo.until = Math.max(this.scrollTo.until, Date.now() + 400);
       // To the end in this frame, every frame while they settle: rows reshaped above the view
@@ -9265,6 +9607,11 @@ export default class Threads extends View {
     } else if (this.scrollTo) {
       // A pin's place can be gone (the reply changed): the next best item, then the card.
       const st = this.scrollTo;
+      this.openLand = this.openUnsettled();
+      // Due once its scrolls (16, 48 ms) and its lift (120 ms) are drawn; 130 is a margin over
+      // those. Only for this landing (landId): an earlier jump's timer does not end a later one's.
+      const land = (this.landId = (this.landId ?? 0) + 1);
+      if (this.openLand) cx.timer.after(130, (cx) => { if (this.openLand && this.landId === land) this.openLand = "due"; cx.notify(); });
       // The pane's own scrolls never count as the person's (stickCheck); debugScroll does.
       if (st.person) { this.upAt = Date.now() + 600; this.downAt = this.upAt; }
       else { this.scrollBusyUntil = Date.now() + 500; this.upAt = 0; this.downAt = 0; }
@@ -9444,15 +9791,36 @@ export default class Threads extends View {
       .child(body.opacity(0))
       .child(v_flex().absolute().top(0).left(0).right(0).bottom(0).bg(t.background).when(!quiet, (el) => el.child(this.openView(t, s))));
   }
-  // Ready to show: every row built and shaped, and the list last drawn with them at its end
-  // with every part in view measured (or tried three times, as the probe gives up). A short
-  // session waits for the same, under the background alone (the rig showed its first rows
-  // move twice in 25 ms when they were shown as soon as they were built).
+  // Ready to show: every row built, the list last drawn with them at its end, and the rows near
+  // it (nearSpan) shaped, none left stale or blank, with every part measured (or tried three
+  // times, as the probe gives up). The rows further up are reshaped after the list shows, with
+  // the end held while they are (render): a long plain chat left 5,400 rows to reshape after
+  // its read, and the list waited 42 to 106 s for them on the rig. A short session waits for
+  // the same, under the background alone (the rig showed its first rows move twice in 25 ms
+  // when they were shown as soon as they were built).
   openReady(rows) {
-    if (this.rowJob || this.staleRows?.length || this.shapeLeft > 0 || !rows.length) return false;
+    if (this.rowJob || !rows.length) return false;
     const n = Number(String(this.lastRange ?? "").split("/")[1]);
     if (n !== rows.length || !this.bottomShown || !this.viewRange) return false;
-    return !this.partsWaiting(rows, this.viewRange[0], this.viewRange[1]);
+    const span = this.nearSpan();
+    if (!span) return false;
+    const [a, b, off] = span;
+    if (this.staleRows?.some((i) => i >= a && i < b)) return false;
+    // A blank shape is a row never shaped. (A shape kept as numbers only is shaped: its row
+    // is made whole when drawn.)
+    for (let i = a; i < b; i++) if (this.baseRows[i].shape?.blank) return false;
+    return !this.partsWaiting(rows, a + off, b + off);
+  }
+  // The rows near the view, [from, to) in baseRows: the rows drawn last and SHAPE_NEAR either
+  // side, with off, what the list puts before baseRows' first row (a spacer or a gap), so
+  // [from + off, to + off) in rowsMemo. Null before the list is drawn.
+  nearSpan() {
+    const rows = this.baseRows ?? [];
+    const vr = this.viewRange;
+    if (!vr || !rows.length) return null;
+    const memo = this.rowsMemo ?? [];
+    const off = memo[0]?.kind === "spacer" || memo[0]?.kind === "gap" ? 1 : 0;
+    return [Math.max(0, vr[0] - off - SHAPE_NEAR), Math.min(rows.length, vr[1] - off + SHAPE_NEAR), off];
   }
   // Whether a part in rows a..b is still to be measured, by the probe's own test (probeDue).
   partsWaiting(rows, a, b) {
@@ -9545,7 +9913,9 @@ export default class Threads extends View {
       for (const t of s.turns) if (t.sender?.kind === "you" && !t.cmd) prompts++;
       let model = null;
       for (let i = s.turns.length - 1; i >= 0 && !model; i--) model = s.turns[i].model ?? null;
-      o.stats = { tools: st.tools, tokens: st.tokens, prompts, model, pins: this.pinStore.sessions[this.sessionKey(s)]?.pins?.length ?? 0 };
+      // The newest prompt once read, found here once for each version: it collapses the whole
+      // prompt's white space, and a pasted prompt can be 950 KB.
+      o.stats = { tools: st.tools, tokens: st.tokens, prompts, model, pins: this.pinStore.sessions[this.sessionKey(s)]?.pins?.length ?? 0, newest: s.loaded ? newestPrompt(s.turns) : null };
     }
     const h = harnessOfFile(s.file);
     const read = s.offset > 0 || s.loaded;
@@ -9555,7 +9925,7 @@ export default class Threads extends View {
       agent: h === "claude" ? "Claude Code" : this.agent().name, model: o.stats.model, start: s.turns[0]?.ts ?? null, active: o.mtime,
       working: Boolean(s.loaded && s.turns.length && this.isLive(s, si, s.turns.length - 1)),
       prompts: read ? o.stats.prompts : null, tools: read ? o.stats.tools : null, tokens: read ? o.stats.tokens : null, pins: o.stats.pins,
-      newest: (s.loaded ? newestPrompt(s.turns) : null) ?? o.newest, now: Date.now(),
+      newest: o.stats.newest ?? o.newest, now: Date.now(),
     };
     // Every figure holds its peak, as the bar does: a read started over part way (a stall,
     // a replaced file) counts up from the top again under what was already shown.

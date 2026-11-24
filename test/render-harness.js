@@ -231,7 +231,8 @@ export function setup() {
       const size = (i) => (typeof sizes === "number" ? sizes : sizes[i]);
       lastList = { sizes: typeof sizes === "number" ? Array.from({ length: n }, () => sizes) : [...sizes], keys: [], draw };
       for (let i = 0; i < n; i++) { if (!(size(i) > 0)) throw new Error(`item ${keyOf(i)} has height ${size(i)}`); lastList.keys.push(keyOf(i)); }
-      draw(listWindow ? listWindow(n) : { start: 0, end: n });
+      lastList.range = listWindow ? listWindow(n, _id) : { start: 0, end: n };
+      draw(lastList.range);
       return el;
     },
     TextView: { html: (id, html) => { const calls = []; views.push({ id, html, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); }, markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: (opts) => { const st = { opts, handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
@@ -384,6 +385,13 @@ export async function paneWith(file, prep, tries = 200) {
 }
 
 export function draw(v, cx) { v.render(cx); v.report(); return v; }
+
+// ---- Pane helpers the render tests and the topic files share ----
+// The busy fixture, made once per process (as app is: reset() leaves it).
+let busyFile = null;
+export const busy = () => (busyFile ??= fixture("--busy", "130"));
+// The text a draw gave its elements.
+export const drawnText = (calls) => calls.filter(([n, x]) => n === "child" && typeof x === "string").map(([, x]) => x);
 
 export async function scripted(events) {
   const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");

@@ -142,6 +142,83 @@ test("shaping: a turn left for its cost ends the pass that met it, so a draw nev
   } finally { v.shapeBudget = null; v.shapeRate = undefined; H.listWindow = null; }
 }, 30000);
 
+test("shaping: scrolled up, a turn left for its cost past the rows on screen ends the pass, so a draw looks only at the rows on screen and the rows it reshapes", async () => {
+  const at = (k) => new Date(Date.UTC(2026, 9, 1, 8) + k * 60000).toISOString();
+  const lines = [];
+  for (let k = 0; k < 1500; k++) lines.push(
+    { type: "user", uuid: `u${k}`, timestamp: at(2 * k), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: `Turn ${k + 1}: zerb kazo quil` } },
+    { type: "assistant", uuid: `a${k}`, timestamp: at(2 * k + 1), sessionId: "s", message: { id: `m${k}`, role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "The cart **total** agrees with `sum()`." }] } });
+  const file = join(mkdtempSync(join(tmpdir(), "threads-cost-up-")), "c.jsonl");
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const { v, cx } = await pane(file);
+  v.debug = false;
+  // The clock of the test above: 1 ms a reshape, 12 ms a draw, every turn expected at 1.5 ms,
+  // so a draw's 12th turn waits for its cost.
+  for (const [name, ms] of [["reshape", 1], ["stepLinks", 0], ["mdHeight", 0]]) {
+    const f = v[name];
+    v[name] = function (...a) {
+      const s0 = this.shapeSpent ?? 0;
+      const t0 = performance.now();
+      const r = f.apply(this, a);
+      if (name === "reshape") this.shapeSpent = s0 + ms - (performance.now() - t0);
+      else if ((this.shapeSpent ?? 0) !== s0) this.shapeSpent = s0 + ms;
+      return r;
+    };
+  }
+  const t = v.current().turns[700];
+  v.shapeBudget = 12;
+  v.shapeRate = 1.5 / (t.prompt.length + v.replyText(t).length);
+  let calls = 0;
+  let inView = false;
+  const shape = v.shape;
+  let looked = new Set();
+  v.shape = function (...a) { if (!inView) { calls++; looked.add(a[0]); } return shape.apply(this, a); };
+  const siv = v.shapeInView;
+  v.shapeInView = function (...a) { inView = true; try { return siv.apply(this, a); } finally { inView = false; } };
+  // The second turn on screen made long enough that its expected cost (about 15 ms) does not
+  // fit what is left once the first turn in view is reshaped: in that draw it is left for its
+  // cost among the rows drawn, and the walk still looks at the rows drawn after it.
+  const big = v.rowsMemo.slice(700, 712).map((x) => x.turn).filter(Boolean)[1];
+  big.prompt = `${big.prompt} ${"zerb kazo quil ".repeat(40)}`;
+  // Each pass: its walk's shape() calls, the rows it took off the list, the rows on screen
+  // still to reshape as it began (the walk's first rows, looked at even when left), whether
+  // it walked as a reader scrolled up does, the rows drawn among them not looked at, and
+  // whether big was among them and left.
+  const passes = [];
+  const rs = v.reshapeStale;
+  v.reshapeStale = function (...a) {
+    const c0 = calls;
+    const s0 = this.staleRows.length;
+    const near = this.follow ? null : this.nearStale(this.staleRows);
+    const drawn = near?.drawn ?? 0;
+    const drawnTurns = (near?.rows.slice(0, drawn) ?? []).map((i) => this.baseRows[i]?.turn).filter(Boolean);
+    const up = !this.follow;
+    looked = new Set();
+    const r = rs.apply(this, a);
+    const bi = this.baseRows.findIndex((x) => x.turn === big);
+    passes.push([calls - c0, s0 - this.staleRows.length, drawn, up, s0, drawnTurns.filter((t) => !looked.has(t)).length, drawnTurns.includes(big) && this.staleRows.includes(bi)]);
+    return r;
+  };
+  // Scrolled up to turn 700 of 1,500, away from the end.
+  H.listWindow = () => ({ start: 700, end: 712 });
+  try {
+    v.follow = false;
+    v.width -= 40;
+    for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || !passes.length); k++) { cx.flush(16); v.render(cx); }
+    expect(v.staleRows).toEqual([]);
+    const up = passes.filter((x) => x[3] && x[4] > 100);
+    expect(up.length).toBeGreaterThan(20);
+    expect(up.some((x) => x[2] > 0)).toBe(true);
+    // big was left among the rows drawn, and every row drawn was looked at all the same.
+    expect(up.filter((x) => x[6]).length).toBeGreaterThan(0);
+    expect(up.filter((x) => x[6]).map((x) => x[5])).toEqual(up.filter((x) => x[6]).map(() => 0));
+    // Every such pass looks at the rows on screen, the rows it reshapes, and the one turn past
+    // them it leaves for its cost: never at the hundreds of rows still waiting after it.
+    for (const [n, d, drawn] of up) expect(n).toBeLessThanOrEqual(d + drawn + 1);
+    expect(passes.length).toBeLessThanOrEqual(Math.ceil(passes[0][4] / 10) + 5);
+  } finally { v.shapeBudget = null; v.shapeRate = undefined; H.listWindow = null; }
+}, 30000);
+
 test("shaping: a stale turn over the budget waits while the running turn reshapes first in every draw, and is shaped in the first draw after", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
   v.debug = false;
