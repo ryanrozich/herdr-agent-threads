@@ -823,10 +823,11 @@ export function fmtTime(ts) {
   return `${h % 12 || 12}:${String(d.getMinutes()).padStart(2, "0")}\u00a0${h < 12 ? "AM" : "PM"}`;
 }
 
+// Decimal units, as a file listing shows them: 499,185,946 bytes is "499 MB".
 export function fmtBytes(n) {
   if (n == null) return "";
-  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
-  return `${Math.round(n / (1024 * 1024))} MB`;
+  if (n < 999500) return `${Math.max(1, Math.round(n / 1e3))} KB`;
+  return `${Math.round(n / 1e6)} MB`;
 }
 
 // "claude-opus-5-5" -> "opus 5.5"; "claude-haiku-4-5-20251001" -> "haiku 4.5".

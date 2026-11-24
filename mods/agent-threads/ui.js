@@ -1,7 +1,7 @@
 // agent-threads: small pure helpers for drawing (no Herdr imports), tested under bun.
 
 import { harnessOf } from "./harness.js";
-import { fmtTokens, fmtPct } from "./core/turns.js";
+import { fmtTokens, fmtPct, fmtDuration, fmtTime, shortModel, fmtBytes } from "./core/turns.js";
 
 // The panel action for a key press, or null. Chords with cmd, ctrl, alt or fn belong to
 // Herdr and the system (cmd-c, cmd-shift-t, ctrl-tab), so they are never taken.
@@ -14,7 +14,7 @@ const KEYS = {
 // Pin keys give way to the quote key, so a quote key of p or u keeps working. The person who
 // chose it pins with the pin on an open turn's top line, and unpins with that pin or the
 // Pinned view's header button (the list's header has no pin button).
-const PIN_KEYS = { p: "pin", u: "undoUnpin", 1: "go:1", 2: "go:2", 3: "go:3", 4: "go:4", 5: "go:5" };
+const PIN_KEYS = { p: "pin", u: "undoUnpin", 1: "go:1", 2: "go:2", 3: "go:3", 4: "go:4", 5: "go:5", 6: "go:6", 7: "go:7" };
 // Under a search, n steps to the next match back in time (older) and Shift n to the newer
 // one, as n and N do in less and vim. n gives way to a quote key of n, as the pin keys do,
 // so a quote key someone chose keeps working.
@@ -129,7 +129,7 @@ export function keySheet(quoteKey = "q", { outline = true, ledger = false, inPan
       [["→", "←"], "Open or close the turn's work, a level at a time"], [["i"], "Show or hide the turn's numbers"], [["t"], "Focus the terminal"],
     ]],
     ["Pins", [
-      ...(pin("p") ? [[["p"], "Pin or unpin the selected turn"]] : []), [["1-5"], "Return to that pin"],
+      ...(pin("p") ? [[["p"], "Pin or unpin the selected turn"]] : []), [["1-7"], "Return to that pin"],
       ...(pin("u") ? [[["u"], "Undo the last unpin"]] : []), [["v"], "Open or go to the Pinned column"],
     ]],
     ["Image viewer", [
@@ -2842,14 +2842,17 @@ export function boxHit(layout, x, names) {
   return null;
 }
 
-// A pin in the Pinned column and the narrow Pinned view is a compact row, so five fit in a
+// A pin in the Pinned column and the narrow Pinned view is a compact row, so seven fit in a
 // 240 to 400 px column at a 1150 px window: its digit in an accent badge on the left, then
 // the turn's number and time, two lines of the prompt and one of the reply. Every line has
 // a fixed height and is cut with an ellipsis where it runs long, so the drawn row is the
-// stated height. The prompt is 13 px (PROMPT_CHAR wide), the reply 12.5 px.
+// stated height. The prompt is 13 px (PROMPT_CHAR wide), the reply 12.5 px. At its right
+// edge, centred, the unpin control: a 24 px button UNPIN_R in from the edge, over room the
+// text always leaves it (UNPIN_ROOM past PAD_X, 4 px short of the button), so the text never
+// moves when it shows.
 export const PIN_ROW = Object.freeze({
   PAD_X: 12, PAD_T: 8, PAD_B: 9, BADGE: 20, GAP_X: 10, META: 16, GAP: 3, LINE: 19, REPLY: 18,
-  SIZE: 13, REPLY_SIZE: 12.5, PROMPT_LINES: 2,
+  SIZE: 13, REPLY_SIZE: 12.5, PROMPT_LINES: 2, UNPIN: 24, UNPIN_R: 6, UNPIN_ROOM: 22,
 });
 export function pinRowHeight(p) {
   return PIN_ROW.PAD_T + PIN_ROW.META + PIN_ROW.GAP + Math.max(1, Math.min(PIN_ROW.PROMPT_LINES, p)) * PIN_ROW.LINE
@@ -2888,7 +2891,7 @@ export function pinPromptText(prompt) {
 }
 // { prompt: 1 or 2 lines, reply: one line, height } for a compact row width px wide.
 export function pinRowShape({ prompt, reply, width }) {
-  const tw = Math.max(60, width - 2 * PIN_ROW.PAD_X - PIN_ROW.BADGE - PIN_ROW.GAP_X);
+  const tw = Math.max(60, width - 2 * PIN_ROW.PAD_X - PIN_ROW.BADGE - PIN_ROW.GAP_X - PIN_ROW.UNPIN_ROOM);
   const k = PIN_ROW.SIZE / 13;
   const p = rowLines(prompt || "(empty prompt)", PIN_ROW.PROMPT_LINES, tw / (ROW.PROMPT_CHAR * k));
   const r = rowLines(reply || " ", 1, tw / (ROW.REPLY_CHAR * (PIN_ROW.REPLY_SIZE / 13)));
@@ -3271,4 +3274,66 @@ export function bubbleStyle(value, t, agent) {
   }
   const ink = bubbleInk(hex);
   return { fill: hex, ink, sub: alpha(ink, 0.78), bar: alpha(ink, 0.5), outline: false };
+}
+
+// ---- the opening (main.js openView) ----
+// While a session is first read, and until its last screenful is measured, the pane shows what
+// it knows of the session in place of rows. The lines, each on a row of its own from the first
+// paint, so a figure arriving never moves another: the title; what is read of the total; the
+// turns found; the agent and model; when it started and was last active (or "Working now",
+// once the read is complete and its last turn is running); the time those span, idle gaps
+// included; the counts so far; the newest typed prompt's head and its text. A line whose
+// figure is not known yet is empty. Every figure is what the pane knows at that moment.
+export const OPEN_ROWS = 9;
+// Decimal megabytes, as a file listing shows them (fmtBytes too).
+const OPEN_MB = 1e6;
+const openN = (x) => x.toLocaleString();
+const openMany = (x, w) => `${openN(x)} ${w}${x === 1 ? "" : "s"}`;
+// The pane's own form for a time: the clock today, else the day and the clock.
+export function openWhen(ts, now = Date.now()) {
+  return dayKey(ts) === dayKey(now) ? fmtTime(ts) : `${dayLabel(ts, now)} ${fmtTime(ts)}`;
+}
+// "42s", "3h 05m" (as a turn's time is written), and "6d 6h" past a day.
+export function fmtSpan(ms) {
+  if (!(ms > 0)) return "";
+  if (ms < 86400000) return fmtDuration(ms);
+  const h = Math.floor(ms / 3600000);
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+// o: { offset, size, pct, units ("bytes", or "turns" for OpenCode's prompts), turns, loaded,
+// agent, model, start, active, working, prompts, tools, tokens, pins, newest, now }.
+export function openLines(o) {
+  const prompts = o.units === "turns";
+  // Under a MB, the sizes are fmtBytes' own ("5 KB", never "0.0 MB"), each with its unit.
+  const kb = !prompts && fmtBytes(o.size).endsWith(" KB");
+  const amount = (x) => (prompts ? openN(x) : kb ? fmtBytes(x) : (x / OPEN_MB).toFixed(1));
+  const unit = prompts ? " prompts" : kb ? "" : " MB";
+  const read = !(o.size > 0) ? "" : o.offset > 0 && o.pct != null ? `${amount(Math.min(o.offset, o.size))} of ${amount(o.size)}${unit} · ${o.pct}%` : `${amount(o.size)}${unit}`;
+  const turns = o.offset > 0 || o.loaded ? `${openMany(o.turns ?? 0, "turn")}${o.loaded ? "" : " so far"}` : "";
+  const agent = [o.agent, o.model ? shortModel(o.model) : null].filter(Boolean).join(" · ");
+  const active = o.loaded && o.working ? "Working now" : o.active ? `last active ${openWhen(o.active, o.now)}` : null;
+  const when = [o.start ? `Started ${openWhen(o.start, o.now)}` : null, active].filter(Boolean).join(" · ");
+  const spans = o.start && o.active && o.active > o.start ? `Spans ${fmtSpan(o.active - o.start)}` : "";
+  const counts = [o.prompts != null ? openMany(o.prompts, "prompt") : null, o.tools != null ? openMany(o.tools, "tool call") : null,
+    o.tokens != null ? `${fmtTokens(o.tokens)} tokens` : null, o.pins > 0 ? openMany(o.pins, "pin") : null].filter(Boolean);
+  const head = o.newest ? `Newest prompt${o.newest.ts ? ` · ${openWhen(o.newest.ts, o.now)}` : ""}` : "";
+  return ["Reading this session", read, turns, agent, when, spans, counts.length ? `So far: ${counts.join(" · ")}` : "", head, o.newest?.text ?? ""];
+}
+// The newest prompt a person typed, by the rule that gives a turn the prompt bubble: their own
+// sender, not a command line, with text. Plain text, its whitespace collapsed. Null when none.
+export function newestPrompt(turns) {
+  for (let i = (turns?.length ?? 0) - 1; i >= 0; i--) {
+    const t = turns[i];
+    if (t?.sender?.kind !== "you" || t.cmd) continue;
+    const text = String(t.prompt ?? "").replace(/\s+/g, " ").trim();
+    if (text) return { text, ts: t.ts ?? null };
+  }
+  return null;
+}
+// A line split into its figures (true: a digit run, with its commas and point) and the rest,
+// so each digit can take a cell of one width and a count does not wobble as it grows.
+export function figRuns(text) {
+  const out = [];
+  for (const m of String(text ?? "").matchAll(/(\d[\d,.]*\d|\d)|([^\d]+)/g)) out.push(m[1] ? [m[1], true] : [m[2], false]);
+  return out;
 }

@@ -14,6 +14,7 @@ Run them in this order, the order CI runs them (`.github/workflows/ci.yml`). The
 | Check | Command | What a pass proves | Time |
 |---|---|---|---|
 | Lint | `bunx @biomejs/biome@2.6.4 lint` | the code follows `biome.jsonc` | seconds |
+| Lint file size | `sh test/lint-size.sh` | every file Biome lints is under its 1 MiB limit, so Biome skips none | seconds |
 | Shell scripts | `shellcheck -S warning $(git ls-files '*.sh')` | the installer and the scripts have no warnings | seconds |
 | Extractor syntax | `for f in mods/*/core/extract*.jq; do echo '"x"' \| jq -R -f "$f" > /dev/null; done` | every jq extractor parses | instant |
 | Tests | `sh test/leftover-check.sh` | `bun test` passes and leaves nothing behind | about a minute in CI |
