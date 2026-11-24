@@ -359,6 +359,35 @@ test("timeline press: a press within 4 px of a bar finds its step; past 4 px, th
   expect([hit(x0 - 5), hit(x1 + 5)]).toEqual([h.key, h.key]);
 });
 
+test("timeline press: an unfinished call's bar that starts left of its narrow turn is found by a press on it there, past the turn before's box", () => {
+  // 100 turns of 60 s across 500 px, each under 6 px wide; turn 12 (index 11) stopped after a
+  // Read, with a Bash that never returned, the others text only, so no Tools bar. The Bash's
+  // bar is 6 px wide, so it starts left of its turn, over the break and the turn before.
+  const heads = Array.from({ length: 100 }, (_, i) => ({
+    ...head(turn(i + 1, i === 11 ? ["a", [["Read", "b", 500, 800]], [["Bash", "sleep", 1000, null]]] : ["a"], i === 11 ? { interrupted: true, reply: null } : {})),
+    t0: T0 + i * 120000,
+  }));
+  const L = timelineLayout(heads, 500, "clock", T0 + 1e9);
+  const [p, t] = [L.turns[10], L.turns[11]];
+  expect(t.w).toBeGreaterThan(2);
+  expect(t.w).toBeLessThan(6);
+  const bash = stepsOf(heads[11]).find((it) => it.open);
+  const bar = L.spans.get("tools|tools|0").find(([a, b]) => a < t.x && t.x < b);
+  expect(bar[0]).toBeCloseTo(t.x + t.w - 6, 9);
+  expect(bar[2]).toBe(1);
+  // At the bar's left end, inside the turn before's box: the Bash, not the turn before.
+  const at = bar[0] + 0.25;
+  expect(at).toBeLessThan(p.x + p.w);
+  expect(timelineHit(L, heads, at, "tools")).toEqual({ turn: heads[11].key, key: bash.key });
+  // In the Model lane, or in none, the turn before's reply bar (3 px, at its turn's end) is under
+  // the press too, and a bar of the turn the press is in comes first.
+  const reply = stepsOf(heads[10]).find((it) => it.lk === "reply");
+  expect(timelineHit(L, heads, at, "model")).toEqual({ turn: heads[10].key, key: reply.key });
+  expect(timelineHit(L, heads, at, null)).toEqual({ turn: heads[10].key, key: reply.key });
+  // Left of the bar, no bar under the press: the turn before's heading, as before.
+  expect(timelineHit(L, heads, p.x + 0.1, "tools")).toEqual({ turn: heads[10].key, key: heads[10].key });
+});
+
 test("timeline press: a press at no number finds nothing", () => {
   const h = head(turn(1, [[["Read", "a", 30000, 40000]]]));
   const L = timelineLayout([h], 400, "clock");
