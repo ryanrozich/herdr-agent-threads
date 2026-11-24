@@ -19,10 +19,12 @@ import {
   pinPane,
   PINS,
   pinsShown,
+  pinWrites,
   rec,
   recordFiles,
   ROW,
   saved,
+  settleRows,
   setup,
   svgs,
   theme,
@@ -75,6 +77,7 @@ test("pins saved before seven load unchanged: the same pins, in the same order, 
   for (const i of [4, 0, 2, 5, 1]) { first.v.sel = k[i]; first.v.action("pin", first.cx); }
   await saved();
   const text = recordFiles[PINS];
+  const writes = pinWrites;
   const ids = allPins(JSON.parse(text)).map((p) => p.id);
   expect(ids.length).toBe(5);
   // A new pane on the same session reads that file.
@@ -83,6 +86,8 @@ test("pins saved before seven load unchanged: the same pins, in the same order, 
   expect(v.pinnedList().map((p) => p.pin.id).sort()).toEqual([...ids].sort());
   expect(v.pinnedList().map((p) => p.key)).toEqual([0, 1, 2, 4, 5].map((i) => k[i]));
   expect(recordFiles[PINS]).toBe(text);
+  // Not written again, not even with the same bytes.
+  expect(pinWrites).toBe(writes);
 });
 
 // The Pinned view with three pins, in this pane (under 480 px), in a list box 700 px tall so
@@ -668,10 +673,17 @@ test("the Pinned column: a press on a button the pane did not draw selects its p
   expect(v.sel).toBe(c);
 });
 
-// The rows' heights as the list takes them, with a count of the walks over them (each for...of).
+// The rows' heights as the list takes them, with a count of the walks over them (each for...of)
+// and of the heights read one by one (by index, as a for loop or reduce reads them).
 const walkedSlots = (v) => {
-  const n = { walks: 0 };
-  const slots = new Proxy(v.rows().map((r) => v.height(r)), { get(t, k) { if (k === Symbol.iterator) n.walks++; return Reflect.get(t, k); } });
+  const n = { walks: 0, reads: 0 };
+  const slots = new Proxy(v.rows().map((r) => v.height(r)), {
+    get(t, k) {
+      if (k === Symbol.iterator) n.walks++;
+      else if (typeof k === "string" && /^\d+$/.test(k)) n.reads++;
+      return Reflect.get(t, k);
+    },
+  });
   return { slots, n };
 };
 
@@ -683,8 +695,12 @@ test("outside the Pinned view the rows' unpin buttons cost nothing a frame: a lo
   const a = walkedSlots(pv);
   expect(pv.pinButtonRows(pv.rows(), a.slots).length).toBeGreaterThan(0);
   expect(a.n.walks).toBe(1);
+  expect(a.n.reads).toBeGreaterThan(0);
   // A long Chat, a list taller than its box or not: no buttons, and no walk over its rows.
   const { v, cx } = await pinPane("--extra", "400");
+  // Its rows are all built before anything is counted: the build runs in timed slices, and on a
+  // loaded machine the first frames hold only part of them.
+  settleRows(v, cx);
   expect(v.view).toBe("all");
   expect(v.rows().length).toBeGreaterThan(400);
   for (const listH of [700, 1e9]) {
@@ -692,6 +708,7 @@ test("outside the Pinned view the rows' unpin buttons cost nothing a frame: a lo
     const b = walkedSlots(v);
     expect(v.pinButtonRows(v.rows(), b.slots)).toEqual([]);
     expect(b.n.walks).toBe(0);
+    expect(b.n.reads).toBe(0);
     expect(unpinLayer(v, cx).has).toBe(false);
   }
   // Back from the Pinned view in the same pane, the same.
@@ -700,6 +717,7 @@ test("outside the Pinned view the rows' unpin buttons cost nothing a frame: a lo
   const c = walkedSlots(pv);
   expect(pv.pinButtonRows(pv.rows(), c.slots)).toEqual([]);
   expect(c.n.walks).toBe(0);
+  expect(c.n.reads).toBe(0);
 });
 
 // The pointer rests on a row (n), a key moves the rows under it (go), and a press with no move:
