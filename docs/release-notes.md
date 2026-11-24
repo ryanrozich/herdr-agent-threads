@@ -19,7 +19,7 @@ Open a large session at its end in seconds, see the Trajectory in a pane of its 
 - A search starts at its newest match and centres it. `n` steps to the next older match and `Shift n` to the newer one, and two arrows beside the count do the same. The count is your place among the matches, counted from the newest: "1 of 4 · newest first", then "4 of 4 · first mention" at the oldest. The arrow with nothing left that way is dimmed, and nothing wraps round. The selected turn's matches have a stronger fill, as strong as the text on it allows.
 - A session opens at its end and stays still. While a long session is read, the pane shows a loading state in place of rows: how much is read, the turns so far, the agent and model, when the session started and was last active, how long it spans, its prompts, tool calls, tokens and pins, and your newest prompt. Nothing in it moves as figures arrive. A session that reads in under 0.3 s never shows it.
 - When a background task finishes after a turn has ended and the agent writes a reply for you, that reply is now a row of its own in the chat, with one quiet line, "Background task finished", where a message would be. Before, it showed only inside the turn above, under the latest update, and each new notice wrote over the last one's reply. A search finds these replies, and the rail gives them a tick when Agent messages on the rail is on.
-- A long hyphenated name in an open turn's blue bubble breaks after a "-" and no longer inside a word. A plain bubble breaks as before, so a copy never picks up a hidden character.
+- A long hyphenated name in an open turn's message breaks after a "-" and no longer inside a word, in a coloured bubble (blue is the default) and in any bubble where a search marks the text. A bubble on the Plain colour with no search on breaks as before, so a copy never picks up a hidden character.
 - A turn read before the session is read to its end is no longer shown as running with a huge elapsed time.
 - File sizes in the loading state, in "Reading session" and in the session chooser now read in decimal MB, as a file listing shows them. A 499 MB file read as 476 MB before, and a file under 1 MB reads in KB.
 - The column now steps with the pane: 70, 90 or 120 characters a line by the pane's width. The Width setting, `Shift w` and Keep the pane at this width are gone. A resize inside a step breaks no lines anew; in a long chat, a drag past a step waits until the pane has been still for 1.2 s before the lines break anew.
@@ -49,7 +49,7 @@ Open a large session at its end in seconds, see the Trajectory in a pane of its 
 ### Panes and widths
 
 - Drag the edge of the Threads pane you want to move. Before, a drag of one edge moved the other as well and resized the terminals on the far side.
-- With the Trajectory or the Pinned column open, each divider between the Chat, the Trajectory, the Pinned column and the terminal moves only the two panes beside it, and a window resize scales them all. `-` and `=` still move width between the panes, inside the row.
+- With the Trajectory or the Pinned column open, each divider between the Chat, the Trajectory, the Pinned column and the terminal moves only the two panes beside it, and a window resize scales them all. `-` and `=` make the pane to the right of the Chat narrower or wider: the Trajectory if it is open, else the Pinned column.
 
 ### The Trajectory
 
