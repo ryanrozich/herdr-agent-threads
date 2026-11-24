@@ -18949,7 +18949,7 @@ test("= in the Chat, then the window resized before the row is still: the Trajec
 // with the Trajectory open never goes on weights. The Trajectory's split still takes its room
 // by the fixed ROOM_WEIGHT (1000), as before the row: no record is in it, and it is measured.
 const rowWeightAsks = () => log.filter(([k, n, a]) => k === "run" && n === "layout.resize" && (a.id === "p3" || a.id === "p4") && a.weight != null && a.weight !== 1000);
-for (const [name, version] of [["an unlisted version", "0.1.18"], ["a version that cannot be read", null], ["a garbled version", "0.1.17.1"]]) {
+for (const [name, version] of [["an unlisted version", "0.1.19"], ["a version that cannot be read", null], ["a garbled version", "0.1.17.1"]]) {
   test(`on ${name} the row with the Trajectory open stays at px through both openings, a drag, a key and a close, and asks no weight for the Trajectory or the column`, async () => {
     await withHerdr(version, async (said) => {
       H.log = [];
@@ -18974,13 +18974,13 @@ test("the Herdr version changing under the row on weights puts every pane back t
     try {
       expect(rowRec().k).toBeGreaterThan(0);
       const was = t.row.widths();
-      H.herdrVersion = "0.1.18";
+      H.herdrVersion = "0.1.19";
       t.run(2000);
       const now = t.row.widths();
       expect(allPx(t, ["p2", "p4", "p3"])).toBe(true);
       expect(["p2", "p4", "p3"].every((id) => Math.abs(now[id] - was[id]) <= 1)).toBe(true);
       expect(rowRec()?.k ?? null).toBe(null);
-      expect(t.v.rowFalls?.map((f) => f.why)).toEqual(['Herdr "0.1.18" is not one whose drag keeps weight units']);
+      expect(t.v.rowFalls?.map((f) => f.why)).toEqual(['Herdr "0.1.19" is not one whose drag keeps weight units']);
       const from = log.length;
       rowKey(t, "p2", "=");
       t.run(3000);
@@ -18995,7 +18995,7 @@ for (const [name, after] of [
   ["y", (t) => { t.close("p4"); t.run(2000); t.inst.p2.x.key(keyEv("y"), t.cx); t.row.apply(); t.run(2000); }],
 ]) {
   test(`Herdr pull request 1365's drag, then ${name}, on an unlisted version: the row with the Trajectory open stays at px, no weight for the Trajectory or the column, no pane collapses`, async () => {
-    await withHerdr("0.1.18", async () => {
+    await withHerdr("0.1.19", async () => {
       H.log = [];
       const t = await threeOpen("traj");
       try {
@@ -19189,8 +19189,8 @@ const withHerdr = async (version, fn) => {
   try { await fn(said); } finally { H.herdrVersion = was; said.mockRestore(); }
 };
 test("the version gate: only a listed Herdr version, exactly as written, takes weights", () => {
-  expect(["0.1.16", "0.1.17"].map(weightHerdrOf)).toEqual([true, true]);
-  expect(["0.1.15", "0.1.18", "0.2.0", "v0.1.17", "0.1.17-dev", "0.1", "", null, undefined, 17, {}].map(weightHerdrOf)).toEqual(Array(11).fill(false));
+  expect(["0.1.16", "0.1.17", "0.1.18"].map(weightHerdrOf)).toEqual([true, true, true]);
+  expect(["0.1.15", "0.1.19", "0.2.0", "v0.1.17", "0.1.17-dev", "0.1", "", null, undefined, 17, {}].map(weightHerdrOf)).toEqual(Array(11).fill(false));
 });
 test("on a listed Herdr version the Pinned pair goes on weights", async () => {
   await withHerdr("0.1.16", async () => {
@@ -19201,7 +19201,7 @@ test("on a listed Herdr version the Pinned pair goes on weights", async () => {
     } finally { t.restore(); }
   });
 });
-for (const [name, version] of [["an unlisted version", "0.1.18"], ["a version that cannot be read", null], ["a garbled version", "v0.1.17-dev"]]) {
+for (const [name, version] of [["an unlisted version", "0.1.19"], ["a version that cannot be read", null], ["a garbled version", "v0.1.17-dev"]]) {
   test(`on ${name} the Pinned pair stays at px through an opening, a drag, a key and a close, says so once in the debug log, and asks no weight for the column`, async () => {
     await withHerdr(version, async (said) => {
       const t = await pairPanes();
@@ -19236,7 +19236,7 @@ test("the Herdr version changing under a pair on weights puts it back to px wher
       t.run(4000);
       expect(state.shared["threads.pinPair"]?.t4?.k).toBeGreaterThan(0);
       const was = t.row.widths();
-      H.herdrVersion = "0.1.18";
+      H.herdrVersion = "0.1.19";
       t.run(3000);
       const now = t.row.widths();
       expect([t.row.size.p2.px, t.row.size.p3.px]).toEqual([now.p2, now.p3]);
@@ -19245,7 +19245,7 @@ test("the Herdr version changing under a pair on weights puts it back to px wher
       const from = log.length;
       t.run(4000);
       expect(log.slice(from).some(([k, n, a]) => k === "run" && n === "layout.resize" && a.weight != null)).toBe(false);
-      expect(said.mock.calls.some((c) => String(c[0]).includes('Herdr "0.1.18"'))).toBe(true);
+      expect(said.mock.calls.some((c) => String(c[0]).includes('Herdr "0.1.19"'))).toBe(true);
     } finally { t.restore(); }
   });
 });
@@ -19259,7 +19259,7 @@ for (const [name, after] of [
   ["y", (t) => { t.v.openTraj(); t.row.apply(); t.run(2000); }],
 ]) {
   test(`Herdr pull request 1365's drag, then ${name}, on an unlisted version: the pair stays at px, no weight for the column, no pane collapses`, async () => {
-    await withHerdr("0.1.18", async () => {
+    await withHerdr("0.1.19", async () => {
       const t = await pairPanes();
       try {
         t.run(4000);
