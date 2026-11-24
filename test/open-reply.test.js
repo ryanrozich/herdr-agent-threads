@@ -529,6 +529,26 @@ test("while an open reply's split runs over several draws, each draw shows the p
 // Stopped inside the rebuild the shape timer asked for (againOpen), as it builds the card: the
 // request stands, and the light draw after it builds the card again and splits on. With the
 // request given up before the build, the shape timer asks again only at the window's end.
+// Herdr can stop a draw after the rebuild of an open turn's rows (spliceRows) has dropped the
+// card's old rows from the index and before it has put the new ones in. A rebuild that went on
+// from there found the turn in no row, took it for one not shown, and gave up the request: the
+// card never drew. The build after such a stop is of every row.
+test("a draw Herdr stops halfway through putting an open card's new rows in leaves no card half built: the next build is of every row, and the card settles", async () => {
+  const { v, cx, key } = await openLong(shortParas(4000));
+  const MARK = { key: "stop-here", kind: "md" };
+  let armed = true;
+  // The splice that puts the new rows in, after the old ones' index entries are dropped.
+  const arm = () => {
+    const rows = v.baseRows;
+    if (!rows || Object.hasOwn(rows, "splice")) return;
+    rows.splice = function (...a) { if (a.length > 2 && armed) { armed = false; v.height(MARK); } return Array.prototype.splice.apply(this, a); };
+  };
+  arm();
+  const r = costedFrames(v, cx, 80, await cardDone(v, key), { onFrame: arm, stopAt: (_w, x) => x === MARK });
+  const parts = v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`) && x.kind === "md").length;
+  expect([armed, r.stops, r.settled > 0, parts, v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i)]).toEqual([false, 1, true, 58, true]);
+}, 60000);
+
 test("a draw stopped inside the rebuild it was asked for keeps the request, and the light draw after it builds the card", async () => {
   const { v, cx, keys } = await openLong(shortParas(4000));
   v.probeDue = function () { this.probeLeft = 0; return []; };
