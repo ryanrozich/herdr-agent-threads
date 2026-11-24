@@ -21166,3 +21166,66 @@ test("under a cut that does not move, a rail jump keeps the view for its first f
   expect(asked[0]).not.toBe("0:35");
   listWindow = null;
 });
+
+// A reader's own scroll and latest while a jump waits: the reader wins at once.
+function slowRows(v, cx) { v.buildMax = () => 0; v.shapeBudget = 0; stillAt(v, 380); probeFrame(v, cx); }
+const fastRows = (v) => { delete v.buildMax; v.shapeBudget = null; };
+// The offset of each of n frames.
+const offs = (v, cx, sim, n) => Array.from({ length: n }, () => (probeFrame(v, cx), Math.round(sim.last().off)));
+
+test("past the cap, a reader's wheel while a jump waits for the rows to reshape moves the view, and it stays: the jump is dropped", async () => {
+  const { v, cx, sim } = await cutScene();
+  slowRows(v, cx);
+  v.sel = "0:41";
+  v.action("next", cx);
+  probeFrame(v, cx);
+  expect(shownIn(v, sim.last())).toContain("0:42");
+  const at = Math.round(sim.last().off) - 600;
+  sim.wheel(600);
+  expect(offs(v, cx, sim, 4)).toEqual([at, at, at, at]);
+  fastRows(v);
+  listWindow = null;
+});
+
+test("past the cap, a pin's return with a wheel down before it lands stays where the reader wheeled it", async () => {
+  const { v, cx, sim } = await cutScene();
+  v.pinnedList = () => [{ key: "0:65", turn: v.findTurn("0:65"), pin: { n: 65 }, s: v.current(), state: "done" }];
+  v.goPin(0, cx);
+  probeFrame(v, cx);
+  const at = Math.round(sim.last().off) + 600;
+  sim.wheel(-600);
+  expect(offs(v, cx, sim, 4)).toEqual([at, at, at, at]);
+  listWindow = null;
+});
+
+test("a wheel after a jump is taken, before the landing's own asks 16 and 48 ms on, ends them", async () => {
+  const { v, cx, sim } = await cutScene();
+  v.sel = "0:41";
+  v.action("next", cx);
+  const asked = scrollsOf(v);
+  draw(v, cx);
+  const n = asked.length;
+  sim.wheel(-300);
+  const at = Math.round(sim.off);
+  cx.flush(120, 3);
+  dropTimers(v, cx);
+  expect(asked.length).toBe(n);
+  expect(offs(v, cx, sim, 3)).toEqual([at, at, at]);
+  listWindow = null;
+});
+
+test("latest while a jump waits for the rows to reshape shows the end in the next frame, and holds it", async () => {
+  const { v, cx, sim } = await cutScene();
+  slowRows(v, cx);
+  v.sel = "0:41";
+  v.action("next", cx);
+  probeFrame(v, cx);
+  v.action("latest", cx);
+  const ends = [];
+  for (let k = 0; k < 5; k++) { probeFrame(v, cx); ends.push(sim.last().end); }
+  expect(ends).toEqual([true, true, true, true, true]);
+  fastRows(v);
+  settleList(v, cx, sim);
+  expect([v.follow, sim.last().end]).toEqual([true, true]);
+  listWindow = null;
+});

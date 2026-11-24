@@ -5317,6 +5317,10 @@ export default class Threads extends View {
     // list's, which Herdr scales by zoom.
     this.listOff = (this.listOff ?? 0) - dy / this.zoom();
     this.wheelN = (this.wheelN ?? 0) + 1;
+    // The reader's own scroll drops a jump still to come (one waiting for the rows or a card's
+    // measures, asked again each frame): it would pull the view back from under the wheel.
+    // A landing's own asks after it is taken check the count (wheels, render).
+    this.scrollTo = null;
     if (this.view === "pinned") return;
     this.scrolledBy(dy, Date.now());
     this.scrollSeenAt = Date.now();
@@ -5353,6 +5357,9 @@ export default class Threads extends View {
     // The first rows build is still going over several frames (a long session, a slow
     // machine), so there is no turn to select yet: its end selects the newest (latestAfterBuild).
     else if ((select || !this.sel) && this.rowJob) this.latestDue = { sel: this.sel };
+    // Latest wins over a jump still to come: the end is held from the next frame, also while
+    // the rows reshape, where a pending jump would keep it waiting (render, bottomHeld).
+    this.scrollTo = null;
     this.toBottom = true;
   }
   // Selects the newest turn when the build that jumpLatest waited for is done, if the pane is
@@ -9244,6 +9251,9 @@ export default class Threads extends View {
       else { this.scrollBusyUntil = Date.now() + 500; this.upAt = 0; this.downAt = 0; }
       let { i, how } = this.scrollRow(st, rows);
       this.scrollTo = null;
+      // The landing's asks 16 and 48 ms on, unless the reader has wheeled since (listWheel).
+      const wheels = this.wheelN ?? 0;
+      const ask = (k, h) => { if ((this.wheelN ?? 0) === wheels) this.askScroll(k, h); };
       // A jump the person asked for (a rail tick or card, a pin return, #n in the search, Go to
       // that reply) flashes the turn it lands on, after the scroll (a second press's follow-up
       // scroll flashes instead).
@@ -9277,8 +9287,8 @@ export default class Threads extends View {
         let top = lead(i);
         if (rows[top - 1]?.key === `visit:${rows[i].key}`) top -= 1;
         if (rows[top - 1]?.kind === "pday") top -= 1; // a pin's day header comes with it
-        cx.timer.after(16, (cx) => { this.askScroll(j, "top"); cx.notify(); });
-        cx.timer.after(48, (cx) => { this.askScroll(top, "top"); cx.notify(); });
+        cx.timer.after(16, (cx) => { ask(j, "top"); cx.notify(); });
+        cx.timer.after(48, (cx) => { ask(top, "top"); cx.notify(); });
       } else if (i >= 0 && how === "land") {
         // scroll_to_item only brings an item to the nearest edge, so a place below the view
         // would land at the bottom. An item a pane further down first, then the place, which
@@ -9296,17 +9306,17 @@ export default class Threads extends View {
         if (!p || p.y < minTop) p = landExact(slots, i, Math.round(Math.max(minTop, st.at ?? minTop)));
         const lift = p.lift ?? 0;
         this.landed = { key: rows[i]?.key ?? null, ...p };
-        cx.timer.after(16, (cx) => { this.askScroll(j, "top"); cx.notify(); });
+        cx.timer.after(16, (cx) => { ask(j, "top"); cx.notify(); });
         cx.timer.after(48, (cx) => {
-          if (lift > 0) { this.landLift = lift; this.fitKey = null; }
-          this.askScroll(p.j, p.how);
+          if (lift > 0 && (this.wheelN ?? 0) === wheels) { this.landLift = lift; this.fitKey = null; }
+          ask(p.j, p.how);
           cx.notify();
         });
         if (lift > 0) cx.timer.after(120, (cx) => { this.landLift = 0; this.fitKey = null; cx.notify(); });
       } else if (i >= 0) {
         const top = lead(i);
-        cx.timer.after(16, (cx) => { this.askScroll(i, how); cx.notify(); });
-        if (top !== i) cx.timer.after(48, (cx) => { this.askScroll(top, how); cx.notify(); });
+        cx.timer.after(16, (cx) => { ask(i, how); cx.notify(); });
+        if (top !== i) cx.timer.after(48, (cx) => { ask(top, how); cx.notify(); });
       }
     }
     // The cut this frame lays out (capSpan).
