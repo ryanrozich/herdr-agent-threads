@@ -501,7 +501,7 @@ test("timeline press: a turn under 2 px at Fit is drawn as one span per lane; a 
   for (const cw of [1143, 1370]) {
     const heads = strip(2000);
     // One turn with no tools call: in the Tools lane it has no span, so a press there gets
-    // its heading.
+    // its heading. Its rows keep their keys (the reply is tr:0:1000:3).
     const q = heads[1000];
     heads[1000] = { ...q, cnt: { ...q.cnt, tools: 0, failed: 0 }, stepRows: [q.stepRows[0], q.stepRows[3]], tl: [0, Number.NaN, 0, 10000, 60000, 0] };
     const L = timelineLayout(heads, cw, "clock", T0, null);
@@ -519,7 +519,7 @@ test("timeline press: a turn under 2 px at Fit is drawn as one span per lane; a 
     }
     const T = tlBox(L, 1000);
     expect(timelineHit(L, heads, T.x + T.w / 2, "tools", T0, 4)).toEqual({ turn: "0:1000", key: "0:1000" });
-    expect(timelineHit(L, heads, T.x + T.w / 2, "model", T0, 4)).toEqual({ turn: "0:1000", key: "tr:0:1000:1" });
+    expect(timelineHit(L, heads, T.x + T.w / 2, "model", T0, 4)).toEqual({ turn: "0:1000", key: "tr:0:1000:3" });
   }
   // A wide turn's bar is its own (itemBox), as before.
   const few = strip(3);

@@ -486,6 +486,23 @@ export function itemBox(tl, i, tx, w, wall, scale, len, upTo = null) {
   if (open) box.open = true;
   return box;
 }
+// A step's bar as the layers draw it, in px of the view: on a turn under 2 px wide, which the
+// layout draws as one span per lane (x to x + max(w, 1)), that span at the turn's own x; else
+// the step's own bar (itemBox). itemBox keeps a bar 3 px wide, so on so narrow a turn its bar
+// would start left of the turn. The press and the outline both use this.
+function barAt(h, i, tx, tw, wall, scale, len, upTo) {
+  if (tw < 2) return { x0: tx, x1: tx + Math.max(tw, 1), track: 0 };
+  return itemBox(h.tl, i, tx, tw, wall, scale, len, upTo);
+}
+// Step si of turn ti, as barAt draws it; the running turn's unfinished bars end at nowMs.
+export function tlBar(L, heads, ti, si, nowMs = Date.now()) {
+  const T = tlBox(L, ti);
+  const h = heads[ti];
+  if (!T || !h) return null;
+  const wall = L.geo?.walls[ti] ?? wallOf(h);
+  const upTo = ti === L.geo?.live && h.t0 != null && wall > 0 ? growEnd(T.x, T.w, wall, h.t0, nowMs) : null;
+  return barAt(h, si, T.x, T.w, wall, L.scale, stepN(h), upTo);
+}
 // The turn and step under px x of the strip in a lane: { turn, key } (key: the step's row,
 // or the turn's heading when no step's bar is within 4 px). heads in the layout's order; x in
 // px of the view (zoomed and panned); ly, px down the lane (null: any). Where bars overlap
@@ -521,7 +538,7 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now(), ly = null) {
   for (let i = 0; i < len; i++) {
     const k = LEDGER_KINDS[h.stepRows[i].lk];
     if (lane && k?.lane !== lane) continue;
-    const b = itemBox(h.tl, i, tx, tw, wall, L.scale, len, upTo);
+    const b = barAt(h, i, tx, tw, wall, L.scale, len, upTo);
     if (!b) continue;
     const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
     const r = (b.track ? 1 : 0) + (k?.ink === "failed" ? 2 : 0);

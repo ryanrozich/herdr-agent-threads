@@ -94,7 +94,7 @@ import {
   BAR_W, BAR_H, BAR_SLANT, trajLayout, rowsLeft,
 } from "./ledger.js";
 import {
-  timelineModel, timelineHit, tlBox, itemBox, tornPoints, polyRows, tlStrip, hatchLines, tlNumbers, TL_MADE,
+  timelineModel, timelineHit, tlBox, tornPoints, polyRows, tlStrip, hatchLines, tlNumbers, tlBar, TL_MADE,
   TL_LANES, TL_MIN_W, TL_H, TL_GUT, TL_AX, TL_TK, TL_LT, TL_LANE, TL_PT, TL_ROWS_MIN,
 } from "./timeline.js";
 import { VERSION, versionLine, parseBuild } from "./version.js";
@@ -12191,9 +12191,9 @@ export default class Threads extends View {
       const h = M.heads[ti];
       const si = h.stepRows.findIndex((r) => r.key === sel);
       const lane = si >= 0 ? LEDGER_KINDS[h.stepRows[si].lk]?.lane : null;
-      const wall = M.geo.walls[ti];
-      const upTo = ti === M.geo.live && h.t0 != null && wall > 0 ? tb.x + Math.max(0, Math.min(1, (Date.now() - h.t0) / wall)) * tb.w : null;
-      const b = lane ? itemBox(h.tl, si, tb.x, tb.w, wall, T.scale, h.stepRows.length, upTo) : null;
+      // The bar as drawn: on a turn under 2 px its lane's span (timeline.js tlBar), so the
+      // outline is around what the layers drew, not left of it.
+      const b = lane ? tlBar(T, M.heads, ti, si, Date.now()) : null;
       if (b && b.x1 >= 0 && b.x0 <= cw) {
         kids.push(div().id("th-tl-sel").absolute().left(b.x0 - 2).w(b.x1 - b.x0 + 4).top(TL_LANES.indexOf(lane) * TL_LANE + (b.track ? 8 : 2) - 2)
           .h((b.track ? 6 : 12) + 4).rounded(2).border_1().border_color(t.foreground));
