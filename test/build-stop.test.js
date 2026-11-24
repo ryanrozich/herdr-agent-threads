@@ -143,3 +143,37 @@ test("a full build Herdr stops after its rows are in and before its record is ma
   settleRows(v, cx);
   expect([armed, run.stops, keyAfter ?? null, full > 0, agree, got === v.baseRows.map((x) => x.key).join("\n")]).toEqual([false, 1, null, true, true, true]);
 }, 60000);
+
+// With the index entry made first, Herdr's stop can fall after it and before the row's size:
+// the row is indexed and has no size. The build goes on from its first row with no size, so
+// the next draw sizes that row, at the place its index entry already names.
+test("a full build Herdr stops between indexing a row and sizing it sizes that row in the next draw: every row has its size and its own index entry", async () => {
+  const { v, cx, key, run } = await longReply(400);
+  let armed = true;
+  let hit = -1;
+  const buildRows = v.buildRows;
+  v.buildRows = function (...a) {
+    const out = buildRows.apply(this, a);
+    const job = this.rowJob;
+    if (job?.index && !Object.hasOwn(job.index, "set")) {
+      job.index.set = function (k, i) {
+        const m = Map.prototype.set.call(this, k, i);
+        if (armed && k === key && v.rowJob?.index === this) { armed = false; hit = job.sizes.length - i; throw STOP; }
+        return m;
+      };
+    }
+    return out;
+  };
+  v.rowsKey = null;
+  for (let k = 0; k < 20 && (v.rowJob || v.rowsKey == null); k++) run.frame();
+  delete v.buildRows;
+  settleRows(v, cx);
+  dropTimers(v, cx);
+  const at = v.baseIndex.get(key);
+  const sized = v.baseSizes.length === v.baseRows.length && v.baseSizes.every((h) => h > 0) && v.baseSizes[at] === v.height(v.baseRows[at]);
+  v.toggle(key, cx);
+  for (let k = 0; k < 20; k++) { run.frame(); cx.flush?.(0); }
+  const parts = v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length;
+  // hit 0: the stop fell with the row indexed and its size not yet pushed.
+  expect([hit, run.stops, v.baseRows[at]?.key === key, sized, parts > 0, v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i)]).toEqual([0, 1, true, true, true, true]);
+}, 60000);
