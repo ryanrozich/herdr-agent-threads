@@ -94,23 +94,29 @@ test("a closed row's reshape that Herdr stops as it works out the height leaves 
   const { v, cx, run } = await longReply(4);
   settleRows(v, cx);
   dropTimers(v, cx);
+  // A closed turn's reply grows (a longer shape), and a full build has no reshaping time: the
+  // time is spent before the first shape, so the row is built with its old shape, to be reshaped.
+  const T = v.sessions.at(-1).turns;
+  const t = T.find((x, k) => k < T.length - 1 && v.baseRows.some((r) => r.kind === "turn" && r.turn === x && !r.live && !r.last));
+  t.after = [`${(t.after ?? []).join("\n\n")}\n\nA longer made-up reply.\n\nWith more lines.\n\nAnd more.`];
+  t.shapeKey = null;
+  v.shapeMax = () => -1;
+  v.rowsKey = null;
+  for (let k = 0; k < 20 && (v.rowJob || v.rowsKey == null); k++) run.frame();
+  delete v.shapeMax;
+  dropTimers(v, cx);
   const rows = v.baseRows;
-  const i = rows.findIndex((x) => x.kind === "turn" && x.turn && !x.live && !x.last);
-  const j = rows.findIndex((x, k) => x.kind === "turn" && k !== i && v.height(x) !== v.height(rows[i]));
-  const key = rows[i].key;
-  const real = rows[i].shape;
-  // The row as a build out of time leaves it: another row's shape, at that shape's height.
-  rows[i] = { ...rows[i], shape: rows[j].shape };
-  v.baseSizes[i] = v.height(rows[i]);
-  v.staleRows = [i];
-  v.reshapeDue = true;
-  v.fitKey = null;
+  const i = (v.staleRows ?? []).find((k) => rows[k]?.turn === t && rows[k].kind === "turn") ?? -1;
+  const key = rows[i]?.key;
+  const old = rows[i]?.shape;
+  const oldH = v.baseSizes[i];
   let armed = true;
   const height = v.height;
-  v.height = function (r) { if (armed && r?.key === key && r.kind === "turn" && r.shape === real) { armed = false; throw STOP; } return height.call(this, r); };
+  v.height = function (r) { if (armed && r?.key === key && r.kind === "turn" && r.shape !== old) { armed = false; throw STOP; } return height.call(this, r); };
+  v.reshapeDue = true;
   for (let k = 0; k < 20; k++) { run.frame(); cx.flush?.(0); }
   delete v.height;
-  expect([j >= 0, armed, run.stops, v.baseRows[i].shape === real, v.baseSizes[i] === v.height(v.baseRows[i])]).toEqual([true, false, 1, true, true]);
+  expect([i >= 0, armed, run.stops, v.baseRows[i].shape === v.shape(v.baseRows[i].turn), v.baseSizes[i] === v.height(v.baseRows[i]), v.baseSizes[i] !== oldH]).toEqual([true, false, 1, true, true, true]);
 }, 60000);
 
 // A full build puts its rows, sizes and index in, then makes the record later builds start
