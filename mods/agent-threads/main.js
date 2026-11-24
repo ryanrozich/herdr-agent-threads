@@ -9386,6 +9386,10 @@ export default class Threads extends View {
       // The landing's asks 16 and 48 ms on, unless the reader has wheeled since (listWheel).
       const wheels = this.wheelN ?? 0;
       const ask = (k, h) => { if ((this.wheelN ?? 0) === wheels) this.askScroll(k, h); };
+      // A jump held while it waited (the held ask above) has its turn on screen already, at
+      // the top or the centre: the first ask, which only brings an item below the view into
+      // it, would show a third place between the held one and the landing, so it is left out.
+      const first = (ms, fn) => { if (!st.held) cx.timer.after(ms, fn); };
       // A jump the person asked for (a rail tick or card, a pin return, #n in the search, Go to
       // that reply) flashes the turn it lands on, after the scroll (a second press's follow-up
       // scroll flashes instead).
@@ -9414,7 +9418,7 @@ export default class Threads extends View {
         while (j + 1 < rows.length && CARD.has(rows[j + 1].kind) && rows[j + 1].kind !== "head") j++;
         // A return to a turn the search hides: its note shows above its head (landTop).
         const top = this.landTop(rows, i, how);
-        cx.timer.after(16, (cx) => { ask(j, "top"); cx.notify(); });
+        first(16, (cx) => { ask(j, "top"); cx.notify(); });
         cx.timer.after(48, (cx) => { ask(top, "top"); cx.notify(); });
       } else if (i >= 0 && how === "land") {
         // scroll_to_item only brings an item to the nearest edge, so a place below the view
@@ -9433,7 +9437,7 @@ export default class Threads extends View {
         if (!p || p.y < minTop) p = landExact(slots, i, Math.round(Math.max(minTop, st.at ?? minTop)));
         const lift = p.lift ?? 0;
         this.landed = { key: rows[i]?.key ?? null, ...p };
-        cx.timer.after(16, (cx) => { ask(j, "top"); cx.notify(); });
+        first(16, (cx) => { ask(j, "top"); cx.notify(); });
         cx.timer.after(48, (cx) => {
           if (lift > 0 && (this.wheelN ?? 0) === wheels) { this.landLift = lift; this.fitKey = null; }
           ask(p.j, p.how);
@@ -9442,7 +9446,7 @@ export default class Threads extends View {
         if (lift > 0) cx.timer.after(120, (cx) => { this.landLift = 0; this.fitKey = null; cx.notify(); });
       } else if (i >= 0) {
         const top = lead(i);
-        cx.timer.after(16, (cx) => { ask(i, how); cx.notify(); });
+        first(16, (cx) => { ask(i, how); cx.notify(); });
         if (top !== i) cx.timer.after(48, (cx) => { ask(top, how); cx.notify(); });
       }
     }

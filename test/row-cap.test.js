@@ -568,8 +568,9 @@ test("following, a newest turn whose rows run past the window shows from its hea
   expect([v.sel, v.follow]).toEqual(["0:150", true]);
   expect(asked[0]).toBe("0:150");
   // Until following takes the end, every ask is for the head: the list still holds it when
-  // each is taken.
-  expect(asked.slice(0, asked.indexOf("end"))).toEqual(["0:150", "0:150"]);
+  // each is taken. The cut moved, so the jump is held and asked in the frame that lays it
+  // out, and the landing asks no first time for a head already in place.
+  expect(asked.slice(0, asked.indexOf("end"))).toEqual(["0:150"]);
   expect(v.rows().at(-1).kind).toBe("tail");
 });
 
