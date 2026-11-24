@@ -3206,7 +3206,9 @@ export default class Threads extends View {
     const off = this.winOff ?? 0;
     const i = this.baseIndex?.get(key);
     if (i != null && rows[i + off]?.key === key) return i + off;
-    if (key !== "spacer" && key !== "gap" && key !== "tail" && rows === this.indexedRows) return -1;
+    // The list's own items (the spacer or gap, Show earlier and later, the tail) are in no
+    // index, and are looked for in the rows.
+    if (!LIST_ITEMS.has(key) && rows === this.indexedRows) return -1;
     return rows.findIndex((r) => r.key === key);
   }
 
