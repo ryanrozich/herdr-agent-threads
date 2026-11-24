@@ -549,3 +549,39 @@ test("timeline view: a press on a turn the filter leaves out entirely does nothi
   expect(b.tsel).toBe(before);
   expect(b.tscrollTo).toBe(null);
 });
+
+test("timeline view: a hidden strip keeps no model: b, the four-row rule or a narrow pane drops it, and showing it again places the turns anew", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "3"), "bottom", 1440);
+  shownFrame(b, cb);
+  expect(b.tlModel).not.toBe(null);
+  expect(b.tlModel.L.turns.length).toBeGreaterThan(0);
+  // b: hidden, and the model is gone with it (452 B a turn at Fit: 2.5 MiB at 5,600 turns).
+  b.key(keyEv("b"), cb);
+  let c = frame(b, cb);
+  expect(ids(c)).not.toContain("th-timeline");
+  expect(b.tlModel ?? null).toBe(null);
+  expect(b.trajReport().timeline).toMatchObject({ shown: false, turns: 0, spans: 0 });
+  // b again: shown, its turns placed and laid out anew.
+  const before = { ...TL.TL_MADE };
+  b.key(keyEv("b"), cb);
+  c = frame(b, cb);
+  expect(ids(c)).toContain("th-tl-lanes");
+  expect(b.tlModel).not.toBe(null);
+  expect([TL.TL_MADE.geo - before.geo, TL.TL_MADE.layout - before.layout]).toEqual([1, 1]);
+  // Hidden by the four-row rule: 3 rows would be left. Dropped too.
+  const p = await dockPane(fixture("--extra", "3"), "bottom", 1440);
+  shownFrame(p.b, p.cb);
+  expect(p.b.tlModel).not.toBe(null);
+  listTall(p.b, p.cb, 3 * 24 + 23 + 98);
+  c = frame(p.b, p.cb);
+  expect(ids(c)).not.toContain("th-timeline");
+  expect(p.b.tlModel ?? null).toBe(null);
+  // Under 540 px there is no timeline: dropped.
+  const q = await dockPane(fixture("--extra", "3"), "bottom", 1440);
+  shownFrame(q.b, q.cb);
+  expect(q.b.tlModel).not.toBe(null);
+  q.b.width = 539;
+  q.b.paneW = 539;
+  frame(q.b, q.cb);
+  expect(q.b.tlModel ?? null).toBe(null);
+});
