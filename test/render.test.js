@@ -20112,15 +20112,16 @@ test("a terminal at px beside the pair is never resized: its width holds through
 // ---- the list's window: Herdr's v_virtual_list takes at most 10,000 item sizes ----
 
 // Turn i of a one-day session of short done turns, as the reader's events. long: a reply of
-// 25 paragraphs of 3,000 characters, which an open card draws as 25 Markdown items.
-const capTurn = (i, long = false) => {
-  const ts = new Date(Date.UTC(2026, 10, 1, 9, 0, 0) + i * 1000).toISOString();
-  const said = long ? Array.from({ length: 25 }, (_, j) => `Part ${j}: ${"word ".repeat(600)}`).join("\n\n") : `Reply ${i}: the order is fine.`;
+// parts paragraphs of 3,000 characters, which an open card draws as that many Markdown items.
+// day: the day it is on, from 2026-11-01.
+const capTurn = (i, long = false, parts = 25, day = 0) => {
+  const ts = new Date(Date.UTC(2026, 10, 1 + day, 9, 0, 0) + i * 1000).toISOString();
+  const said = long ? Array.from({ length: parts }, (_, j) => `Part ${j}: ${"word ".repeat(600)}`).join("\n\n") : `Reply ${i}: the order is fine.`;
   return [{ k: "p", o: "human", t: `Prompt ${i}: check order ${i}.`, ts }, { k: "t", t: said }, { k: "d", ts }];
 };
-async function capSession(n, cap = null, long = -1) {
+async function capSession(n, cap = null, long = -1, parts = 25, dayOf = () => 0) {
   const ev = [];
-  for (let i = 0; i < n; i++) ev.push(...capTurn(i, i === long));
+  for (let i = 0; i < n; i++) ev.push(...capTurn(i, i === long, parts, dayOf(i)));
   const r = await scripted(ev);
   r.v.debug = false;
   if (cap) r.v.win.cap = { ...r.v.win.cap, ...cap };
@@ -20608,4 +20609,225 @@ test("RowWindow on its own: tail, a reader's range, a jump around a row, Show ea
   // Everything fits again: no window.
   at = w.place(make(9), { tail: true });
   expect([at.a, at.z, w.from, w.to]).toEqual([0, 9, null, null]);
+});
+
+test("following, a newest turn whose rows run past the window shows from its head, and Show earlier brings turns in above it", async () => {
+  const { v, cx } = await capSession(150, SMALL, 149, 80);
+  v.open.add("0:150");
+  v.jumpLatest(true);
+  frames(v, cx);
+  const md = () => v.rows().filter((r) => r.key.startsWith("md:0:150:")).length;
+  const all = v.baseRows.filter((r) => r.key.startsWith("md:0:150:")).length;
+  expect(all).toBeGreaterThan(60);
+  expect(md()).toBe(all);
+  expect(v.turnKeys(v.rows())).toEqual(["0:150"]);
+  expect(v.rows().findIndex((r) => r.key === "0:150")).toBe(v.rows().findIndex((r) => r.key === "older") + 1);
+  // Each Show earlier brings turns in above and lands on one the list holds.
+  let first = 150;
+  for (let i = 0; i < 3; i++) {
+    v.click("older", cx);
+    frames(v, cx);
+    expect(inList(v, v.sel)).toBe(true);
+    const top = Number(v.turnKeys(v.rows())[0].split(":")[1]);
+    expect(top).toBeLessThan(first);
+    first = top;
+  }
+  v.action("latest", cx);
+  frames(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:150"]);
+  expect(md()).toBe(all);
+  // Past the list's cap the end keeps the newest items; a key onto the turn goes to its head
+  // first, and following then takes the end again.
+  v.win.cap = { ...v.win.cap, max: 40 };
+  v.jumpLatest(true);
+  frames(v, cx);
+  expect(v.rows().at(-1).kind).toBe("tail");
+  expect(inList(v, "0:150")).toBe(false);
+  const asked = [];
+  v.scroll = { scroll_to_item(i) { asked.push(v.rowsMemo?.[i]?.key); }, scroll_to_bottom() { asked.push("end"); } };
+  v.sel = "older";
+  v.action("next", cx);
+  frames(v, cx);
+  expect([v.sel, v.follow]).toEqual(["0:150", true]);
+  expect(asked[0]).toBe("0:150");
+  expect(v.rows().at(-1).kind).toBe("tail");
+});
+
+test("a jump to one turn with more items than the list takes lands on its head, and the cut is below it, which is not the end", async () => {
+  const { v, cx } = await capSession(150, { ...SMALL, max: 40 }, 140, 80);
+  v.jumpLatest(true);
+  frames(v, cx);
+  v.open.add("0:141");
+  frames(v, cx);
+  const asked = [];
+  v.scroll = { scroll_to_item(i) { asked.push(v.rowsMemo?.[i]?.key); }, scroll_to_bottom() { asked.push("end"); } };
+  v.command("search:#141", cx);
+  frames(v, cx, 6);
+  const rows = v.rows();
+  const parts = v.baseRows.filter((r) => r.key.startsWith("md:0:141:"));
+  expect(rows.length).toBe(40);
+  expect(asked).toContain("0:141");
+  expect(asked).not.toContain("end");
+  expect(inList(v, "0:141")).toBe(true);
+  expect(inList(v, parts[0].key)).toBe(true);
+  expect(inList(v, parts.at(-1).key)).toBe(false);
+  expect(inList(v, "capped")).toBe(false);
+  expect(rows.at(-1)).toMatchObject({ kind: "note", key: "capped-later" });
+  expect(rows.at(-1).text).toMatch(/^[\d,]+ later list items are not shown$/);
+  // The note at the bottom on screen is not the session's end: no follow.
+  try {
+    listWindow = (n) => ({ start: n - 5, end: n });
+    v.downAt = Date.now();
+    draw(v, cx);
+    draw(v, cx);
+    expect(v.bottomShown).toBe(false);
+    expect(v.follow).toBe(false);
+  } finally { listWindow = null; }
+  // A huge open pin in the Pinned view reads from its head the same way.
+  v.sel = "0:150";
+  v.action("pin", cx);
+  v.sel = "0:141";
+  v.action("pin", cx);
+  v.setView("pinned");
+  frames(v, cx);
+  expect(v.rows().length).toBeLessThanOrEqual(40);
+  expect(lastList.sizes.length).toBeLessThanOrEqual(40);
+  expect(inList(v, "0:141")).toBe(true);
+  expect(inList(v, parts[0].key)).toBe(true);
+  expect(v.rows().at(-1).key).toBe("capped-later");
+  // With no row asked for, it still reads from the top; a scroll to the next pin brings it in.
+  v.capKey = null;
+  v.fitKey = null;
+  frames(v, cx);
+  expect(inList(v, "0:141")).toBe(true);
+  expect(inList(v, "0:150")).toBe(false);
+  v.sel = "0:150";
+  v.scrollTo = { key: "0:150", how: "center" };
+  frames(v, cx);
+  expect(inList(v, "0:150")).toBe(true);
+});
+
+test("capList keeps the item a reader went to: a head kept above a note, or a middle between two", () => {
+  const rows = Array.from({ length: 30 }, (_, i) => ({ kind: "md", key: `r${i}` }));
+  const sizes = rows.map(() => 40);
+  const keys = (x) => x.rows.map((r) => r.key);
+  expect(keys(capList(rows, sizes, 10, 34, 25)).slice(0, 2)).toEqual(["capped", "r21"]);
+  const head = capList(rows, sizes, 10, 34, 3);
+  expect(keys(head)).toEqual(["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "capped-later"]);
+  expect(head.rows.at(-1).text).toBe("21 later list items are not shown");
+  expect(head.cut).toBe(21);
+  const mid = capList(rows, sizes, 10, 34, 15);
+  expect(mid.rows.length).toBe(10);
+  expect(mid.sizes.length).toBe(10);
+  expect(keys(mid).slice(1, -1)).toEqual(["r11", "r12", "r13", "r14", "r15", "r16", "r17", "r18"]);
+  expect(mid.rows[0]).toMatchObject({ key: "capped" });
+  expect(mid.rows.at(-1)).toMatchObject({ key: "capped-later" });
+  expect(mid.cut).toBe(22);
+  expect(Number(mid.rows[0].text.split(" ")[0]) + Number(mid.rows.at(-1).text.split(" ")[0])).toBe(22);
+});
+
+test("nothing is cut above the row on screen: a card opened above it grows the window past its stop, and the cut falls below", async () => {
+  const { v, cx, s } = await capSession(150, SMALL, 125);
+  v.jumpLatest(true);
+  frames(v, cx);
+  v.follow = false;
+  v.toBottom = false;
+  await addCapTurns(s, 150, 20);
+  frames(v, cx);
+  const rows = v.rows();
+  expect(rows.at(-1).key).toBe("newer");
+  // The view on the window's last turns, just above Show later.
+  const end = rows.length - 1;
+  const last = v.turnKeys(rows.slice(0, end)).at(-1);
+  try {
+    listWindow = (n) => (n === v.rows().length && v.rows()[n - 1]?.key === "newer" ? { start: n - 6, end: n - 1 } : { start: 0, end: 1 });
+    draw(v, cx);
+    expect(v.viewRange[1]).toBe(end);
+    v.open.add("0:126");
+    listWindow = () => ({ start: 0, end: 1 });
+    frames(v, cx, 1);
+    expect(v.rows().some((r) => r.key.startsWith("md:0:126:"))).toBe(true);
+    expect(inList(v, last)).toBe(true);
+  } finally { listWindow = null; }
+});
+
+test("a window's edges: its first turn has its day band, and it never ends on a day row above Show later", async () => {
+  const { v, cx } = await capSession(150, SMALL, -1, 25, (i) => i);
+  v.jumpLatest(true);
+  frames(v, cx);
+  const check = () => {
+    const rows = v.rows();
+    const t = rows.findIndex((r) => r.kind === "turn");
+    expect(rows[t - 1].kind).toBe("day");
+    const n = rows.findIndex((r) => r.key === "newer");
+    if (n >= 0) expect(rows[n - 1].kind).not.toBe("day");
+  };
+  check();
+  let top = Number(v.turnKeys(v.rows())[0].split(":")[1]);
+  for (let i = 0; i < 4; i++) {
+    v.click("older", cx);
+    frames(v, cx);
+    check();
+    const t = Number(v.turnKeys(v.rows())[0].split(":")[1]);
+    expect(t).toBeLessThan(top);
+    expect(t).toBeGreaterThan(top - 15);
+    top = t;
+  }
+  expect(inList(v, "newer")).toBe(true);
+  // Up from the first turn stops on Show earlier.
+  v.sel = v.turnKeys(v.rows())[0];
+  v.action("prev", cx);
+  expect(v.sel).toBe("older");
+});
+
+test("Jump to latest's scroll to the end moves the window there while not yet following", async () => {
+  const { v, cx, s } = await capSession(150, SMALL);
+  v.jumpLatest(true);
+  frames(v, cx);
+  v.follow = false;
+  await addCapTurns(s, 150, 20);
+  frames(v, cx);
+  expect(inList(v, "0:170")).toBe(false);
+  v.toBottom = true;
+  draw(v, cx);
+  expect(inList(v, "0:170")).toBe(true);
+});
+
+test("RowWindow at its edges: the slide and the stop at exactly their counts, two blocks at once, a newest turn past slide, and Show earlier from the end", () => {
+  const make = (n, big = 0) => {
+    const rows = [];
+    for (let t = 1; t <= n; t++) {
+      const turn = { n: t };
+      rows.push({ kind: "turn", key: `0:${t}`, si: 0, turn });
+      if (t === n) for (let j = 0; j < big; j++) rows.push({ kind: "md", key: `md:0:${t}:${j}`, si: 0, turn });
+    }
+    return { rows, index: new Map(rows.map((r, i) => [r.key, i])) };
+  };
+  const w = new RowWindow({ slide: 10, block: 3, stop: 12 });
+  // stop: 12 rows are no window, 13 are.
+  expect(w.place(make(12), { tail: true })).toMatchObject({ a: 0, z: 12 });
+  expect(w.place(make(13), { tail: true })).toMatchObject({ a: 6, z: 13 });
+  // slide: 10 rows after the start stay, 11 slide.
+  expect(w.place(make(16), { tail: true }).a).toBe(6);
+  expect(w.place(make(17), { tail: true }).a).toBe(10);
+  // Two blocks in at once: the start goes to slide - block before the end, not one block on.
+  expect(w.place(make(23), { tail: true })).toMatchObject({ a: 16, z: 23, slid: true });
+  // A newest turn of 20 rows: the window starts at its first row.
+  const big = make(30, 20);
+  expect(w.place(big, { tail: true })).toMatchObject({ a: 29, z: 50 });
+  expect(w.has(big, "0:30")).toBe(true);
+  // Show earlier from a range at the very end lands on a turn it holds.
+  w.at = { a: 50, z: 50 };
+  const k = w.earlier(big);
+  expect(k).toBe("0:30");
+  expect(w.has(big, k)).toBe(true);
+  // Show later onto that turn holds it from its head.
+  w.keep(big, 0, 29, false);
+  expect(w.later(big)).toBe("0:30");
+  expect(w.at).toMatchObject({ a: 29, z: 50 });
+  // The reader's range past stop ends at or after the row after the last on screen.
+  const list = make(40);
+  w.keep(list, 19, 40, false);
+  expect(w.place(list, { seen: 36 }).z).toBe(36);
+  expect(w.has(list, "0:36")).toBe(true);
 });

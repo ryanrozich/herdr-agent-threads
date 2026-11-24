@@ -2515,6 +2515,8 @@ export default class Threads extends View {
   restart(s, fresh = false) {
     this.dropAnchor();
     this.win.reset();
+    this.capKey = null;
+    this.viewEndKey = null;
     Object.assign(s, newSession(s.id, s.file), { reason: s.reason, version: s.version + 1, partial: false, clock: s.clock, senders: s.senders });
     if (fresh) { s.loaded = false; s.error = null; s.missing = false; }
   }
@@ -2705,7 +2707,7 @@ export default class Threads extends View {
     // The pane's height only moves the spacer under a short list: Herdr's banner changes it, and
     // as part of the rows' key it rebuilt every row after each stopped draw.
     const W = this.winPlace();
-    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}|${this.landLift ?? 0}|${this.anchorLift ?? 0}|${this.anchorSlot ? `${this.anchorSlot.i}:${this.anchorSlot.h}` : ""}|${W.a}:${W.z}|${this.win.cap.max}`;
+    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}|${this.landLift ?? 0}|${this.anchorLift ?? 0}|${this.anchorSlot ? `${this.anchorSlot.i}:${this.anchorSlot.h}` : ""}|${W.a}:${W.z}|${this.win.cap.max}|${this.capKey ?? ""}`;
     if (this.fitKey !== fit) {
       let { rows, sizes } = this.windowed(W);
       // The tail is the session's end: none under a window that stops short of it.
@@ -2725,7 +2727,11 @@ export default class Threads extends View {
       // A row's place in the list from its place in baseRows (rowIndex): past the spacer or
       // the gap and the Show earlier item, less the rows the window leaves out above.
       this.winOff = (rows[0]?.kind === "spacer" || rows[0]?.kind === "gap" ? 1 : 0) + (W.a > 0 ? 1 : 0) - W.a;
-      const cap = capList(rows, sizes, this.win.cap.max, this.estimate({ kind: "note" }));
+      // Past the cap, the item the reader went to is kept (capKey); the Pinned view reads
+      // from its top.
+      let at = rows.length > this.win.cap.max && this.capKey != null ? rows.findIndex((r) => r.key === this.capKey) : -1;
+      if (at < 0 && this.view === "pinned") at = 0;
+      const cap = capList(rows, sizes, this.win.cap.max, this.estimate({ kind: "note" }), at);
       this.capCut = cap.cut;
       if (cap.cut) { this.capFired++; rows = cap.rows; sizes = cap.sizes; }
       this.rowsMemo = rows;
@@ -2761,13 +2767,22 @@ export default class Threads extends View {
 
   // The list's window (ui.js RowWindow), [a, z) in baseRows: the scroll the pane is about to
   // make, whether it follows the end, and the last row on screen move it.
+  // A scroll of Show earlier or later (st.win) lands in the range it made, which stays.
+  // capKey: the row a scroll goes to, which capList keeps when one turn has more items than
+  // the list takes, until a scroll to the end, which keeps the newest.
   winPlace() {
     const list = this.winList();
-    if (this.view === "pinned") return this.win.whole(list);
     const st = this.scrollTo;
-    const want = st ? [st.key, ...(st.or ?? []), st.head].map((k) => (k == null ? null : list.index.get(k))).find((i) => i != null) : null;
-    const seen = (this.viewRange?.[1] ?? 0) - (this.winOff ?? 0);
-    const at = this.win.place(list, { want, tail: Boolean(this.follow || this.toBottom), seen });
+    const goes = st ? [st.key, ...(st.or ?? []), st.head].map((k) => (k == null ? null : list.index.get(k))).find((i) => i != null) : null;
+    const tail = this.view !== "pinned" && Boolean(this.follow || this.toBottom);
+    if (goes != null) this.capKey = list.rows[goes].key;
+    else if (this.toBottom) this.capKey = null;
+    if (this.view === "pinned") return this.win.whole(list);
+    const want = st?.win ? null : goes;
+    // The row after the last on screen, by its key: a card opened above it moves its place.
+    const end = this.viewEndKey != null ? list.index.get(this.viewEndKey) : null;
+    const seen = end != null ? end + 1 : (this.viewRange?.[1] ?? 0) - (this.winOff ?? 0);
+    const at = this.win.place(list, { want, tail, seen });
     // Rows dropped above the end: the list keeps its offset in px, so it is put at the end.
     if (at.slid && this.follow) this.toBottom = true;
     return at;
@@ -2802,7 +2817,7 @@ export default class Threads extends View {
     this.follow = false;
     this.toBottom = false;
     this.sel = key;
-    this.scrollTo = { key, how: "head" };
+    this.scrollTo = { key, how: "head", win: true };
     this.fitKey = null;
   }
   // The keys up and down step through, with the window's Show earlier and Show later items.
@@ -6702,6 +6717,8 @@ export default class Threads extends View {
     this.choosing = false;
     this.dropAnchor();
     this.win.reset();
+    this.capKey = null;
+    this.viewEndKey = null;
     this.sessions = [];
     this.senderHits = null;
     this.open.clear();
@@ -10136,11 +10153,13 @@ export default class Threads extends View {
       // drawing pass may not).
       const prevShown = this.bottomShown;
       // Under a window that stops short of the session's end, its Show later item is no end.
-      this.bottomShown = range.end >= rows.length && rows[rows.length - 1]?.key !== "newer";
+      // Nor is capList's note of the later items it left out.
+      this.bottomShown = range.end >= rows.length && rows[rows.length - 1]?.key !== "newer" && rows[rows.length - 1]?.key !== "capped-later";
       // The Jump to latest pill comes and goes with the end of the list.
       if (prevShown !== this.bottomShown) this.stickyDue = true;
       // The rail brightens the turns on screen: redraw when the first or last one changes.
       this.viewRange = [range.start, range.end];
+      this.viewEndKey = rows[range.end - 1]?.key ?? null;
       let f = range.start;
       while (f < range.end - 1 && !rowTurnKey(rows[f])) f++;
       let l = range.end - 1;
