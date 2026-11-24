@@ -358,11 +358,18 @@ test("a word of 3,800 or 4,096 characters, its sizing stopped by Herdr, is sized
 // Herdr's Markdown view holds 4,096 characters (MD_VIEW_CHARS). A run with no place to split it
 // (a long URL, in practice) of up to that draws as on main, one Markdown view of the whole run,
 // selectable; past it, it is plain text, all of it, under main's line (brokenPlain).
+// Draws an open reply to its end as Herdr would: the timers a draw asks for run between draws
+// (the next rebuild of an open turn is asked for by one), and no placeholder is left in the card
+// when it is read.
+function drawToEnd(v, cx, key, ready = () => true) {
+  const waiting = () => !ready() || v.baseRows.some((x) => x.kind === "mdrest" && x.key.includes(`:${key}:`));
+  for (let i = 0; i < 200 && (i < 2 || waiting()); i++) { draw(v, cx); cx.flush(0); }
+  expect(waiting()).toBe(false);
+}
 async function oneRun(text) {
   const { v, cx, key } = await openLong(text);
   v.probeDue = function () { this.probeLeft = 0; return []; };
-  const waiting = () => v.baseRows.some((x) => x.kind === "mdrest" && x.key.includes(`:${key}:`));
-  for (let i = 0; i < 200 && (i < 2 || waiting()); i++) draw(v, cx);
+  drawToEnd(v, cx, key);
   const card = v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`));
   return { v, cx, card, last: card.at(-1) };
 }
@@ -479,8 +486,7 @@ test("a part shown whole as plain text under main's line, of 3,900 or 20,000 cha
     v.width = w;
     v.rowsKey = null;
     const row = () => v.baseRows.find((x) => x.key.startsWith(`md:${key}:`) && x.kind === "mdlong");
-    const waiting = () => !row() || v.baseRows.some((x) => x.kind === "mdrest" && x.key.includes(`:${key}:`));
-    for (let i = 0; i < 200 && (i < 2 || waiting()); i++) draw(v, cx);
+    drawToEnd(v, cx, key, () => Boolean(row()));
     const r = row();
     const drawn = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
     const note = drawn.find((x) => x.startsWith("Herdr could not draw this part as Markdown"));
@@ -1112,8 +1118,8 @@ const cjkProse = (s, n = 5000) => {
 async function shownWhole(para) {
   const { v, cx, key } = await openLong(para);
   v.probeDue = function () { this.probeLeft = 0; return []; };
+  drawToEnd(v, cx, key);
   const waiting = () => v.baseRows.some((x) => x.kind === "mdrest" && x.key.includes(`:${key}:`));
-  for (let i = 0; i < 200 && (i < 2 || waiting()); i++) draw(v, cx);
   const card = v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`));
   const text = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
   return [para.length > 5000, /[ \n]/.test(para), waiting(), card.map((x) => x.kind).filter((k) => k !== "md"), card.map((x) => x.src).join(""), text.some((x) => x.includes("only its start is shown"))];
