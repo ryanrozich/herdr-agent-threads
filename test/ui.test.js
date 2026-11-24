@@ -938,6 +938,38 @@ test("mdSplit: read a few lines at a time, the same parts as one whole split, an
   }
 });
 
+test("mdSplit: a read does at most its work whatever the text's shape: long lines and words, a block over the limit with no blank line, a long table", () => {
+  const texts = [
+    `${"word ".repeat(3000)}\n\n${"next ".repeat(3000)}`,
+    "z".repeat(9000),
+    `  ${"lead ".repeat(2000)}`,
+    Array.from({ length: 400 }, (_, i) => `Line ${i} of a reply with no blank line.`).join("\n"),
+    `| a | b |\n|---|---|\n${Array.from({ length: 600 }, (_, i) => `| row ${i} | ${"x".repeat(i % 40)} |`).join("\n")}`,
+    `Before\n\`\`\`js\n${"const a = 1;\n".repeat(500)}\`\`\`\nafter, in the same block\n| t | u |\n|---|---|\n${"| 1 | 2 |\n".repeat(300)}tail`,
+    `${"é".repeat(2000)}\n${"😀".repeat(1200)}`,
+  ];
+  for (const md of texts) {
+    const whole = mdChunks(md, 1000).flatMap((c) => splitTables(c));
+    for (const units of [300, 4096]) {
+      const job = mdSplit(md, 1000, true);
+      let reads = 0;
+      while (!job.done && reads < 1e5) {
+        const w = job.work;
+        const n0 = job.n;
+        mdSplitOn(job, Infinity, units);
+        reads++;
+        // Past its work by at most a line's or word's look and one chunk made, with its tables
+        // split out and the block it closes (a word longer than the limit is a chunk of its own).
+        const chunk = Math.max(1000, ...job.parts.slice(n0).map((p) => p.text.length));
+        expect(job.work - w).toBeLessThanOrEqual(units + 2 * 16 + 256 + 6 * chunk);
+      }
+      expect(job.parts).toEqual(whole);
+      // Not all in one read: a long line, word or block goes on over several.
+      expect(reads).toBeGreaterThan(1);
+    }
+  }
+});
+
 // mdChunks as it was before its pieces' lengths were kept as they grew: the same chunks, found
 // by measuring each whole chunk again for every piece.
 function mdChunksBefore(md, max = MD_MAX) {
