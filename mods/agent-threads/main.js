@@ -2826,14 +2826,16 @@ export default class Threads extends View {
   // make, whether it follows the end, and the last row on screen move it.
   // A scroll of Show earlier or later (st.win) lands in the range it made, which stays.
   // capKey: the row a scroll goes to, which capList keeps when one turn has more items than
-  // the list takes, until a scroll to the end, which keeps the newest.
+  // the list takes, until a scroll to the end, which keeps the newest: none in the Chat, whose
+  // list then keeps its newest items, and the last row in the Pinned view, which with none
+  // reads from its top.
   winPlace() {
     const list = this.winList();
     const st = this.scrollTo;
     const goes = st ? [st.key, ...(st.or ?? []), st.head].map((k) => (k == null ? null : list.index.get(k))).find((i) => i != null) : null;
     const tail = this.view !== "pinned" && Boolean(this.follow || this.toBottom);
     if (goes != null) this.capKey = list.rows[goes].key;
-    else if (this.toBottom) this.capKey = null;
+    else if (this.toBottom) this.capKey = this.view === "pinned" ? (list.rows.at(-1)?.key ?? null) : null;
     if (this.view === "pinned") return this.win.whole(list);
     const want = st?.win ? null : goes;
     // The row after the last on screen, by its key: a card opened above it moves its place.
