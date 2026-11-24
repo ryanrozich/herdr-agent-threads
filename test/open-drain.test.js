@@ -995,13 +995,21 @@ test("the opening: a row released after a second 64 draws runs alone, and its cu
 // Its text then changes (a new chunk of the session read), which drops the mark: it waits a
 // second 64 draws again for that text, counted from 0, and is not run as the first draw after
 // the 5 s of plain draws begins, as a count carried over from the old text would have it.
+// Then four light draws (no work ahead) let it be shaped and kept, which ends its count; left
+// to reshape again with the same text, it counts from 0 once more and waits a second 64
+// refused draws before it is released, not the rest of the count it had.
 test("the opening: a row's refused draws count for its text: a released row cut and held, whose text then changes, waits a second 64 draws again", async () => {
   let turn = null;
   let changed = -1;
   let fresh = null;
   const runs = [];
   let cur = -1;
-  const { frames } = await costlyWheel(8, 44, 2600, (v, cx, host) => {
+  let lightFrom = -1;
+  let restaled = -1;
+  let afterShape = null;
+  let refusedSince = 0;
+  let lastN = 0;
+  const { frames } = await costlyWheel(8, (fk) => (lightFrom >= 0 && fk >= lightFrom && fk < lightFrom + 4 ? 0 : 44), 3200, (v, cx, host) => {
     wheelUp(v, cx, host);
     const reshape = v.reshape;
     v.reshape = function (...a) {
@@ -1023,17 +1031,35 @@ test("the opening: a row's refused draws count for its text: a released row cut 
       if (changed >= 0 && k === changed + 313 + 20) {
         const r = turn.refused;
         fresh = r && (r.sig == null || r.sig === v.markSig(turn, v.replyText(turn))) ? r.n : 0;
+        lightFrom = k + 10;
+      }
+      // After the light draws: shaped and kept, its count ended; then left to reshape again.
+      if (lightFrom >= 0 && k === lightFrom + 4) {
+        afterShape = [turn.shapeKey != null, turn.shapeMark ?? null, turn.refused ?? null];
+        restaleRow(v, turn);
+        restaled = k;
+        lastN = 0;
+      }
+      if (restaled >= 0 && k > restaled && runs.filter((x) => x > restaled).length === 0) {
+        const n = turn.refused?.n ?? 0;
+        if (n > lastN) refusedSince += n - lastN;
+        lastN = n;
       }
     },
   });
   expect(changed).toBeGreaterThan(120);
   expect(runs[0]).toBeLessThan(changed);
   expect(fresh).toBeLessThanOrEqual(24);
-  // Its next run, if any here: not before a second 64 draws refused on the new text.
-  expect(runs.slice(1).filter((k) => k < changed + 5000 / 16 + 2 * 64 - 4)).toEqual([]);
-  // And on the new text it is released in its turn: the other rows on screen run first, one
-  // after each 5 s of plain draws, and then it does, alone, once.
-  expect(runs.length).toBe(2);
+  // Its next run on the new text: in the light draws, not before.
+  const light = runs.filter((k) => k > changed);
+  expect(light.length).toBeGreaterThanOrEqual(1);
+  expect([light[0] >= lightFrom, light[0] < lightFrom + 4]).toEqual([true, true]);
+  expect(afterShape).toEqual([true, null, null]);
+  // Left to reshape again, its next run comes after a second 64 draws refused, counted from 0,
+  // alone, once.
+  const again = runs.filter((k) => k > restaled);
+  expect(again.length).toBe(1);
+  expect(refusedSince).toBeGreaterThanOrEqual(2 * 64 - 2);
   expect(frames.filter((f) => f.stopped).length).toBeGreaterThanOrEqual(1);
 }, 300000);
 
