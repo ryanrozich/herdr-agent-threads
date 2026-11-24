@@ -1654,3 +1654,27 @@ test("a window that starts partway through a day keeps that day's pill over its 
   v.topKey = top.key;
   expect(v.stickyDay()?.key).toBe(band.key);
 });
+
+test("a window that ends with Show later has the Jump to latest pill's room under it in the Chat, and none in the outline", async () => {
+  const { v, cx, s } = await capSession(150, SMALL);
+  v.jumpLatest(true);
+  frames(v, cx);
+  v.follow = false;
+  v.toBottom = false;
+  await addCapTurns(s, 150, 20);
+  frames(v, cx);
+  expect(v.rows().at(-1).key).toBe("newer");
+  try {
+    // The view at the window's end: Show later on screen, the session's end not.
+    H.listWindow = (n) => ({ start: Math.max(0, n - 6), end: n });
+    frames(v, cx, 1);
+    expect(v.pillShown()).toBe(true);
+    // Show later's 36 px, then the pill's 28, 10 px over the list's end (PILL_H, PILL_GAP).
+    expect(v.sizesMemo.at(-1)).toBe(36 + 28 + 10);
+    v.action("outline:on", cx);
+    frames(v, cx, 1);
+    expect(v.rows().at(-1).key).toBe("newer");
+    expect(v.pillShown()).toBe(false);
+    expect(v.sizesMemo.at(-1)).toBe(36);
+  } finally { H.listWindow = null; }
+});

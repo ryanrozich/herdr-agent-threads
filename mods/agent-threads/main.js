@@ -2825,6 +2825,9 @@ export default class Threads extends View {
       // list's end is not on screen): it takes the pill's room under its text. In the Pinned
       // view and the outline, which draw no pill, that is only room.
       if (rows.at(-1)?.key === "capped-later") sizes[sizes.length - 1] += PILL_H + PILL_GAP;
+      // So does Show later at the end of a window, in the Chat only: the outline draws no pill.
+      // The item is 36 px tall at the top of its slot, the pill's room under it.
+      else if (rows.at(-1)?.key === "newer" && this.view !== "pinned" && !this.pinnedPane && !this.outlined()) sizes[sizes.length - 1] += PILL_H + PILL_GAP;
       // The list's items, by where they start (capSpan). Cut, by the first of the session's
       // rows the cut keeps, past the list's own items (a cut at the window's start keeps the
       // same list items first over any window). Each way of cutting keeps a fixed count from a
