@@ -581,7 +581,9 @@ export function mdSplitOn(job, lines = Infinity, units = Infinity) {
     // a view is looked at for a mark as it is measured, in the same steps.
     const [k, end] = utf8Run(w.word, w.wScan, Math.min(w.word.length, w.wScan + Math.max(256, room())));
     const long = !w.inSub && w.word.length > MD_VIEW_CHARS;
-    if (long && !w.mark) { w.mark = MD_MARK.test(w.word.slice(w.wScan, end)); work += end - w.wScan; }
+    // Counted up to the mark found, as the search stops there: the whole slice made a read of the
+    // whole word count more than reads a step at a time.
+    if (long && !w.mark) { const m = MD_MARK.exec(w.word.slice(w.wScan, end)); w.mark = m != null; work += m ? m.index + 1 : end - w.wScan; }
     work += end - w.wScan;
     w.wLen += k;
     w.wScan = end;
