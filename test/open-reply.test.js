@@ -829,11 +829,11 @@ test("a light draw with only measuring left asks for one draw at the light windo
 }, 60000);
 
 // The open's scroll of a card asks for two scrolls a little later, by row key: the card's last
-// part at 16 ms, then its head at 48 ms. A move made in between (Latest here) is newer: neither
-// is made after it. Unasked, both are made.
-test("Latest pressed after an open card asks for its scrolls goes to the end, and the card's scrolls are not made after it", async () => {
+// part at 16 ms, then its head at 48 ms. A move made in between (Latest, a jump key) is newer:
+// neither is made after it. Unasked, both are made.
+test("Latest or a jump key pressed after an open card asks for its scrolls goes where it goes, and the card's scrolls are not made after it", async () => {
   const seen = [];
-  for (const latest of [false, true]) {
+  for (const latest of [null, "latest", "prev"]) {
     const { v, cx, key } = await openLong(shortParas(300), true);
     costedFrames(v, cx, 40, () => true);
     dropTimers(v, cx);
@@ -846,16 +846,16 @@ test("Latest pressed after an open card asks for its scrolls goes to the end, an
     const waits = () => cx.timers.some((x) => x.ms === 48);
     for (let k = 0; k < 50 && !waits(); k++) { draw(v, cx); if (!waits()) cx.flush(0); }
     const asked = waits() && asks.length === 0;
-    if (latest) { v.action("latest", cx); draw(v, cx); }
+    if (latest) { v.action(latest, cx); draw(v, cx); }
     cx.flush(16);
     draw(v, cx);
     draw(v, cx);
     cx.flush(48);
     draw(v, cx);
     draw(v, cx);
-    seen.push([latest, asked, asks]);
+    seen.push([latest, asked, latest === "prev" ? asks.filter((x) => x.startsWith("top")) : asks]);
   }
-  expect(seen).toEqual([[false, true, ["top part", "top head"]], [true, true, ["bottom"]]]);
+  expect(seen).toEqual([[null, true, ["top part", "top head"]], ["latest", true, ["bottom"]], ["prev", true, []]]);
 }, 60000);
 
 test("a stop after the probe's step, with one part left to measure, brings three light draws, not one a frame", async () => {
