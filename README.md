@@ -72,7 +72,7 @@ Press `o` for the outline. Each turn is one line, so a few days fit on one scree
 
 ### Pin the turns you need
 
-Press `p` to pin a turn. Your pins show in a column beside the list, oldest first, numbered 1 to 7. Press a number to go back to that turn. The unpin button at the right of a pin, on hover or on the selected pin, unpins it, and `u` undoes an unpin. `-` and `=` make the Pinned column narrower or wider, and Threads takes or gives the difference so the terminal keeps its width.
+Press `p` to pin a turn. Your pins show in a column beside the list, oldest first, numbered 1 to 7. Press a number to go back to that turn. The unpin button at the right of a pin, on hover or on the selected pin, unpins it while the pins fit the column (`p` always does), and `u` undoes an unpin. `-` and `=` make the Pinned column narrower or wider, and Threads takes or gives the difference so the terminal keeps its width.
 
 <a href="docs/screenshots/pinned.png"><img src="docs/screenshots/pinned.png" alt="Three pinned turns in the Pinned column beside the list" width="560"></a>
 

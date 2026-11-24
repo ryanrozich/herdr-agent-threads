@@ -4416,36 +4416,50 @@ test("pins saved before seven load unchanged: the same pins, in the same order, 
   expect(recordFiles[PINS]).toBe(text);
 });
 
-// The Pinned view with three pins, in this pane (under 480 px). The pointer goes through the
-// list's own handlers (threads-body): a frame is drawn, then the pointer moves to x (unless
-// move is false) and presses there, and the list reports the item pressed (click).
+// The Pinned view with three pins, in this pane (under 480 px), in a list box 700 px tall so
+// they fit. The pointer goes through the list's own handlers (threads-body): a frame is drawn,
+// then the pointer moves to x (unless move is false) and presses there, and the list reports
+// the item pressed (click).
 async function threePins(x) {
   const { v, cx, k } = await pinsShown(["--extra", "6"], [1, 3, 5]);
+  v.listH = 700;
   const body = () => { const c = frame(v, cx); return { move: handlerAfterId(c, "threads-body", "on_mouse_move"), down: handlerAfterId(c, "threads-body", "on_mouse_down") }; };
-  // pos false: an event with no window position (only the list's own x).
-  const ev = (at, pos = true) => { const lx = (v.colLeft() + at) * v.zoom(); return { local_position: { x: lx, y: 300 }, ...(pos ? { position: { x: lx, y: 300 } } : {}), bounds: { width: v.width * v.zoom() }, click_count: 1 }; };
+  // pos false: an event with no window position (only the list's own x). y: the list's y.
+  const ev = (at, pos = true, y = 300) => { const lx = (v.colLeft() + at) * v.zoom(); return { local_position: { x: lx, y }, ...(pos ? { position: { x: lx, y } } : {}), bounds: { width: v.width * v.zoom() }, click_count: 1 }; };
   const point = (at = x, pos = true) => body().move(ev(at, pos), cx);
-  const press = (key, at = x, { move = true, pos = true } = {}) => { const h = body(); if (move) h.move(ev(at, pos), cx); h.down(ev(at, pos), cx); v.click(key, cx); };
-  // A move at list x mx on a list mw wide and a press at px on one pw wide (in the list's px):
-  // a list narrower than its column (the pane narrowed while the column holds its width), so
-  // the rows and their heights stay as they were.
-  const at2 = (lx, bw) => { const wx = (v.colLeft() + lx) * v.zoom(); return { local_position: { x: wx, y: 300 }, position: { x: wx, y: 300 }, bounds: { width: bw * v.zoom() }, click_count: 1 }; };
-  const moveThenPress = (key, mx, mw, px, pw) => { const h = body(); h.move(at2(mx, mw), cx); h.down(at2(px, pw), cx); v.click(key, cx); };
-  return { v, cx, k, press, point, moveThenPress, keyOf: (i) => compactPins(v)[i].key };
+  const press = (key, at = x, { move = true, pos = true, y = 300 } = {}) => { const h = body(); if (move) h.move(ev(at, pos, y), cx); h.down(ev(at, pos, y), cx); v.click(key, cx); };
+  return { v, cx, k, press, point, body, ev, keyOf: (i) => compactPins(v)[i].key };
 }
+// The unpin buttons' layer in a frame: whether it is drawn, and the pins whose row box
+// (th-unpin-row-N) it holds.
+const unpinLayer = (v, cx) => {
+  const c = frame(v, cx);
+  const rows = c.filter((e) => e[0] === "id" && /^th-unpin-row-\d+$/.test(e[1])).map((e) => Number(e[1].slice(13)));
+  return { c, has: c.some((e) => e[0] === "id" && e[1] === "th-unpins"), rows };
+};
+// A press on pin n's button as gpui delivers it: the button's own click. The number of times
+// it kept the press there (stop_propagation), or null with no such button.
+const clickButton = (v, cx, n, c = frame(v, cx)) => {
+  const h = ownOf(c, `th-unpin-${n}`).find((e) => e[0] === "on_click")?.at(-1);
+  if (!h) return null;
+  let stopped = 0;
+  h({ position: { x: 0, y: 0 }, click_count: 1 }, { ...cx, stop_propagation() { stopped++; } });
+  return stopped;
+};
+// Each row's top in the list and its height, by index.
+const rowTops = (v) => { const out = []; let top = 0; for (const r of v.rows()) { const h = v.height(r); out.push({ r, top, h }); top += h; } return out; };
 
-test("the Pinned column: a click on a pin's unpin control unpins it and it leaves the list; the turn is not opened or selected, and u puts it back", async () => {
-  const { v, cx, press, keyOf } = await threePins(390);
+test("the Pinned column: a click on a pin's unpin button unpins it and it leaves the list; the press stays on the button, the turn is not opened or selected, and u puts it back", async () => {
+  const { v, cx, keyOf } = await threePins(390);
   const [a, b, c] = [0, 1, 2].map(keyOf);
   v.sel = a;
   const n = v.findTurn(b).n;
-  press(b);
+  expect(clickButton(v, cx, 2)).toBe(1);
   expect(v.isPinned(b)).toBe(false);
   expect(compactPins(v).map((r) => r.key)).toEqual([a, c]);
   expect(v.sel).toBe(a);
   expect(v.open.has(b)).toBe(false);
   expect(v.openWait ?? null).toBe(null);
-  // Nothing opens it later either (openAfterPress's timer).
   cx.flush(1000, 3);
   expect(v.open.has(b)).toBe(false);
   expect(v.sel).toBe(a);
@@ -4455,113 +4469,235 @@ test("the Pinned column: a click on a pin's unpin control unpins it and it leave
   draw(v, cx);
 });
 
-test("the Pinned column: a press in the control's column is an unpin only while the button is drawn: hovered after a move there, or on the selected pin", async () => {
-  const { v, cx, press, point, keyOf } = await threePins(390);
-  const [a, b, c] = [0, 1, 2].map(keyOf);
-  // No move over the list yet (a tap straight after the window took focus, a pointer resting
-  // there since before the list drew): the button was never drawn, so the press selects.
-  press(b, 390, { move: false });
-  expect(v.isPinned(b)).toBe(true);
-  expect(v.sel).toBe(b);
-  // Selected, the button is drawn at rest: the same press unpins.
-  press(b, 390, { move: false });
-  expect(v.isPinned(b)).toBe(false);
-  v.key(keyEv("u"), cx);
-  // A press at a place the pointer never moved to (no move seen there) selects.
-  v.sel = a;
-  point(390);
-  press(c, 376, { move: false });
-  expect(v.isPinned(c)).toBe(true);
-  expect(v.sel).toBe(c);
-  // With no window position on the events, the list's own x says the place.
-  v.sel = a;
-  point(390, false);
-  press(c, 376, { move: false, pos: false });
-  expect(v.isPinned(c)).toBe(true);
-  v.sel = a;
-  point(390, false);
-  press(c, 390, { move: false, pos: false });
-  expect(v.isPinned(c)).toBe(false);
-  v.key(keyEv("u"), cx);
-  // A move there, then frames with nothing moved under the pointer (a clock tick): still drawn.
-  v.sel = a;
-  point(390);
-  draw(v, cx);
-  press(c, 390, { move: false });
-  expect(v.isPinned(c)).toBe(false);
-  v.key(keyEv("u"), cx);
-  // A move there, then the rows move under a still pointer (a pin above goes): the hover has
-  // not been seen on what is under it now, so the press selects.
-  v.sel = a;
-  point(390);
-  v.key(keyEv("p"), cx);
-  expect(v.isPinned(a)).toBe(false);
-  press(c, 390, { move: false });
-  expect(v.isPinned(c)).toBe(true);
-  expect(v.sel).toBe(c);
-  v.key(keyEv("u"), cx);
-  // A wheel under a still pointer, likewise.
-  v.sel = null;
-  point(390);
-  v.wheelN = (v.wheelN ?? 0) + 1;
-  press(b, 390, { move: false });
-  expect(v.isPinned(b)).toBe(true);
-});
-
-test("the Pinned column: only the button's own 24 px is the control: a press at the row's edge, or just left of the button, selects", async () => {
-  const { v, press, keyOf } = await threePins(390);
-  const b = keyOf(1);
-  const left = v.width - PIN_ROW.UNPIN_R - PIN_ROW.UNPIN;
-  for (const x of [v.width - 3, v.width - PIN_ROW.UNPIN_R + 1, left - 1]) {
-    v.sel = null;
-    press(b, x);
-    expect(v.isPinned(b)).toBe(true);
-    expect(v.sel).toBe(b);
+test("the Pinned column: a press through the list never unpins, wherever it lands; it selects: in the button's column at any height, on the selected pin or another, with or without a move, after a scroll, a narrower list, a banner, a move after the press, a release on another row, or under the key sheet", async () => {
+  const { v, cx, press, body, ev, keyOf } = await threePins(390);
+  const [a, b] = [0, 1].map(keyOf);
+  const mid = v.width - PIN_ROW.UNPIN_R - PIN_ROW.UNPIN / 2;
+  const kept = () => { expect(v.isPinned(a)).toBe(true); expect(v.isPinned(b)).toBe(true); };
+  for (const x of [mid, v.width - PIN_ROW.UNPIN_R - PIN_ROW.UNPIN, v.width - 3]) {
+    for (const y of [120, 300, 330]) {
+      for (const sel of [null, b]) {
+        for (const move of [true, false]) {
+          v.sel = sel;
+          press(b, x, { move, y });
+          kept();
+          expect(v.sel).toBe(b);
+        }
+      }
+    }
   }
-  // Its two edges are on it.
+  // A scroll by key, and another first row drawn: still a selection.
+  v.sel = a;
+  v.key(keyEv("j"), cx);
   v.sel = null;
-  press(b, left);
-  expect(v.isPinned(b)).toBe(false);
+  press(b, mid);
+  kept();
+  listWindow = (n) => ({ start: 1, end: n });
+  try {
+    v.sel = null;
+    press(b, mid);
+    kept();
+  } finally { listWindow = null; }
+  // A wheel, a narrower list and a banner above it: still a selection.
+  v.sel = null;
+  v.listWheel({ delta: { x: 0, y: -40 } });
+  press(b, mid, { move: false });
+  kept();
+  v.sel = null;
+  let h = body();
+  h.move({ ...ev(mid), bounds: { width: (v.width + 20) * v.zoom() } }, cx);
+  h.down({ ...ev(mid), bounds: { width: (v.width - 20) * v.zoom() } }, cx);
+  v.click(b, cx);
+  kept();
+  v.sel = null;
+  h = body();
+  h.move(ev(mid, true, 300), cx);
+  h.down({ ...ev(mid, true, 260), position: ev(mid, true, 300).position }, cx);
+  v.click(b, cx);
+  kept();
+  // A move after the press, and a release on another row.
+  v.sel = null;
+  h = body();
+  h.down(ev(mid), cx);
+  h.move(ev(mid + 0.5), cx);
+  v.click(b, cx);
+  kept();
+  v.sel = null;
+  h = body();
+  h.move(ev(mid), cx);
+  h.down(ev(mid), cx);
+  v.click(a, cx);
+  kept();
+  expect(v.sel).toBe(a);
+  // The key sheet open over the list, with the last press's place left over.
+  v.action("keys", cx);
+  expect(v.keysOpen).toBe(true);
+  v.click(b, cx);
+  kept();
+  v.action("keys", cx);
 });
 
-test("the Pinned column: a press is an unpin only if the last move was on the button where the press finds it: not at another list width, nor just off its edge", async () => {
-  const { v, cx, moveThenPress, keyOf } = await threePins(390);
-  const b = keyOf(1);
-  const W = v.width;
-  const left = (w) => w - PIN_ROW.UNPIN_R - PIN_ROW.UNPIN;
-  // The pointer rests 5 px left of the button at width W; the list narrows by 20 with the
-  // rows unchanged, so the button now lies under that place. The move was never over it.
-  const x = left(W) - 5;
-  v.sel = null;
-  moveThenPress(b, x, W, x, W - 20);
-  expect(v.isPinned(b)).toBe(true);
-  expect(v.sel).toBe(b);
-  // Wider again, the other way: a move on the narrow list's button, at a place the wide list's
-  // button covers too, and a press there at full width: the button moved under a still pointer.
-  v.sel = null;
-  moveThenPress(b, left(W) + 2, W - 20, left(W) + 2, W);
-  expect(v.isPinned(b)).toBe(true);
-  // At one width: a move 1 px left of the button and a press on its edge (within the 1 px a
-  // still pointer may drift) selects; a move on the edge itself unpins.
-  v.sel = null;
-  moveThenPress(b, left(W) - 1, W, left(W), W);
-  expect(v.isPinned(b)).toBe(true);
-  v.sel = null;
-  moveThenPress(b, left(W), W, left(W), W);
-  expect(v.isPinned(b)).toBe(false);
-  v.key(keyEv("u"), cx);
-  // A pane wider than the column: the list is the column's width at the move as at the press.
-  v.sel = null;
-  moveThenPress(b, left(W), W + 100, left(W), W + 100);
-  expect(v.isPinned(b)).toBe(false);
-  v.key(keyEv("u"), cx);
-  // At zoom 1.25 a move and a press on the narrower list's button, both measured in design px.
+test("the Pinned column: each closed pin's unpin button is an element of its own over the list, in a box its row's size at its row's place, centred in the row's height and 6 px in from the column's edge: its 24 px box is all that takes the press", async () => {
+  const { v, cx } = await threePins(390);
+  const L = unpinLayer(v, cx);
+  expect(L.has).toBe(true);
+  expect(L.rows).toEqual([1, 2, 3]);
+  // Over the list, in the reading column as the list's items are.
+  const layer = ownOf(L.c, "th-unpins");
+  for (const m of ["absolute", "size_full", "justify_center"]) expect(layer.some((e) => e[0] === m)).toBe(true);
+  expect(layer.some((e) => e[0] === "max_w" && e[1] === v.width)).toBe(true);
+  for (const { r, top, h } of rowTops(v)) {
+    if (r.kind !== "turn") continue;
+    const box = ownOf(L.c, `th-unpin-row-${r.pinNo}`);
+    expect(box).toContainEqual(["top", top]);
+    expect(box).toContainEqual(["h", h]);
+    // The button's place: the row's full height, items centred, UNPIN_R from the right.
+    for (const e of [["absolute"], ["top", 0], ["bottom", 0], ["right", PIN_ROW.UNPIN_R], ["items_center"]]) expect(box).toContainEqual(e);
+    const btn = ownOf(L.c, `th-unpin-${r.pinNo}`);
+    expect(btn).toContainEqual(["size", PIN_ROW.UNPIN]);
+    expect(PIN_ROW.UNPIN).toBe(24);
+    expect(PIN_ROW.UNPIN_R).toBe(6);
+  }
+  // No other element of the layer takes a press or a drag: a drag that starts on a button, as
+  // one on the divider beside the column can, is not held by it, and the button's click needs
+  // the press and the release on it.
+  const takes = (c) => c.filter((e) => /^on_(mouse_down|mouse_up|drag|click|item)/.test(e[0])).map((e) => e[0]);
+  expect(takes(layer)).toEqual([]);
+  expect(takes(ownOf(L.c, "th-unpin-row-2"))).toEqual([]);
+  expect(takes(ownOf(L.c, "th-unpin-2"))).toEqual(["on_click"]);
+  // The list's own item has no button any more: nothing in it takes the press as an unpin.
+  expect(itemWords(v, compactPins(v)[1]).some((e) => e[0] === "id" && e[1] === "th-unpin-2")).toBe(false);
+});
+
+test("the Pinned column: no unpin buttons where a row's place on screen is not known for sure, or where nothing should take the press: a list taller than its box (at the top, at the end, after a wheel past the end), a row the list did not draw last, an open pin, under the key sheet or the settings card, outside the Pinned view; and a button drawn before the sheet opened does nothing under it", async () => {
+  const { v, cx, keyOf } = await threePins(390);
+  expect(unpinLayer(v, cx).rows).toEqual([1, 2, 3]);
+  const total = rowTops(v).reduce((s, x) => s + x.h, 0);
+  // Exactly its box: the list cannot scroll, so each row is where its heights put it.
+  v.listH = total;
+  expect(unpinLayer(v, cx).rows).toEqual([1, 2, 3]);
+  // Taller than its box, so the list scrolls and Herdr gives no read of where it is: none.
+  v.listH = total - 10;
+  v.listOff = 0;
+  expect(unpinLayer(v, cx).has).toBe(false);
+  v.listOff = 10;
+  expect(unpinLayer(v, cx).has).toBe(false);
+  v.listWheel({ delta: { x: 0, y: -5000 } });
+  expect(unpinLayer(v, cx).has).toBe(false);
+  v.listWheel({ delta: { x: 0, y: 5000 } });
+  expect(unpinLayer(v, cx).has).toBe(false);
+  // Not measured yet (a box of 0): none.
+  v.listH = 0;
+  expect(unpinLayer(v, cx).has).toBe(false);
+  v.listH = 700;
+  v.listOff = 0;
+  expect(unpinLayer(v, cx).rows).toEqual([1, 2, 3]);
+  // The list drew only its first two items (the day band and pin 1): pins 2 and 3 have none.
+  // A change in the rows drawn asks for another frame (the 120 ms timer), so the buttons
+  // follow it.
+  listWindow = () => ({ start: 0, end: 2 });
   try {
-    herdrSettings = { font_family: "Mono", zoom: 1.25 };
-    v.sel = null;
-    moveThenPress(b, left(W - 20) + 2, W - 20, left(W - 20) + 2, W - 20);
-    expect(v.isPinned(b)).toBe(false);
-  } finally { herdrSettings = { font_family: "Mono" }; }
+    expect(unpinLayer(v, cx).rows).toEqual([1]);
+  } finally { listWindow = null; }
+  // The day band scrolled off (all three pins still drawn, the list's end still on screen):
+  // only the change in the rows drawn asks for the frame; the same rows again do not.
+  listWindow = (n) => ({ start: 1, end: n });
+  try {
+    frame(v, cx);
+    v.stickyDue = false;
+    frame(v, cx);
+    expect(v.stickyDue).toBe(false);
+  } finally { listWindow = null; }
+  v.stickyDue = false;
+  expect(unpinLayer(v, cx).rows).toEqual([1, 2, 3]);
+  expect(v.stickyDue).toBe(true);
+  expect(unpinLayer(v, cx).rows).toEqual([1, 2, 3]);
+  // An open pin is the full card, with its own pin: no button over it.
+  const k2 = keyOf(1);
+  v.toggle(k2, cx);
+  expect(unpinLayer(v, cx).rows).toEqual([1, 3]);
+  v.toggle(k2, cx);
+  expect(unpinLayer(v, cx).rows).toEqual([1, 2, 3]);
+  // The key sheet and the settings card cover the list: none.
+  v.action("keys", cx);
+  expect(unpinLayer(v, cx).has).toBe(false);
+  v.action("keys", cx);
+  v.settingsOpen = true;
+  expect(unpinLayer(v, cx).has).toBe(false);
+  v.settingsOpen = false;
+  // A button's click from a frame drawn before the sheet opened: nothing.
+  const before = frame(v, cx);
+  v.action("keys", cx);
+  expect(clickButton(v, cx, 2, before)).toBe(1);
+  expect(v.isPinned(k2)).toBe(true);
+  expect(compactPins(v).length).toBe(3);
+  v.action("keys", cx);
+  // The list's own view: none, and a button's click from a frame drawn before it does nothing.
+  const inPinned = frame(v, cx);
+  v.key(keyEv("v"), cx);
+  expect(v.view).not.toBe("pinned");
+  expect(unpinLayer(v, cx).has).toBe(false);
+  expect(clickButton(v, cx, 2, inPinned)).toBe(1);
+  expect(v.isPinned(k2)).toBe(true);
+});
+
+test("the Pinned column: the unpin buttons follow the rows' heights when they change: a pin opened above, a narrower column that wraps the titles, and back", async () => {
+  const { v, cx, keyOf } = await threePins(390);
+  const check = () => {
+    const L = unpinLayer(v, cx);
+    for (const { r, top, h } of rowTops(v)) {
+      if (r.kind !== "turn" || !r.compact) continue;
+      const box = ownOf(L.c, `th-unpin-row-${r.pinNo}`);
+      expect(box).toContainEqual(["top", top]);
+      expect(box).toContainEqual(["h", h]);
+    }
+    return L.rows;
+  };
+  const tops0 = rowTops(v).filter((x) => x.r.kind === "turn").map((x) => x.top);
+  expect(check()).toEqual([1, 2, 3]);
+  const k1 = keyOf(0);
+  v.toggle(k1, cx);
+  expect(check()).toEqual([2, 3]);
+  const tops1 = rowTops(v).filter((x) => x.r.kind === "turn" && x.r.compact).map((x) => x.top);
+  expect(tops1[0]).toBeGreaterThan(tops0[1]);
+  v.toggle(k1, cx);
+  expect(check()).toEqual([1, 2, 3]);
+  v.width = 240;
+  const tops2 = rowTops(v).filter((x) => x.r.kind === "turn").map((x) => x.top);
+  expect(tops2[2]).toBeGreaterThan(tops0[2]);
+  expect(check()).toEqual([1, 2, 3]);
+  v.width = 400;
+  expect(check()).toEqual([1, 2, 3]);
+});
+
+test("the undo notice and the Jump to latest pill take the press: it stops on them, so nothing under them, a pin's button or a row, gets it", async () => {
+  const { v, cx, keyOf } = await threePins(390);
+  v.sel = keyOf(1);
+  v.key(keyEv("p"), cx);
+  expect(toastText(v)).toMatch(/^Unpinned/);
+  const toast = ownOf(frame(v, cx), "th-toast");
+  const down = toast.find((e) => e[0] === "on_mouse_down");
+  expect(down?.[1]).toBe("left");
+  const click = toast.find((e) => e[0] === "on_click")?.at(-1);
+  let stopped = 0;
+  const scx = { ...cx, stop_propagation() { stopped++; } };
+  down.at(-1)({ position: { x: 0, y: 0 } }, scx);
+  click({ position: { x: 0, y: 0 } }, scx);
+  expect(stopped).toBe(2);
+  expect(v.isPinned(keyOf(0))).toBe(true);
+  // The pill, in the list's own view.
+  const p = await pinPane("--extra", "6");
+  listWindow = (n) => ({ start: 0, end: n - 1 }); // the list's end off screen
+  let pill;
+  try {
+    frame(p.v, p.cx);
+    expect(p.v.pillShown()).toBe(true);
+    pill = ownOf(frame(p.v, p.cx), "th-latest-pill");
+  } finally { listWindow = null; }
+  expect(pill.find((e) => e[0] === "on_mouse_down")?.[1]).toBe("left");
+  let s2 = 0;
+  pill.find((e) => e[0] === "on_mouse_down").at(-1)({ position: { x: 0, y: 0 } }, { ...p.cx, stop_propagation() { s2++; } });
+  expect(s2).toBe(1);
 });
 
 test("the Pinned column: a press on a pin anywhere but its unpin control still selects it and keeps the pin", async () => {
@@ -4582,40 +4718,45 @@ test("the Pinned column: a press on a pin anywhere but its unpin control still s
   draw(v, cx);
 });
 
-test("the Pinned column: the unpin control is the heading's button, shown on hover and on the selected pin, and the text stays put", async () => {
-  const { v, keyOf } = await threePins(390);
+test("the Pinned column: the unpin button is the heading's button, shown while the pointer is on its row and on the selected pin, and the row's text stays put", async () => {
+  const { v, cx, keyOf } = await threePins(390);
   const rows = compactPins(v);
   const r = rows[1];
   v.sel = rows[0].key;
-  const rest = itemWords(v, r);
-  const own = ownOf(rest, "th-unpin-2");
-  expect(own.length).toBeGreaterThan(0);
+  const c = frame(v, cx);
+  const box = ownOf(c, "th-unpin-row-2");
+  const own = ownOf(c, "th-unpin-2");
   // As the heading's buttons (iconButton): 24 px, radius 5, a 14 px icon, the hover fill and a tooltip.
   for (const [m, x] of [["size", 24], ["rounded", 5]]) expect(own.some((e) => e[0] === m && e[1] === x)).toBe(true);
   expect(svgs(own)).toEqual(["pin-off.svg"]);
   expect(own.some((e) => e[0] === "size" && e[1] === 14)).toBe(true);
   expect(own.some((e) => e[0] === "bg" && e[1] === theme.hover)).toBe(true);
+  expect(own.some((e) => e[0] === "cursor_pointer")).toBe(true);
   expect(own.filter((e) => e[0] === "tooltip").map((e) => e[1])).toEqual([`Unpin #${r.turn.n}`]);
-  // At rest it is clear, and the row's hover shows it (Herdr restyles only the hovered element,
-  // so the row carries the colour the control takes).
   expect(own.filter((e) => e[0] === "text_color").map((e) => e[1])).toEqual([theme.foreground]); // its own hover
-  const head = rest.slice(rest.findIndex((e) => e[0] === "px" && e[1] === PIN_ROW.PAD_X));
-  expect(head.filter((e) => e[0] === "text_color").slice(0, 2).map((e) => e[1])).toEqual(["#00000000", theme.dim]);
+  // Its row's box is clear at rest and dim while the pointer is on the row, which the button
+  // takes (Herdr restyles only the hovered element): drawn whenever it can take the press.
+  expect(box.filter((e) => e[0] === "text_color").map((e) => e[1])).toEqual(["#00000000", theme.dim]);
+  expect(box.some((e) => e[0] === "bg")).toBe(false);
   // The selected pin shows it at rest, with p in its tooltip.
   v.sel = r.key;
-  const on = itemWords(v, r);
-  const ownOn = ownOf(on, "th-unpin-2");
-  expect(ownOn.filter((e) => e[0] === "text_color").map((e) => e[1])).toEqual([theme.dim, theme.foreground]);
-  expect(on.slice(on.findIndex((e) => e[0] === "px" && e[1] === PIN_ROW.PAD_X)).some((e) => e[0] === "text_color" && e[1] === "#00000000")).toBe(false);
-  expect(ownOn.filter((e) => e[0] === "tooltip").map((e) => e[1])).toEqual([`Unpin #${r.turn.n} (p)`]);
-  // Over the row, so the text does not move when it shows: the same layout either way.
-  expect(own.some((e) => e[0] === "absolute")).toBe(false);
-  const layout = (c) => c.filter((e) => ["px", "pt", "pb", "pr", "pl", "w", "mr", "gap", "absolute", "right", "top", "bottom"].includes(e[0])).map((e) => e.join(" "));
-  expect(layout(on)).toEqual(layout(rest));
-  expect(rest.some((e) => e[0] === "absolute")).toBe(true);
-  // The text keeps clear of it: the lines' column leaves its room, and the prompt is cut for
-  // the row's width less that room.
-  expect(rest.some((e) => e[0] === "pr" && e[1] === PIN_ROW.UNPIN_ROOM)).toBe(true);
+  const c2 = frame(v, cx);
+  expect(ownOf(c2, "th-unpin-row-2").filter((e) => e[0] === "text_color").map((e) => e[1])).toEqual([theme.dim]);
+  expect(ownOf(c2, "th-unpin-2").filter((e) => e[0] === "tooltip").map((e) => e[1])).toEqual([`Unpin #${r.turn.n} (p)`]);
+  // The row keeps its hover fill, and its own text colours: the button is not in it.
+  const rest = itemWords(v, rows[2]);
+  expect(rest.some((e) => e[0] === "id" && /^th-unpin/.test(String(e[1])))).toBe(false);
+  const head = rest.slice(rest.findIndex((e) => e[0] === "px" && e[1] === PIN_ROW.PAD_X));
+  expect(head.some((e) => e[0] === "bg" && e[1] === theme.hover)).toBe(true);
+  expect(head.some((e) => e[0] === "text_color" && e[1] === "#00000000")).toBe(false);
+  // The same layout selected or not, and the text keeps clear of the button: the lines' column
+  // leaves its room, and the prompt is cut for the row's width less that room.
+  const layout = (x) => x.filter((e) => ["px", "pt", "pb", "pr", "pl", "w", "mr", "gap", "absolute", "right", "top", "bottom"].includes(e[0])).map((e) => e.join(" "));
+  v.sel = null;
+  const off = itemWords(v, r);
+  v.sel = r.key;
+  expect(layout(itemWords(v, r))).toEqual(layout(off));
+  expect(off.some((e) => e[0] === "pr" && e[1] === PIN_ROW.UNPIN_ROOM)).toBe(true);
   const textW = 300 - 2 * PIN_ROW.PAD_X - PIN_ROW.BADGE - PIN_ROW.GAP_X - PIN_ROW.UNPIN_ROOM;
   const long = pinRowShape({ prompt: "ab ".repeat(200), reply: "cd ".repeat(200), width: 300 });
   expect(long.prompt[0].length).toBeLessThanOrEqual(Math.floor(textW / ROW.PROMPT_CHAR));
@@ -4623,9 +4764,9 @@ test("the Pinned column: the unpin control is the heading's button, shown on hov
   expect(long.reply.length).toBeLessThanOrEqual(Math.floor(textW / (ROW.REPLY_CHAR * (PIN_ROW.REPLY_SIZE / 13))) + 1);
   expect({ prompt: r.shape.prompt, reply: r.shape.reply, height: r.shape.height }).toEqual(pinRowShape({ prompt: pinPromptText(r.turn.prompt), reply: r.shape.reply, width: v.width }));
   // No Tab stop: the heading's buttons have none either.
-  const focusable = (c) => c.some((e) => ["track_focus", "tab_index", "tab_stop", "focusable"].includes(e[0]));
+  const focusable = (x) => x.some((e) => ["track_focus", "tab_index", "tab_stop", "focusable"].includes(e[0]));
   expect(focusable(own)).toBe(false);
-  expect(focusable(ownOf(frame(v, { ...makeCx() }), "th-pin"))).toBe(false);
+  expect(focusable(box)).toBe(false);
   void keyOf;
 });
 

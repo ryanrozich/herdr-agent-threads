@@ -2704,14 +2704,6 @@ export const PIN_ROW = Object.freeze({
   PAD_X: 12, PAD_T: 8, PAD_B: 9, BADGE: 20, GAP_X: 10, META: 16, GAP: 3, LINE: 19, REPLY: 18,
   SIZE: 13, REPLY_SIZE: 12.5, PROMPT_LINES: 2, UNPIN: 24, UNPIN_R: 6, UNPIN_ROOM: 22,
 });
-// Whether x (in the row's px, w wide) is over a compact pin's unpin button, its own 24 px
-// across. A list item takes one click handler, so the control is told apart by position; the
-// press's height in the row is not known (Herdr gives the list's offset no read), so the
-// button's column is, the row's whole height, where nothing else is drawn.
-export function pinUnpinHit(x, w) {
-  if (x == null || !(w > 0)) return false;
-  return x >= w - PIN_ROW.UNPIN_R - PIN_ROW.UNPIN && x <= w - PIN_ROW.UNPIN_R;
-}
 export function pinRowHeight(p) {
   return PIN_ROW.PAD_T + PIN_ROW.META + PIN_ROW.GAP + Math.max(1, Math.min(PIN_ROW.PROMPT_LINES, p)) * PIN_ROW.LINE
     + PIN_ROW.GAP + PIN_ROW.REPLY + PIN_ROW.PAD_B;

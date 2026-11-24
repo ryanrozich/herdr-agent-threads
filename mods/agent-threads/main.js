@@ -79,7 +79,7 @@ import {
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, noticeTurn, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, PIN_STEP, PIN_ROW, pinUnpinHit, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
+  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
   REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear, pairEvent, pairAlone, pinFit, weightHerdr, rowEvent, closeWeights, rowSolve,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
@@ -5040,32 +5040,6 @@ export default class Threads extends View {
     const ask = this.scrollAsk;
     this.scrollAsk = null;
     this.listOff = listOffset(this.slotPre(slots), this.listOff ?? 0, this.listH, ask, range.start, range.end);
-    // What lies under a still pointer in the Pinned view: its rows' heights and where the list
-    // is (unpinDrawn). A short list: a few dozen numbers.
-    this.pinLayout = this.view === "pinned" ? `${slots.join(",")}|${Math.round(this.listOff)}|${range.start}` : null;
-  }
-  // The layout a hover was seen on: the last one drawn, and the wheels since (a wheel moves the
-  // list before the pane draws again).
-  pinSeenSig() { return `${this.pinLayout}|${this.wheelN ?? 0}`; }
-  // Whether a press on a closed pin is on its unpin button while the button is drawn. The
-  // selected pin draws it at rest. Another draws it while the row is hovered, which gpui works
-  // out from the pointer's moves and paints with no event to the pane, so the pane asks for
-  // what makes it so: the pointer's last move was over the button at the press's place, with
-  // nothing moved under it since (no new layout of the rows, no wheel, the list as wide). A
-  // pointer resting where the list redrew or narrowed, a tap straight after the window took
-  // focus, or a row scrolled under a still pointer: the press selects the pin, and nothing is
-  // lost.
-  unpinDrawn(key) {
-    const w = this.bodyW ?? this.width;
-    if (!pinUnpinHit(this.pressX, w)) return false;
-    if (this.sel === key) return true;
-    const m = this.pinMoved;
-    if (!m || m.sig !== this.pinSeenSig()) return false;
-    // The button where the press finds it is where it was at the move, and the move was on it.
-    if (Math.abs(m.w - w) > 0.5 || !pinUnpinHit(m.x, w)) return false;
-    const p = this.pressAt;
-    if (m.at && p) return Math.abs(m.at.x - p.x) <= 1 && Math.abs(m.at.y - p.y) <= 1;
-    return Math.abs(m.x - this.pressX) <= 1;
   }
   // The rows' tops in a list's heights, and its end: made once for each set of heights.
   slotPre(slots) {
@@ -6088,13 +6062,6 @@ export default class Threads extends View {
     // stays, and its field gives up the keys.
     this.toList();
     if (/^\d+$/.test(kind)) {
-      // A closed pin's unpin control (pinRow), told apart by position: the pin goes, and the
-      // turn is neither selected nor opened. The notice offers undo (unpin).
-      if (this.view === "pinned" && !this.open.has(key) && this.unpinDrawn(key)) {
-        const p = this.pinnedList().find((x) => x.key === key);
-        this.pressX = null;
-        if (p) { this.unpin(p, cx); return cx.notify(); }
-      }
       if (this.outlined()) { this.leaveOutline(key); return cx.notify(); }
       // The selected running card whose message is taller than YOU_MAX: Show all and Show
       // less (ya:, which the open turn shares), as a press on an open turn's bubble does.
@@ -9207,10 +9174,6 @@ export default class Threads extends View {
         if (this.covered()) return;
         const x = e.local_position?.x;
         this.mouseX = x == null ? null : x / this.zoom() - this.colLeft();
-        // Where the pointer last moved in the Pinned view, on what layout and how wide a list
-        // (unpinDrawn; measured as a press measures it).
-        const bw = e.bounds?.width;
-        this.pinMoved = this.view === "pinned" ? { x: this.mouseX, at: e.position ? { x: e.position.x, y: e.position.y } : null, sig: this.pinSeenSig(), w: bw == null ? this.width : Math.min(bw / this.zoom(), this.width) } : null;
         this.notePointer(e.position, cx);
       })
       // Where the press landed, for the action bar (a list item takes one click handler,
@@ -9242,6 +9205,7 @@ export default class Threads extends View {
             .track_scroll(this.scroll)
             .on_item_click((key, cx) => this.click(key, cx))
             .size_full())))
+        .children(this.pinButtons(t, this.pinButtonRows(rows, slots)))
         .when(this.railShown(), (el) => el.child(this.railView(t))))
       .when(Boolean(s && !s.loaded && !s.error), (el) => el.child(this.progress(t, s)))
       .when(due.length > 0, (el) => el.child(this.probe(t, due)));
@@ -10090,6 +10054,12 @@ export default class Threads extends View {
       const seen = `${rowTurnKey(rows[f])}|${rowTurnKey(rows[l])}`;
       if (seen !== this.railSeen) { this.railSeen = seen; this.stickyDue = true; }
       this.lastRange = `${range.start}-${range.end}/${rows.length}`;
+      // The Pinned view's rows on screen, for the unpin buttons over them (pinButtonRows): when
+      // they change, the next frame draws the buttons for them.
+      if (this.view === "pinned") {
+        const drawn = rows.slice(range.start, range.end).map((x) => x?.key).join("\n");
+        if (drawn !== this.pinDrawn) { this.pinDrawn = drawn; this.stickyDue = true; }
+      }
       try { this.stickCheck(rows, prevShown, range.start); } catch (e) { this.drawFailed(e, null); }
       if (this.unseen && this.bottomShown) { if (this.unseen === true) this.stickyDue = true; this.unseen = false; }
       else if (this.unseen === "pending") { this.unseen = true; this.stickyDue = true; }
@@ -10561,19 +10531,11 @@ export default class Threads extends View {
     const ac = this.agentColor(t);
     const line = (text, h, size, c) => h_flex().h(h).min_w(0).items_center().overflow_hidden()
       .child(div().flex_1().min_w(0).truncate().text_size(size).text_color(c).child(text));
-    // The unpin control (pinUnpinHit) as the heading's buttons draw (iconButton), with no
-    // colour of its own at rest: the row is clear, so the control is too, and the row's hover
-    // gives it dim (Herdr restyles only the hovered element). The selected pin shows it.
-    const tip = `Unpin #${turn.n}${sel && this.quoteKey !== "p" ? " (p)" : ""}`;
-    const unpin = () => div().id(`th-unpin-${r.pinNo}`).flex_none().size(P.UNPIN).flex().items_center().justify_center().rounded(5).cursor_pointer()
-      .when(sel, (el) => el.text_color(t.dim))
-      .hover((s) => s.bg(t.hover).text_color(t.foreground))
-      .tooltip(tip)
-      .child(svg(ICON("pin-off")).size(14));
+    // The unpin button is not in here: a list item can carry no handlers, so it is drawn over
+    // the list (pinButtons), at the room the lines leave it (UNPIN_ROOM).
     return h_flex().w_full().relative().px(P.PAD_X).pt(P.PAD_T).pb(P.PAD_B).gap(P.GAP_X).items_start().min_w(0)
       .when(sel, (el) => el.bg(t.selected))
-      .when(!sel, (el) => el.text_color(CLEAR))
-      .when(!sel && !this.covered(), (el) => el.hover((s) => s.bg(t.hover).text_color(t.dim)))
+      .when(!sel && !this.covered(), (el) => el.hover((s) => s.bg(t.hover)))
       .child(div().flex_none().size(P.BADGE).mt(-2).rounded(6).flex().items_center().justify_center()
         .bg(alpha(t.accent, sel ? 0.28 : 0.16)).text_size(12).font_semibold().text_color(t.accent).child(String(r.pinNo)))
       .child(v_flex().flex_1().min_w(0).gap(P.GAP).pr(P.UNPIN_ROOM)
@@ -10593,8 +10555,63 @@ export default class Threads extends View {
           .children(sh.prompt.map((l) => line(l, P.LINE, P.SIZE, turn.agent ? t.muted : t.foreground))))
         .child(st
           ? line([this.agentName(turn), st.label, clock].filter(Boolean).join(" · "), P.REPLY, P.REPLY_SIZE, st.color)
-          : line(sh.reply, P.REPLY, P.REPLY_SIZE, color)))
-      .child(h_flex().absolute().top(0).bottom(0).right(P.UNPIN_R).items_center().child(unpin()));
+          : line(sh.reply, P.REPLY, P.REPLY_SIZE, color)));
+  }
+
+  // The closed pins whose unpin buttons are drawn, each with its row's top in the list and its
+  // height: compact pins (the Pinned view's closed pins), with nothing over the list, and
+  // only while each row's place on screen is known for sure. Herdr gives no read of the
+  // list's scroll offset, so that is while the list fits its box (measured; 0 before) and
+  // cannot scroll (its offset is 0, and a row is where the heights above it put it), and for
+  // the rows the list drew last. A list taller than its box has no buttons; p still unpins.
+  pinButtonRows(rows, slots) {
+    if (this.covered()) return [];
+    let total = 0;
+    for (const h of slots) total += h;
+    if (total > this.listH + 0.5) return [];
+    const drawn = new Set((this.pinDrawn ?? "").split("\n"));
+    const out = [];
+    let top = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (r?.compact && drawn.has(r.key)) out.push({ r, top, h: slots[i] });
+      top += slots[i];
+    }
+    return out;
+  }
+  // The unpin buttons over the Pinned view's closed pins (pinButtonRows): each is the heading's
+  // button (iconButton) with its own click, so a press unpins only on it, and the press and the
+  // release both on it (gpui's click), and goes no further (stop_propagation): the list under
+  // it neither selects nor opens the turn. It takes no press-down, so a drag that starts on it
+  // is not held. It sits in a clear box the size of its row, which turns dim while the pointer
+  // is on the row and gives the button that colour (Herdr restyles only the hovered element),
+  // so the button is drawn whenever the pointer is on its row, and always on the selected pin.
+  // The layer is laid out as the list's items are: the reading column, centred.
+  pinButtons(t, btns) {
+    if (!btns.length) return [];
+    const P = PIN_ROW;
+    return [h_flex().id("th-unpins").absolute().top(0).left(0).size_full().justify_center()
+      .child(div().w_full().max_w(this.width).h_full().relative()
+        .children(btns.map(({ r, top, h }) => {
+          const sel = this.sel === r.key;
+          const tip = `Unpin #${r.turn.n}${sel && this.quoteKey !== "p" ? " (p)" : ""}`;
+          return div().id(`th-unpin-row-${r.pinNo}`).absolute().top(top).left(0).w_full().h(h)
+            .text_color(sel ? t.dim : CLEAR)
+            .when(!sel, (el) => el.hover((s) => s.text_color(t.dim)))
+            .child(h_flex().absolute().top(0).bottom(0).right(P.UNPIN_R).items_center()
+              .child(div().id(`th-unpin-${r.pinNo}`).flex_none().size(P.UNPIN).flex().items_center().justify_center().rounded(5).cursor_pointer()
+                .hover((s) => s.bg(t.hover).text_color(t.foreground))
+                .tooltip(tip)
+                .on_click((_e, cx) => { cx.stop_propagation(); this.unpinButton(r.key, cx); })
+                .child(svg(ICON("pin-off")).size(14))));
+        })))];
+  }
+  // A press on a pin's unpin button: the pin goes, and the turn is neither selected nor
+  // opened. The notice offers undo (unpin). Nothing while a card or sheet covers the list.
+  unpinButton(key, cx) {
+    if (this.covered() || this.view !== "pinned") return;
+    const p = this.pinnedList().find((x) => x.key === key);
+    if (p) { this.unpin(p, cx); cx.notify(); }
   }
 
   // An outline row: "#12  8:43 AM  First line of the prompt  📌 2", one line at the reading
@@ -12382,6 +12399,8 @@ export default class Threads extends View {
         .bg(this.solidFill(t)).border_1().border_color(t.border).shadow_md().cursor_pointer()
         .text_size(12).text_color(t.foreground).hover((s) => s.bg(this.solidFill(t, t.hover)))
         .tooltip(dot ? "New below · jump to latest (End)" : "Jump to latest (End)")
+        // The press stops here too, so nothing under the pill takes it (a row, a pin's button).
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
         .on_click((_e, cx) => { cx.stop_propagation(); this.action("latest", cx); cx.notify(); })
         .when(dot, (el) => el.child(div().id("th-latest-pill-dot").flex_none().size(6).rounded(3).bg(t.accent)))
         .child(svg(ICON("arrow-down")).size(12).flex_none().text_color(t.muted))
@@ -12392,7 +12411,11 @@ export default class Threads extends View {
     // Just above the footer, whose hints can wrap to two lines, and above the pill.
     const pill = this.pillShown() ? PILL_H + PILL_GAP : 0;
     return h_flex().absolute().bottom(this.footSpace() + 6 + pill).left(0).right(0).justify_center()
-      .child(h_flex().min_h(32).max_w(Math.max(120, this.width - 24)).px(12).py(6).gap(7).items_center().rounded(8).bg(this.solidFill(t)).border_1().border_color(t.border).shadow_md()
+      // It takes the press, so a press on it reaches nothing under it: a row, or a pin's unpin
+      // button it covers (pinButtons).
+      .child(h_flex().id("th-toast").min_h(32).max_w(Math.max(120, this.width - 24)).px(12).py(6).gap(7).items_center().rounded(8).bg(this.solidFill(t)).border_1().border_color(t.border).shadow_md()
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click((_e, cx) => cx.stop_propagation())
         .text_size(12.5).text_color(t.foreground)
         .child(svg(ICON(this.toast.icon ?? "check")).size(13).flex_none().text_color(this.toast.icon === "circle-x" ? t.blocked : this.toast.icon === "check" ? t.ansi2 : t.muted))
         .child(div().min_w(0).max_h(44).overflow_hidden().child(this.toast.text)));
