@@ -463,10 +463,8 @@ const OPEN_WAIT_MS = 300;
 const FULL_REPLY_CHARS = 200000; // of an open reply; a note under it says what is left out
 // An open reply's part whose Markdown would not fit one view (MD_VIEW_CHARS, ui.js) is a run with
 // no place to split it (a word longer than MD_MAX: no space, line break, or Japanese or Chinese
-// sentence or clause mark): it shows as plain text (mdlong). Past a view, this many characters
-// of its start, under a dim line saying so; at most a view (its dollar escapes took it past one
-// as Markdown), all of it, under main's line for a part Herdr could not draw (BROKEN_NOTE).
-const LONG_SHOWN = 4000;
+// sentence or clause mark), or one its dollar escapes take past a view: it shows whole as plain
+// text (mdlong), under main's line for a part Herdr could not draw as Markdown (BROKEN_NOTE).
 const BROKEN_NOTE = "Herdr could not draw this part as Markdown, so it shows as plain text.";
 const VIEWER_PROMPT = 8000; // characters of the prompt in the image viewer's panel
 const LONG_REPLY = 1600; // characters past which an open reply ends in a Collapse (Esc) row
@@ -1229,7 +1227,7 @@ export default class Threads extends View {
         const y = this.youMd(r);
         return `you${n} ${this.youLabel(r.turn)} ${y.hl ? "hl" : "md"} q${y.quotes} code${y.code} links${y.links}${y.more ? ` +${y.more}` : ""} h${this.height(r)}${y.hl ? "" : ` | ${y.md.replace(/\n/g, " ⏎ ").slice(0, 300)}`}`;
       }
-      case "mdlong": return `mdlong${n} ${r.n} chars, ${r.shown.length} shown h${this.height(r)}`;
+      case "mdlong": return `mdlong${n} ${r.src.length} chars h${this.height(r)}`;
       case "md": return `md${n} links ${r.links ?? 0}${this.mdBroken?.has(r.key) ? " plain" : ""} h${this.height(r)}${r.links ? ` | ${(r.md.match(/\]\(https?:[^)]+\)/g) ?? []).join(" ")}` : ""}`;
       case "rhead": return `rhead${n} ${this.lineText(r.turn, `${r.si}:${r.turn.n}`)}${this.captionParts(r.turn).map(([i, x]) => ` · ${i} ${x}`).join("")} h${this.height(r)}`;
       case "lhead": return `lhead${n} LATEST UPDATE · after ${plural(r.turn.followups, "background update")}`;
@@ -6281,26 +6279,22 @@ export default class Threads extends View {
     pm.rows.set(key, row);
     return rough ? null : row;
   }
-  // A part one Markdown view cannot hold (a run with no place to split it) as plain text: its
-  // start under a dim line that gives its length (longNote). The line says it has no place to
-  // break it, not that it has no space: it can be prose, in a script written with no space and
-  // none of the marks the split breaks after (Thai and its neighbours). Its height is counted
-  // from the length shown, at no cost, until the probe measures it, and it has no link rules.
-  // As Markdown, at twice the price, sizing one of 200,000 characters ran past Herdr's time in
-  // every draw.
+  // A part one Markdown view cannot hold (a run with no place to split it, or one its dollar
+  // escapes take past a view) as plain text: all of it, under main's line (brokenPlain). It can
+  // be prose, in a script written with no space and none of the marks the split breaks after
+  // (Thai and its neighbours). Its height is counted from its length, at no cost, until the
+  // probe measures it, and it has no link rules. As Markdown, at twice the price, sizing one of
+  // 200,000 characters ran past Herdr's time in every draw.
   longPart(pm, item, key, src, j) {
     const gap = j ? this.paraGap() : undefined;
     const old = pm.rows.get(key);
     if (old?.kind === "mdlong" && old.src === src && old.gap === gap && this.sameItem(old, item)) return old;
-    // A part of at most a view is never cut: plain text needs no escapes, so all of it fits.
-    const row = { ...item, kind: "mdlong", key, src, shown: src.length <= MD_VIEW_CHARS ? src : src.slice(0, LONG_SHOWN), n: src.length, ...(j ? { gap } : {}) };
+    const row = { ...item, kind: "mdlong", key, src, ...(j ? { gap } : {}) };
     pm.rows.set(key, row);
     return row;
   }
-  // The line says only the start is shown only when text is left out.
-  longNote(r) { return r.n > r.shown.length ? `This part is ${fmtCount(r.n)} characters with no place to break it; only its start is shown. Copy (c) copies all of it.` : BROKEN_NOTE; }
   // A part as plain text under BROKEN_NOTE, with the warning's icon and colour: one Herdr drew at
-  // no height (mdBroken), or one its dollar escapes take past a view (mdlong, shown whole).
+  // no height (mdBroken), or one a Markdown view cannot hold (mdlong).
   brokenPlain(t, r, text) {
     return v_flex().mt(r.gap ?? 6).gap(4)
       .child(h_flex().gap(5).items_center().text_size(11.5).text_color(t.warning ?? t.dim)
@@ -10499,9 +10493,8 @@ export default class Threads extends View {
       case "latest": return 6 + (r.md ? this.mdHeight(r.md) + (r.left > 0 ? LATEST_NOTE : 0) + (r.whole ? 0 : 22) : this.latestBox(r) + (this.latestCut(r) ? 22 : 0));
       case "noreply": return 6 + TV_LINE * (this.wrapped(this.noReplyText(r.turn), w, MD_CHAR) + 1);
       case "md": return (r.gap ?? 6) + (r.table ? this.tableHeight(r) : this.mdHeight(r.src ?? r.md));
-      // The note's lines (longNote: the start line, or main's line when nothing is left out) at
-      // its 11.5 px, 4 px, then the text shown at the reading line.
-      case "mdlong": return (r.gap ?? 6) + 18 * this.wrapped(this.longNote(r), this.prose(), (this.charW(MD_CHAR) * 11.5) / 13) + 4 + this.restHeight(r.shown.length, 1);
+      // Main's line's lines at its 11.5 px, 4 px, then the text at the reading line.
+      case "mdlong": return (r.gap ?? 6) + 18 * this.wrapped(BROKEN_NOTE, this.prose(), (this.charW(MD_CHAR) * 11.5) / 13) + 4 + this.restHeight(r.src.length, 1);
       case "seltext": return 6 + 22 + r.boxH;
       case "codehead": return 8 + 28;
       case "code": return this.codeBoxH(r);
@@ -10545,7 +10538,7 @@ export default class Threads extends View {
       case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.repoSig()}|${y.linkMd ?? ""}`; }
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
       case "itext": return `${head}|${r.md.length}|${this.linksVer}`;
-      case "mdlong": return `${head}|${r.n}|${r.shown.length}|${r.gap ?? 6}`;
+      case "mdlong": return `${head}|${r.src.length}|${r.gap ?? 6}`;
       case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.repoSig()}|${this.mdBroken?.has(r.key) ? "plain" : "md"}${r.table ? `|t${this.tableExtra(r)}` : ""}`;
       case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}|t${this.tableExtra(r)}`;
       case "lhead": return `${head}|${r.turn.followups}`;
@@ -11796,13 +11789,9 @@ export default class Threads extends View {
       }
       case "codeall": return this.showAllRow(t, r.all ? "Show less" : `Show all · ${plural(r.left, "more row")}`, r.all ? "chevron-up" : "chevron-down");
       case "mview": return this.showAllRow(t, "View diagram", "panel-right");
-      // A part with no place to split it, too long for one Markdown view (longPart): its start
-      // as plain text under a dim line saying so; shown whole, under main's line (brokenPlain).
-      case "mdlong":
-        if (r.n <= r.shown.length) return this.brokenPlain(t, r, r.shown);
-        return v_flex().mt(r.gap ?? 6).gap(4)
-          .child(div().text_size(11.5).line_height("18px").text_color(t.dim).child(this.longNote(r)))
-          .child(this.readBlock(div()).text_color(t.foreground).child(r.shown));
+      // A part one Markdown view cannot hold (longPart): all of it as plain text, under main's
+      // line (brokenPlain).
+      case "mdlong": return this.brokenPlain(t, r, r.src);
       // The parts of a long reply not laid out yet: a quiet line in their place, at their rough
       // height, until the next frames bring them (partRow).
       case "mdrest": return v_flex().mt(r.gap ?? 6).h(Math.max(18, r.h - (r.gap ?? 6))).child(div().h(18).text_size(11.5).line_height("18px").text_color(t.dim).child(r.one ? "Laying out this part…" : "Laying out the rest of the reply…"));
