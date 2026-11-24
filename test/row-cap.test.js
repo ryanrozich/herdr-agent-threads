@@ -2059,3 +2059,64 @@ test("a seeded run of 60 jumps over a small window and a small cap: after each s
   expect(seen.windowed).toBeGreaterThan(20);
   expect(Object.keys(seen.ops).sort()).toEqual(["#n", "earlier", "first", "later", "latest", "next", "open", "prev"]);
 });
+
+// ---- the timers that scroll: each dropped when the reader has gone elsewhere first ----
+
+// The ends the pane asked the list to scroll to (askEnd), counted.
+function endsOf(v) {
+  const n = { ends: 0 };
+  const end = v.askEnd.bind(v);
+  v.askEnd = () => { n.ends++; end(); };
+  return n;
+}
+
+test("a landing's late asks are dropped by a newer landing in the same rows, and ask for their row by key after the rows above it change", async () => {
+  const { v, cx } = await capSession(150, SMALL);
+  const sim = simList(v);
+  const turns = (f) => shownIn(v, f).filter((k) => /^0:\d+$/.test(k));
+  v.action("first", cx);
+  settleList(v, cx, sim);
+  // A rail jump to #30 inside the oldest window, then, before its late asks, #5 there: the
+  // same rows, so #30's row is still in them, and only the newer landing drops its asks.
+  v.railJump("0:30", cx);
+  draw(v, cx);
+  let late = cx.timers;
+  cx.timers = [];
+  expect(late.length).toBeGreaterThan(0);
+  v.command("search:#5", cx);
+  v.command("escape", cx);
+  settleList(v, cx, sim);
+  expect(turns(sim.last())).toContain("0:5");
+  let asked = scrollsOf(v);
+  for (const x of late) x.fn(cx);
+  probeFrame(v, cx);
+  expect(asked).toEqual([]);
+  expect(turns(sim.last())).toContain("0:5");
+  H.listWindow = null;
+  // A rail jump to #40, and before its late asks a card of 25 parts opened above it with no
+  // scroll of its own (set here, as the window tests set it): every row from the card down
+  // moves on, and the asks name the same rows as with no card opened.
+  const lateAsks = async (open) => {
+    const { v, cx } = await capSession(150, SMALL, 19);
+    const sim = simList(v);
+    v.action("first", cx);
+    settleList(v, cx, sim);
+    v.railJump("0:40", cx);
+    draw(v, cx);
+    const late = cx.timers;
+    cx.timers = [];
+    const then = v.rows();
+    if (open) { v.open.add("0:20"); draw(v, cx); }
+    const asked = scrollsOf(v);
+    for (const x of late) x.fn(cx);
+    H.listWindow = null;
+    // Where each row asked for was in the landing's rows, and where it is now.
+    return { asked, moved: asked.map((k) => v.rowsMemo.findIndex((r) => r.key === k) - then.findIndex((r) => r.key === k)) };
+  };
+  const plain = await lateAsks(false);
+  expect(plain.asked.length).toBeGreaterThan(0);
+  const opened = await lateAsks(true);
+  expect(opened.asked).toEqual(plain.asked);
+  // The card moved every one of them on, so an ask by the landing's index would name others.
+  for (const d of opened.moved) expect(d).toBeGreaterThan(0);
+});
