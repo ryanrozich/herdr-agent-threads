@@ -542,9 +542,6 @@ test("while an open reply's split runs over several draws, each draw shows the p
   }
 }, 60000);
 
-// Stopped inside the rebuild the shape timer asked for (againOpen), as it builds the card: the
-// request stands, and the light draw after it builds the card again and splits on. With the
-// request given up before the build, the shape timer asks again only at the window's end.
 // Herdr can stop a draw after the rebuild of an open turn's rows (spliceRows) has dropped the
 // card's old rows from the index and before it has put the new ones in. A rebuild that went on
 // from there found the turn in no row, took it for one not shown, and gave up the request: the
@@ -595,6 +592,9 @@ test("a turn that comes in while an open card waits on a placeholder leaves the 
   expect(seen).toEqual([[false, true, false, true, false], [true, true, true, true, false]]);
 }, 60000);
 
+// Stopped inside the rebuild the shape timer asked for (againOpen), as it builds the card: the
+// request stands, and the light draw after it builds the card again and splits on. With the
+// request given up before the build, the shape timer asks again only at the window's end.
 test("a draw stopped inside the rebuild it was asked for keeps the request, and the light draw after it builds the card", async () => {
   const { v, cx, keys } = await openLong(shortParas(4000));
   v.probeDue = function () { this.probeLeft = 0; return []; };
