@@ -4,7 +4,7 @@
 // item. The pane reads synthetic fixtures through the real extractor (exec runs it).
 import { test, expect, setSystemTime, spyOn } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest, ruleSender, newSession as newSessionForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
@@ -27,6 +27,8 @@ import {
   drawRange,
   dropTimers,
   editors,
+  endInChunk2,
+  extractCalls,
   fakeH,
   fixture,
   focusCalls,
@@ -52,9 +54,11 @@ import {
   modDir,
   never,
   openAt,
+  openingPane,
   overlays,
   ownOf,
   pane,
+  paneWith,
   pinPane,
   PINS,
   pinsShown,
@@ -66,6 +70,7 @@ import {
   root,
   ROW,
   rowHeight,
+  s1Child,
   saved,
   scripted,
   scrolled,
@@ -2602,21 +2607,6 @@ test("debug on: a long session's rows settle, and then no next draw is asked for
 
 const busy = () => (busyFile ??= fixture("--busy", "130"));
 
-// A pane on file whose cx is set up by prep before init (hooks must be in place for the read).
-async function paneWith(file, prep, tries = 200) {
-  H.state = {
-    terminals: [{ address: "t4", status: "idle", name: "claude" }],
-    panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
-    props: { terminal: "t4", transcript: file, debug: true }, shared: {},
-  };
-  const v = unsliced(new Threads());
-  const cx = makeCx();
-  prep?.(cx, v);
-  v.init(state.props, cx);
-  if (tries) await settle(v, tries);
-  return { v, cx };
-}
-
 // Runs in a child bun; the parent test below starts it and checks what it wrote.
 // The child's clock (performance.now, which the read's budgets read too: SLICE_MS, BUILD_MS,
 // SHAPE_MS) moves only by the work counted, at the interpreter's prices (PRICE). On the wall
@@ -2633,7 +2623,10 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   performance.now = worked;
   const pcts = [];
   let v;
-  const r = await paneWith(busy(), (cx, view) => {
+  H.extractCalls = [];
+  // The busy fixture (6.7 MB), or a longer one of THREADS_S1_BUSY turns for S1b.
+  const file = process.env.THREADS_S1_BUSY ? fixture("--busy", process.env.THREADS_S1_BUSY) : busy();
+  const r = await paneWith(file, (cx, view) => {
     // It times the read's stretches and the draws: the pane's own slices.
     v = sliced(view);
     H.marks = [];
@@ -2688,33 +2681,21 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   view.toggle(keys.at(-3), r.cx);
   const allFrame = time(() => view.render(r.cx));
   performance.now = realPerf;
-  require("node:fs").writeFileSync(process.env.THREADS_OUT, JSON.stringify({ longest, most, read, pcts, turns: view.current().turns.length, loaded: view.current().loaded, awaits: m.length / 2, toggleOn, toggleOff, openFrame, nextFrame, allFrame }));
+  require("node:fs").writeFileSync(process.env.THREADS_OUT, JSON.stringify({ longest, most, read, pcts, calls: extractCalls.filter(([o, n]) => !(o === statSync(file).size - 2 ** 21 && n === 2 ** 21)).map(([, n]) => n), size: statSync(file).size, turns: view.current().turns.length, loaded: view.current().loaded, awaits: m.length / 2, toggleOn, toggleOff, openFrame, nextFrame, allFrame }));
 }, 120000);
 
 test("S1: the read's longest synchronous stretch is at most 30 ms of work at the interpreter's speed, and the percentage rises chunk by chunk", async () => {
-  const out = join(mkdtempSync(join(tmpdir(), "threads-timing-")), "out.json");
-  // Not execFileSync: while the child runs, this process stays free to take a signal, so a
-  // stopped run ends the child too (test/preload.js) instead of leaving it reading.
-  await new Promise((resolve, reject) => {
-    const child = spawn("bun", ["test", join(root, "test/render.test.js"), "-t", "S1 child"], {
-      env: { ...process.env, THREADS_CHILD: "read-timing", THREADS_OUT: out }, stdio: "ignore",
-    });
-    const timer = setTimeout(() => child.kill(), 120000);
-    child.on("error", reject);
-    child.on("exit", (code, sig) => { clearTimeout(timer); if (code === 0) resolve(); else reject(new Error(`the timing child ended with ${code ?? sig}`)); });
-  });
-  const r = JSON.parse(readFileSync(out, "utf8"));
+  const r = await s1Child();
   expect(r.loaded).toBe(true);
   expect(r.turns).toBe(1306);
   // The bounds are in ms of work at the interpreter's prices (PRICE, the child's clock), so
   // they are the same in CI, on any machine and under load. The longest stretch is the last:
   // it builds the rows (BUILD_MS) and shapes the turns in view (SHAPE_MS), 18.6 ms here.
   expect(r.longest).toBeLessThanOrEqual(30);
-  // The read yields after each chunk at least: no stretch parses or applies half the session.
-  // A whole read parsed in one go puts every line in one.
-  expect(r.most.lines).toBeLessThan(r.read.lines / 2);
-  expect(r.most.events).toBeLessThan(r.read.events / 2);
-  expect(r.pcts.length).toBeGreaterThanOrEqual(4);
+  // The bar rises with every chunk: 2, 4 and then the rest of the 6.7 MB, each call twice the
+  // last (READ_CHUNK).
+  expect(r.calls).toEqual([2 ** 21, 2 ** 22, 2 ** 23]);
+  expect(r.pcts.length).toBe(r.calls.length);
   for (let i = 1; i < r.pcts.length; i++) expect(r.pcts[i]).toBeGreaterThan(r.pcts[i - 1]);
   expect(r.pcts.at(-1)).toBe(100);
   // Showing agent messages shapes about 1,170 rows for the first time, within the draw's
@@ -13667,7 +13648,7 @@ test("a skipped line shows as one dim note after its turn, or at the head", asyn
   const turn = s.turns[1];
   const keyOf = `${v.sessions.indexOf(s)}:${turn.n}`;
   const base = v.rows().filter((r) => r.kind === "note").length;
-  turn.skipped = { lines: 1, bytes: 300 * 1048576 };
+  turn.skipped = { lines: 1, bytes: 300e6 };
   s.version++;
   let rows = v.rows();
   const at = rows.findIndex((r) => r.key === `skip:${keyOf}`);
@@ -20475,37 +20456,8 @@ test("TRD-24: on the right a 1 px size change across none of its thresholds wait
 });
 
 // ---- the opening (TRD-94): the pane's first session opens at its end, still ----
-// A pane armed by a draw before its session is read, whose read stops (each step waits) while
-// hold() says so. step(f) lets it go on until f() holds, then stops it again.
-async function openingPane(file, holdAt = () => true) {
-  let hold = holdAt;
-  const waiting = [];
-  const { v, cx } = await paneWith(file, (cx) => {
-    cx.sleepHook = () => (hold(v) ? new Promise((r) => waiting.push(r)) : new Promise((r) => setTimeout(r, 0)));
-  }, 0);
-  await until(() => v.current() && v.reading, "the read");
-  draw(v, cx);
-  const go = (f) => { hold = f; for (const r of waiting.splice(0)) r(); };
-  return { v, cx, go, waiting };
-}
 // The text a draw gave its elements.
 const drawnText = (calls) => calls.filter(([n, x]) => n === "child" && typeof x === "string").map(([, x]) => x);
-// A transcript whose first turn has its end in the second chunk: tool results of 100 KB each
-// fill the first 2 MiB, then the reply and the turn's end. Made-up words only.
-function endInChunk2() {
-  const at = (s) => new Date(Date.UTC(2026, 10, 2, 9, 0, s)).toISOString();
-  const lines = [{ type: "user", uuid: "u1", timestamp: at(0), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: "Read every cart module and sum the totals" } }];
-  for (let i = 0; i < 30; i++) {
-    lines.push({ type: "assistant", uuid: `a${i}`, timestamp: at(1 + i), sessionId: "s", message: { id: `m${i}`, role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { file_path: `cart/part${i}.ts` } }] } });
-    lines.push({ type: "user", uuid: `r${i}`, timestamp: at(1 + i), sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: `const kaz${i} = "${"zo".repeat(50000)}";` }] } });
-  }
-  lines.push({ type: "assistant", uuid: "z", timestamp: at(40), sessionId: "s", message: { id: "mz", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "The totals agree." }], usage: { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 9000, cache_creation_input_tokens: 300 } } });
-  lines.push({ type: "system", subtype: "turn_duration", durationMs: 40000, uuid: "d", timestamp: at(40), sessionId: "s" });
-  const dir = mkdtempSync(join(tmpdir(), "threads-open-"));
-  const file = join(dir, "o.jsonl");
-  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
-  return file;
-}
 // Frames until the opening has shown the list (as Herdr draws: timers due, then a draw).
 function openFrames(v, cx, n = 300) {
   const frames = [];
