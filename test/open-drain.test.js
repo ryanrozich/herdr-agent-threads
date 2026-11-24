@@ -956,6 +956,28 @@ test("the opening: with 44 ms of work ahead of the owed row in every draw, a row
   expect(frames.slice(-10).filter((f) => f.blank === 0)).toEqual([]);
 }, 300000);
 
+// The two-stop bound on the release path. With 44 ms ahead of the owed row in every draw and
+// rows of 8 ms, a row released after a second 64 draws runs alone, so its mark says alone, and
+// its cut holds it for its text: through 1,400 frames (about 22 s, four of the 5 s after a
+// stop) no turn runs twice, each run is cut, and the stops are one for each turn run. A text
+// costs at most two stops: one in a run with others, then one alone; a run released here is
+// always the alone one.
+test("the opening: a row released after a second 64 draws runs alone, and its cut holds it: one stop for its text, within the two a text may cost", async () => {
+  const runs = new Map();
+  const { v, frames } = await costlyWheel(8, 44, 1400, (v, cx, host) => {
+    wheelUp(v, cx, host);
+    const reshape = v.reshape;
+    v.reshape = function (...a) { if (this.renderOpen) runs.set(a[0], [...(runs.get(a[0]) ?? []), Boolean(this.unitAlone)]); return reshape.apply(this, a); };
+  }, { stop: true, after: 2, ahead: true });
+  const each = [...runs.values()];
+  // Runs of each turn run (alone or not): one each, alone, never more than two.
+  expect(each.map((r) => r.length).filter((n) => n > 2)).toEqual([]);
+  expect(each.filter((r) => r.length !== 1 || !r[0])).toEqual([]);
+  expect([...runs.keys()].filter((t) => !t.shapeMark?.alone)).toEqual([]);
+  expect(each.length).toBeGreaterThanOrEqual(3);
+  expect([frames.filter((f) => f.stopped).length, frames.reduce((n, f) => n + f.over, 0)]).toEqual([each.length, each.length]);
+}, 300000);
+
 // A rate four times too high, 40 ms of work ahead of the owed row in every draw, rows that
 // really cost 4 ms (40 + 4 and the 2 after fit in 50): estimated at about 18 ms, each row looks
 // as if no such draw could end it, so the time spent holds it. Nothing teaches the rate down:
