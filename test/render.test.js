@@ -4428,6 +4428,9 @@ async function threePins(x) {
   const ev = (at, pos = true, y = 300) => { const lx = (v.colLeft() + at) * v.zoom(); return { local_position: { x: lx, y }, ...(pos ? { position: { x: lx, y } } : {}), bounds: { width: v.width * v.zoom() }, click_count: 1 }; };
   const point = (at = x, pos = true) => body().move(ev(at, pos), cx);
   const press = (key, at = x, { move = true, pos = true, y = 300 } = {}) => { const h = body(); if (move) h.move(ev(at, pos, y), cx); h.down(ev(at, pos, y), cx); v.click(key, cx); };
+  // The pointer has moved in the pane since the v that showed the Pinned view (keyed), with
+  // no place of its own yet (mouseX), as the press tests expect.
+  v.keyed = false;
   return { v, cx, k, press, point, body, ev, keyOf: (i) => compactPins(v)[i].key };
 }
 // The unpin buttons' layer in a frame: whether it is drawn, and the pins whose row box
@@ -4670,21 +4673,44 @@ test("the Pinned column: the unpin buttons follow the rows' heights when they ch
   expect(check()).toEqual([1, 2, 3]);
 });
 
-test("the undo notice and the Jump to latest pill take the press: it stops on them, so nothing under them, a pin's button or a row, gets it", async () => {
-  const { v, cx, keyOf } = await threePins(390);
+// gpui's click as it reaches the elements under the pointer, topmost first: each one's click
+// runs until one stops it. The handlers given are the on_click ones, top to bottom.
+const clickThrough = (cx, handlers) => {
+  let stopped = false;
+  const scx = { ...cx, stop_propagation() { stopped = true; } };
+  for (const h of handlers) { h({ position: { x: 0, y: 0 }, click_count: 1 }, scx); if (stopped) return true; }
+  return false;
+};
+
+test("the undo notice and the Jump to latest pill take the click: it stops on them, so nothing under them, a pin's button or a row, gets it; the press-down goes on to the pane, so Herdr still focuses it, and no unpin control stops it either", async () => {
+  const { v, cx, keyOf, point } = await threePins(390);
   v.sel = keyOf(1);
   v.key(keyEv("p"), cx);
   expect(toastText(v)).toMatch(/^Unpinned/);
-  const toast = ownOf(frame(v, cx), "th-toast");
-  const down = toast.find((e) => e[0] === "on_mouse_down");
-  expect(down?.[1]).toBe("left");
+  point(); // the pointer moves after the key, so the buttons it rests on show again
+  const c = frame(v, cx);
+  const toast = ownOf(c, "th-toast");
+  expect(toast.some((e) => e[0] === "on_mouse_down")).toBe(false);
   const click = toast.find((e) => e[0] === "on_click")?.at(-1);
-  let stopped = 0;
-  const scx = { ...cx, stop_propagation() { stopped++; } };
-  down.at(-1)({ position: { x: 0, y: 0 } }, scx);
-  click({ position: { x: 0, y: 0 } }, scx);
-  expect(stopped).toBe(2);
+  expect(typeof click).toBe("function");
+  // A click on the notice over pin 1's button: the notice's click stops it, the button's never runs.
+  const btn = ownOf(c, "th-unpin-1").find((e) => e[0] === "on_click")?.at(-1);
+  expect(typeof btn).toBe("function");
+  expect(clickThrough(cx, [click, btn])).toBe(true);
   expect(v.isPinned(keyOf(0))).toBe(true);
+  // Without the notice the same click reaches the button and unpins (the model is not empty).
+  const k0 = keyOf(0);
+  expect(clickThrough(cx, [btn])).toBe(true);
+  expect(v.isPinned(k0)).toBe(false);
+  v.key(keyEv("u"), cx);
+  // No unpin control stops the press-down: the rows' buttons and their boxes, and the header's.
+  const c2 = frame(v, cx);
+  const ids = c2.filter((e) => e[0] === "id" && /^th-unpin/.test(e[1])).map((e) => e[1]);
+  expect(ids.length).toBeGreaterThan(0);
+  for (const id of ids) expect(ownOf(c2, id).some((e) => e[0] === "on_mouse_down")).toBe(false);
+  rec = []; v.header(theme); const h = rec; rec = null;
+  expect(ownOf(h, "th-pin").some((e) => e[0] === "on_click")).toBe(true);
+  expect(ownOf(h, "th-pin").some((e) => e[0] === "on_mouse_down")).toBe(false);
   // The pill, in the list's own view.
   const p = await pinPane("--extra", "6");
   listWindow = (n) => ({ start: 0, end: n - 1 }); // the list's end off screen
@@ -4694,9 +4720,9 @@ test("the undo notice and the Jump to latest pill take the press: it stops on th
     expect(p.v.pillShown()).toBe(true);
     pill = ownOf(frame(p.v, p.cx), "th-latest-pill");
   } finally { listWindow = null; }
-  expect(pill.find((e) => e[0] === "on_mouse_down")?.[1]).toBe("left");
+  expect(pill.some((e) => e[0] === "on_mouse_down")).toBe(false);
   let s2 = 0;
-  pill.find((e) => e[0] === "on_mouse_down").at(-1)({ position: { x: 0, y: 0 } }, { ...p.cx, stop_propagation() { s2++; } });
+  pill.find((e) => e[0] === "on_click").at(-1)({ position: { x: 0, y: 0 } }, { ...p.cx, stop_propagation() { s2++; } });
   expect(s2).toBe(1);
 });
 
@@ -4792,6 +4818,165 @@ test("the Pinned column: p on a selected pin still unpins it, and u puts it back
   expect(toastText(v)).toMatch(/^Unpinned #\d+ · u to undo$/);
   v.key(keyEv("u"), cx);
   expect(v.isPinned(b)).toBe(true);
+});
+
+test("the Pinned column: no unpin buttons while the Turn card is open, with one pin open and the list still fitting; a button drawn before the card opened only closes it, as any press outside the card does", async () => {
+  const { v, cx, keyOf } = await threePins(390);
+  const [a, b] = [0, 1].map(keyOf);
+  v.toggle(a, cx);
+  v.sel = a;
+  expect(unpinLayer(v, cx).rows).toEqual([2, 3]);
+  const before = frame(v, cx);
+  expect(v.action("legend", cx)).toBe(true);
+  expect(v.detailsOpen).toBe(true);
+  // The list still fits its box, so only the card hides the closed pins' buttons.
+  expect(rowTops(v).reduce((s, x) => s + x.h, 0)).toBeLessThanOrEqual(v.listH);
+  expect(unpinLayer(v, cx).has).toBe(false);
+  // The button from the frame before the card: the press closes the card and keeps the pin.
+  expect(clickButton(v, cx, 2, before)).toBe(1);
+  expect(v.detailsOpen).toBe(false);
+  expect(v.isPinned(b)).toBe(true);
+  expect(toastText(v) ?? "").not.toMatch(/^Unpinned/);
+  // Closed again: the buttons are back.
+  expect(unpinLayer(v, cx).rows).toEqual([2, 3]);
+});
+
+test("the Pinned column: after a key, until the pointer moves, gpui draws no hover, so a press on a row's unseen unpin button selects its pin and keeps it; the selected pin's button, drawn all along, still unpins; a move in the pane, over the buttons or not, ends it", async () => {
+  const { v, cx, keyOf, point } = await threePins(390);
+  const [a, b] = [0, 1].map(keyOf);
+  v.sel = a;
+  point();
+  expect(clickButton(v, cx, 2)).toBe(1);
+  expect(v.isPinned(b)).toBe(false);
+  // u, then a press on the same spot without a move: pin 2's button is back but not drawn.
+  v.key(keyEv("u"), cx);
+  expect(v.isPinned(b)).toBe(true);
+  expect(clickButton(v, cx, 2)).toBe(1);
+  expect(v.isPinned(b)).toBe(true);
+  expect(v.sel).toBe(b);
+  // That press was the pointer's: the next one on the selected pin's drawn button unpins.
+  expect(clickButton(v, cx, 2)).toBe(1);
+  expect(v.isPinned(b)).toBe(false);
+  v.key(keyEv("u"), cx);
+  // After a key, the selected pin's button is drawn (it shows without hover): it unpins.
+  v.sel = a;
+  v.key(keyEv("j"), cx);
+  v.sel = a;
+  expect(clickButton(v, cx, 1)).toBe(1);
+  expect(v.isPinned(a)).toBe(false);
+  v.key(keyEv("u"), cx);
+  // A move in the pane ends it, wherever it lands (the buttons' boxes take no move of their
+  // own), even under a card.
+  v.sel = a;
+  v.key(keyEv("j"), cx);
+  v.sel = a;
+  v.settingsOpen = true;
+  point(30);
+  v.settingsOpen = false;
+  expect(clickButton(v, cx, 2)).toBe(1);
+  expect(v.isPinned(b)).toBe(false);
+  const c = frame(v, cx);
+  for (const id of c.filter((e) => e[0] === "id" && /^th-unpin/.test(e[1])).map((e) => e[1])) {
+    expect(ownOf(c, id).some((e) => e[0] === "on_mouse_move")).toBe(false);
+  }
+});
+
+// The header's unpin button in a frame of the header: its own calls, and its click as gpui
+// delivers it (the number of times it kept the press, or null with no click).
+const headerUnpin = (v, cx) => {
+  rec = []; v.header(theme); const h = rec; rec = null;
+  const own = h.some((e) => e[0] === "id" && e[1] === "th-pin") ? ownOf(h, "th-pin") : null;
+  const click = () => {
+    const f = own?.find((e) => e[0] === "on_click")?.at(-1);
+    if (!f) return null;
+    let stopped = 0;
+    f({ position: { x: 0, y: 0 }, click_count: 1 }, { ...cx, stop_propagation() { stopped++; } });
+    return stopped;
+  };
+  return { own, click, data: v.headerButtons().find((b) => b[0] === "th-pin") ?? null };
+};
+
+test("the Pinned view's header unpin: shown while the Pinned view is up, it unpins the selected pin with one click even while the list scrolls and the rows' buttons hide; with none selected it stays, dimmed and inert", async () => {
+  const { v, cx } = await pinsShown(["--only", "7", "--gap", "86400"], [0, 1, 2, 3, 4, 5, 6], 390);
+  const pins = compactPins(v);
+  expect(pins.map((r) => r.pinNo)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  // A short window: the list scrolls, so the rows have no unpin buttons.
+  v.listH = 200;
+  expect(unpinLayer(v, cx).has).toBe(false);
+  const [a, b] = [pins[1].key, pins[4].key];
+  v.sel = a;
+  const n = v.findTurn(a).n;
+  let u = headerUnpin(v, cx);
+  expect(u.data.slice(1, 9)).toEqual(["pin-off", `Unpin #${n} (p)`, "unpinSel", false, null, null, false, false]);
+  expect(svgs(u.own)).toEqual(["pin-off.svg"]);
+  expect(u.own.filter((e) => e[0] === "tooltip").map((e) => e[1])).toEqual([`Unpin #${n} (p)`]);
+  expect(u.own.some((e) => e[0] === "cursor_pointer")).toBe(true);
+  expect(u.own.some((e) => e[0] === "opacity")).toBe(false);
+  // Its own unpin, not p's action: a rail card the pointer rests on is not what it unpins.
+  v.railHover = b;
+  v.railShown = () => true;
+  expect(u.click()).toBe(1);
+  expect(v.isPinned(a)).toBe(false);
+  expect(v.isPinned(b)).toBe(true);
+  expect(toastText(v)).toBe(`Unpinned #${n} · u to undo`);
+  v.railHover = null;
+  v.key(keyEv("u"), cx);
+  expect(v.isPinned(a)).toBe(true);
+  // None selected (nothing, a key gone from the list, or a turn that is not a pin): in its
+  // place, dimmed, with no hover fill or pointer, and a press does nothing.
+  for (const sel of [null, "9:9:9", `${pins[0].key.split(":")[0]}:999`]) {
+    v.sel = sel;
+    u = headerUnpin(v, cx);
+    expect(u.data.slice(1, 9)).toEqual(["pin-off", "Select a pin to unpin it (p)", "unpinSel", false, null, null, false, true]);
+    expect(u.own.filter((e) => e[0] === "tooltip").map((e) => e[1])).toEqual(["Select a pin to unpin it (p)"]);
+    expect(u.own.some((e) => e[0] === "opacity")).toBe(true);
+    expect(u.own.some((e) => e[0] === "cursor_pointer")).toBe(false);
+    expect(u.own.some((e) => e[0] === "bg" && e[1] === theme.hover)).toBe(false);
+    v.toast = null;
+    expect(u.click()).toBe(1);
+    expect(compactPins(v).length).toBe(7);
+    expect(toastText(v)).toBe(null);
+  }
+  // Under the settings card or the key sheet it does nothing.
+  v.sel = a;
+  u = headerUnpin(v, cx);
+  for (const open of ["settingsOpen", "keysOpen"]) {
+    v[open] = true;
+    expect(u.click()).toBe(1);
+    expect(v.isPinned(a)).toBe(true);
+    v[open] = false;
+  }
+  // Under the Turn card, a press closes the card and does nothing else, as one in the list does.
+  v.detailsOpen = true;
+  expect(u.click()).toBe(1);
+  expect(v.detailsOpen).toBe(false);
+  expect(v.isPinned(a)).toBe(true);
+  // With p as the quote key, its tooltips name no key.
+  v.quoteKey = "p";
+  expect(headerUnpin(v, cx).data[2]).toBe(`Unpin #${n}`);
+  v.sel = null;
+  expect(headerUnpin(v, cx).data[2]).toBe("Select a pin to unpin it");
+  v.quoteKey = "q";
+  // The Pinned view in the same pane under 300 px keeps its room for the count: no unpin
+  // there (p unpins), and the count in full.
+  v.width = 260;
+  expect(headerUnpin(v, cx).own).toBe(null);
+  expect(v.headerText()).toBe("7 of 7");
+  // The Pinned pane under 300 px keeps it, with the count shortened to fit beside it.
+  v.pinnedPane = true;
+  v.sel = a;
+  for (const width of [240, 260, 299]) {
+    v.width = width;
+    expect(v.headerButtons().map((b) => b[0])).toEqual(["th-pin", "th-pinned"]);
+    expect(v.headerText()).toBe("7/7");
+    expect(headerUnpin(v, cx).click()).toBe(1);
+    expect(v.isPinned(a)).toBe(false);
+    v.key(keyEv("u"), cx);
+    expect(v.isPinned(a)).toBe(true);
+  }
+  v.width = 300;
+  expect(v.headerText()).toBe("7 of 7");
+  v.pinnedPane = false;
 });
 
 test("a digit returns: the turn opens, stays selected, and shows from its head", async () => {
@@ -5262,15 +5447,18 @@ test("the pins show in the Pinned view at every width; the header and footer say
   v.width = 500;
   const btn = () => v.headerButtons().find((b) => b[0] === "th-pin");
   // The list's header has no pin button (p and an open turn's pin do it); the Pinned view
-  // keeps one, as Unpin for the selected pin.
+  // keeps one, as Unpin for the selected pin: an action, not a toggle, so never drawn on. A
+  // turn that is not a pin is no pin selected there: dimmed and inert.
   v.sel = k[0];
   expect(btn()).toBeUndefined();
   v.setView("pinned");
   expect(btn()[2]).toMatch(/^Unpin #\d+ \(p\)$/);
-  expect(btn()[4]).toBe(true);
-  v.sel = k[6];
-  expect(btn()[2]).toMatch(/^Pin #\d+ \(p\)$/);
   expect(btn()[4]).toBe(false);
+  expect(btn()[8]).toBe(false);
+  v.sel = k[6];
+  expect(btn()[2]).toBe("Select a pin to unpin it (p)");
+  expect(btn()[4]).toBe(false);
+  expect(btn()[8]).toBe(true);
   v.setView("all");
   const pinned = () => v.headerButtons().find((b) => b[0] === "th-pinned");
   expect(pinned().slice(1, 7)).toEqual([null, "Open the Pinned column beside Threads (v)", "pinned", false, null, "Pinned 5"]);
@@ -5382,20 +5570,29 @@ test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700,
   w.listH = 900;
   w.rowsKey = null;
   expect(w.rows()[0].kind).not.toBe("spacer");
-  // Its header: the Pinned heading, no badge, the pin button and "All turns", with room for "1 of 7" at 240 px.
-  w.width = 240;
-  expect(w.headerButtons().map((b) => [b[0], b[6]])).toEqual([["th-pinned", "All turns"]]);
-  expect(w.headerButtons()[0][2]).toBe("Back to Threads, all turns (v)");
-  // From 300 px its pin button is back: Unpin for the selected pin, the one way to unpin a
-  // closed pin with the mouse (the list's header has none).
-  w.width = 320;
-  expect(w.headerButtons().map((b) => b[0])).toEqual(["th-pin", "th-pinned"]);
+  // Its header: the Pinned heading, no badge, the unpin button and "All turns", at every
+  // width: the unpin is the one click that needs no row's place, so it stays under 300 px
+  // too, where a list that scrolls has no row buttons.
+  for (const width of [240, 320]) {
+    w.width = width;
+    expect(w.headerButtons().map((b) => [b[0], b[6]])).toEqual([["th-pin", null], ["th-pinned", "All turns"]]);
+    expect(w.headerButtons()[1][2]).toBe("Back to Threads, all turns (v)");
+  }
+  // At 240 px the text keeps 30 px: the pane less its 20 px padding, the heading's 74, the
+  // unpin's 32 and All turns' 84. "1 of 7" (40 px) would not fit there, so under 300 px the
+  // count reads "1/7" (20 px); from 300 px it is "1 of 7" again.
   w.width = 240;
   expect(w.headerLayout().badge).toBe(0);
-  expect(w.headerLayout().text).toBeGreaterThanOrEqual(Math.ceil("1 of 7".length * 6.6));
+  expect(w.headerLayout().text).toBe(240 - 20 - 74 - 32 - 84);
+  expect(w.headerLayout().text).toBeGreaterThanOrEqual(Math.ceil("1/7".length * 6.6));
+  expect(w.headerLayout().text).toBeLessThan(Math.ceil("1 of 7".length * 6.6));
   rec = []; w.header(theme); const wh = rec; rec = null;
   const ws = wh.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
-  expect(ws.slice(0, 2)).toEqual(["Pinned", "1 of 7"]);
+  expect(ws.slice(0, 2)).toEqual(["Pinned", "1/7"]);
+  w.width = 320;
+  expect(w.headerText()).toBe("1 of 7");
+  expect(w.headerLayout().text).toBeGreaterThanOrEqual(Math.ceil("1 of 7".length * 6.6));
+  w.width = 240;
   expect(ws).not.toContain("Claude");
   // The accent: the header's tint, and its bar along the top.
   expect(wh.some((e) => e[0] === "bg" && e[1] === alphaForTest(theme.accent, 0.08))).toBe(true);
