@@ -2957,7 +2957,9 @@ export default class Threads extends View {
         this.keptFor().rows.set(r.key, { turn: r.turn, s: r.s, sig: this.closedSig(r.key, r.turn, r.si, cg), rows: [nr], sizes: [this.baseSizes[i]], at: i, shape: sh });
       }
     }
-    this.staleRows = left;
+    // In index order, as every other list of them is: walked newest first, they are put back.
+    // Left in walk order, the next pass's reverse walked them oldest first, every other pass.
+    this.staleRows = this.follow ? left.reverse() : left;
     this.probeList();
     this.fitKey = null;
     return true;

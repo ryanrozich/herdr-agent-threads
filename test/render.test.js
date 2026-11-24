@@ -20198,6 +20198,65 @@ test("the drain uses its shaping time: a pass reshapes rows until the draw's bud
   } finally { H.listWindow = null; }
 }, 30000);
 
+test("the drain's order: while following, every pass walks the rows left newest first, and the rows left stay in order whichever way the pass before walked", async () => {
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    const { v, step } = await plainOpening(600);
+    for (let k = 0; (v.openActive() || v.staleRows?.length) && k < 400; k++) step();
+    // Every row left again: a new width, rebuilt whole.
+    v.width -= 40;
+    for (let k = 0; k < 20 && v.rowJob; k++) step();
+    v.rowsKey = null;
+    v.rows();
+    while (v.rowJob) { v.renders++; v.rows(); }
+    expect(v.staleRows.length).toBeGreaterThan(150);
+    // The rows a pass's own walk calls shape() for (not shapeInView's), in order. A turn named
+    // in defer is left by that walk, as a turn left for its expected cost is.
+    const at = new Map(v.baseRows.map((r, i) => [r.turn, i]));
+    let walked = [];
+    let inView = false;
+    let defer = null;
+    const shape = v.shape;
+    v.shape = function (t, ...a) {
+      if (inView) return shape.call(this, t, ...a);
+      walked.push(at.get(t));
+      if (t !== defer) return shape.call(this, t, ...a);
+      defer = null;
+      this.shapeStale = true;
+      return t.shapeMemo;
+    };
+    const siv = v.shapeInView;
+    v.shapeInView = function (...a) { inView = true; try { return siv.apply(this, a); } finally { inView = false; } };
+    const up = (a) => a.every((x, i) => i === 0 || a[i - 1] < x);
+    const pass = (follow) => {
+      v.follow = follow;
+      walked = [];
+      const s0 = v.staleRows.filter((i) => v.baseRows[i].kind === "turn").sort((a, b) => a - b);
+      v.reshapeStale(v.status());
+      expect(walked.length).toBeGreaterThan(5);
+      // Newest first while following, oldest first otherwise, from that end of the rows left.
+      expect(walked).toEqual((follow ? s0.slice().reverse() : s0).slice(0, walked.length));
+      expect(up(v.staleRows)).toBe(true);
+      return walked;
+    };
+    pass(true);
+    pass(true);
+    pass(true);
+    // A turn left by a pass while following, its third, is the next pass's first.
+    const d = v.staleRows.at(-3);
+    defer = v.baseRows[d].turn;
+    expect(pass(true)[2]).toBe(d);
+    expect(v.staleRows.at(-1)).toBe(d);
+    expect(pass(true)[0]).toBe(d);
+    // Follow changing between two passes, each way.
+    pass(false);
+    pass(true);
+    pass(false);
+    pass(false);
+    pass(true);
+  } finally { H.listWindow = null; }
+}, 30000);
+
 test("the opening: a stopped draw once the rows near the end are settled does not hold the list for the 5 s of plain draws after it", async () => {
   H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
   try {
