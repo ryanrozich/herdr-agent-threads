@@ -5429,8 +5429,10 @@ export default class Threads extends View {
     // machine), so there is no turn to select yet: its end selects the newest (latestAfterBuild).
     else if ((select || !this.sel) && this.rowJob) this.latestDue = { sel: this.sel };
     // Latest wins over a jump still to come: the end is held from the next frame, also while
-    // the rows reshape, where a pending jump would keep it waiting (render, bottomHeld).
+    // the rows reshape, where a pending jump would keep it waiting (render, bottomHeld). A
+    // render Herdr stopped does not ask for the jump again either (renderWant).
     this.scrollTo = null;
+    if (this.renderWant) this.renderWant.scrollTo = null;
     this.toBottom = true;
   }
   // Selects the newest turn when the build that jumpLatest waited for is done, if the pane is
@@ -7337,14 +7339,19 @@ export default class Threads extends View {
       this.cutUntil = now() + CUT_MS;
       this.renderCuts = (this.renderCuts ?? 0) + 1;
       // A scroll the stopped render took on (the jump to the newest turn, a return to a pin)
-      // is asked for again: it was taken before the list was drawn.
-      if (this.renderWant?.toBottom) this.toBottom = true;
-      if (this.renderWant?.scrollTo && !this.scrollTo) this.scrollTo = this.renderWant.scrollTo;
+      // is asked for again: it was taken before the list was drawn. Not after the reader's
+      // wheel since that render, which dropped it (listWheel) and is the newer word, as for
+      // the landing's timed asks.
+      const want = this.renderWant;
+      if (want && (this.wheelN ?? 0) === (want.wheels ?? 0)) {
+        if (want.toBottom) this.toBottom = true;
+        if (want.scrollTo && !this.scrollTo) this.scrollTo = want.scrollTo;
+      }
       // Counted at once: a render that is stopped too would never reach the end of the frame.
       this.publishCuts();
     }
     // Herdr asks for no render after one it stopped: the 120 ms timer asks for the next.
-    this.renderWant = { toBottom: this.toBottom, scrollTo: this.scrollTo };
+    this.renderWant = { toBottom: this.toBottom, scrollTo: this.scrollTo, wheels: this.wheelN ?? 0 };
     const light = this.cutUntil > now();
     this.renderAt = now();
     // One budget a draw; while rows are built over several draws (rowJob), one for them all,
