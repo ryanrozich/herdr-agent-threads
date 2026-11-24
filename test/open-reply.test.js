@@ -549,6 +549,36 @@ test("a draw Herdr stops halfway through putting an open card's new rows in leav
   expect([armed, r.stops, r.settled > 0, parts, v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i)]).toEqual([false, 1, true, 58, true]);
 }, 60000);
 
+// A turn that comes in while an open card waits on its placeholder (mdrest): the build after
+// it keeps the rows before the last day band (keptFrom), the card's among them, so they are not
+// built again. The open turns' work left is counted from what that build makes, and the kept
+// placeholder was in none of it: no rebuild of the open turns was asked for, and the card never
+// settled.
+test("a turn that comes in while an open card waits on a placeholder leaves the card's rest still to come: the card settles", async () => {
+  const seen = [];
+  for (const append of [false, true]) {
+    const { v, cx, keys } = await openLong([shortParas(4000), "Short reply."], true);
+    const s = v.sessions.at(-1);
+    const T = s.turns;
+    // The last turn on a later day: a day band between it and the card, where a build can start.
+    T.forEach((t, i) => { t.day = i < T.length - 1 ? "2026-11-01" : "2026-11-02"; });
+    v.rowsKey = null;
+    settleRows(v, cx);
+    dropTimers(v, cx);
+    v.toggle(keys[0], cx);
+    costedFrames(v, cx, 1, () => true);
+    const waited = v.baseRows.some((x) => x.kind === "mdrest" && x.key.includes(`:${keys[0]}:`));
+    const kf = v.keptFrom;
+    let kept = false;
+    v.keptFrom = function (rest) { const out = kf.call(this, rest); kept ||= out != null; return out; };
+    if (append) { T.push({ ...T.at(-1), n: T.length + 1, after: ["A new made-up reply."], shapeKey: null }); s.version = (s.version ?? 0) + 1; }
+    const r = costedFrames(v, cx, 200, await cardDone(v, keys[0]), { secs: 20 });
+    delete v.keptFrom;
+    seen.push([append, waited, kept, r.settled > 0, v.baseRows.some((x) => x.kind === "mdrest" && x.key.includes(`:${keys[0]}:`))]);
+  }
+  expect(seen).toEqual([[false, true, false, true, false], [true, true, true, true, false]]);
+}, 60000);
+
 test("a draw stopped inside the rebuild it was asked for keeps the request, and the light draw after it builds the card", async () => {
   const { v, cx, keys } = await openLong(shortParas(4000));
   v.probeDue = function () { this.probeLeft = 0; return []; };
