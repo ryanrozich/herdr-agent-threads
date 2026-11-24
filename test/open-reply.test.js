@@ -443,12 +443,12 @@ test("a part of 3,900 or 4,050 characters with dollar signs, past one view only 
 
 // Such a part's counted height (the mdlong row's, before the probe measures it) holds what is
 // drawn: its gap, main's line at the line's 11.5 px (18 px a line, as wide as the reading
-// line), 4 px, then the text shown. On a narrow pane main's line wraps to more than one line,
-// and a height that left it out, or counted it as one line, gave the part a slot too short.
-test("a part shown whole as plain text under main's line is counted at the height of what is drawn, main's line wrapped on a narrow pane", async () => {
-  const text = `${"a$".repeat(1800)}${"b".repeat(300)}`;
+// line), 4 px, then all of the text. On a narrow pane main's line wraps to more than one line,
+// and a height that left it out, or counted it as one line, gave the part a slot too short; a
+// run of 20,000 characters is counted at all its length.
+test("a part shown whole as plain text under main's line, of 3,900 or 20,000 characters, is counted at the height of what is drawn, main's line wrapped on a narrow pane", async () => {
   const seen = [];
-  for (const w of [640, 300]) {
+  for (const [text, w] of [[`${"a$".repeat(1800)}${"b".repeat(300)}`, 640], [`${"a$".repeat(1800)}${"b".repeat(300)}`, 300], ["z".repeat(20000), 640]]) {
     const { v, cx, key } = await openLong(text);
     v.probeDue = function () { this.probeLeft = 0; return []; };
     v.forcedWidth = w;
@@ -462,10 +462,10 @@ test("a part shown whole as plain text under main's line is counted at the heigh
     const note = drawn.find((x) => x.startsWith("Herdr could not draw this part as Markdown"));
     // MD_CHAR in main.js (6.1 px, a character of 13 px prose) at the line's 11.5 px.
     const noteLines = v.wrapped(note, v.prose(), (v.charW(6.1) * 11.5) / 13);
-    const held = (r.gap ?? 6) + 18 * noteLines + 4 + v.restHeight(r.src.length, 1);
-    seen.push([w, drawn.includes(r.src), noteLines > 1, v.height(r) === held]);
+    const held = (r.gap ?? 6) + 18 * noteLines + 4 + v.restHeight(text.length, 1);
+    seen.push([text.length, w, drawn.includes(text), noteLines > 1, v.height(r) === held]);
   }
-  expect(seen).toEqual([[640, true, false, true], [300, true, true, true]]);
+  expect(seen).toEqual([[3900, 640, true, false, true], [3900, 300, true, true, true], [20000, 640, true, false, true]]);
 }, 60000);
 
 // A paragraph of Japanese or Chinese prose that one view holds is one Markdown part, as main
