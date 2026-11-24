@@ -4,6 +4,7 @@
 // detail, the status line and the running rule. The turns are made up here in the reader's
 // shape (turns.js), as small as each case needs.
 import { test, expect } from "bun:test";
+import * as ledgerMod from "../mods/agent-threads/ledger.js";
 import {
   ledgerTurn, headParts, ledgerTotals, ledgerCols, barFrac, durText, startText, coarse, LEDGER_KINDS, LEDGER_ROW, LEDGER_HEAD, TRAJ_INKS, trajInks,
   trajCompact, compactRow,
@@ -540,6 +541,34 @@ test("trajLayout: the bottom dock's detail side and widths, and the list's colum
     }
   }
   expect(trajLayout(Number.NaN, "bottom").side).toBe("none");
+});
+
+// The bottom detail's three boundaries, each 1 px on each side, a test each: it comes in at
+// 700 px (DOCK_SIDE_MIN); it leaves its 360 px least at 1,460 (DOCK_LIST_MAX past it); it stops
+// at 640 px (DOCK_DETAIL_MAX) from 1,740, where the list takes all the rest.
+const dockAt = (w, open = true) => { const L = trajLayout(w, "bottom", open); return [w, L.side, L.detailW, L.listW]; };
+test("trajLayout: along the bottom the detail comes in at 700 px, both sides of it", () => {
+  expect(dockAt(699)).toEqual([699, "none", null, 699]);
+  expect(dockAt(700).slice(0, 2)).toEqual([700, "right"]);
+  expect(dockAt(701).slice(0, 2)).toEqual([701, "right"]);
+  expect(dockAt(700)[2]).not.toBe(null);
+});
+test("trajLayout: along the bottom the detail leaves its 360 px least at 1,460 px, where the list reaches 1,100; 1 px each side", () => {
+  expect(dockAt(1459)).toEqual([1459, "right", 360, 1099]);
+  expect(dockAt(1460)).toEqual([1460, "right", 360, 1100]);
+  expect(dockAt(1461)).toEqual([1461, "right", 361, 1100]);
+});
+test("trajLayout: along the bottom the detail stops at 640 px from 1,740 px and the list takes the rest; 1 px each side, and at 2,000, 2,650 and 3,000", () => {
+  expect(ledgerMod.DOCK_DETAIL_MAX).toBe(640);
+  expect(dockAt(1739)).toEqual([1739, "right", 639, 1100]);
+  expect(dockAt(1740)).toEqual([1740, "right", 640, 1100]);
+  expect(dockAt(1741)).toEqual([1741, "right", 640, 1101]);
+  expect(dockAt(2000)).toEqual([2000, "right", 640, 1360]);
+  expect(dockAt(2650)).toEqual([2650, "right", 640, 2010]);
+  expect(dockAt(3000)).toEqual([3000, "right", 640, 2360]);
+  // The detail closed: the list is the pane.
+  expect(dockAt(2650, false)).toEqual([2650, "right", 640, 2650]);
+  expect(dockAt(3000, false)).toEqual([3000, "right", 640, 3000]);
 });
 
 test("rowsLeft: the whole 24 px rows a list keeps in its height, less a timeline's above it", () => {

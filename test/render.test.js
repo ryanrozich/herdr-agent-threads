@@ -20595,6 +20595,18 @@ test("TRD-24: the bottom dock from 700 px: the detail open at the list's right, 
   }
 });
 
+test("TRD-24: the bottom dock past 1,740 px: the detail is drawn 640 px wide and the list takes the rest, open or closed", async () => {
+  for (const [w, listW] of [[1741, 1101], [2000, 1360], [2650, 2010], [3000, 2360]]) {
+    const { b, cb } = await bottomPane(w);
+    const c = frame(b, cb);
+    expect([w, detailCalls(c).some(([n, x]) => n === "w" && x === 640)]).toEqual([w, true]);
+    expect(b.trajReport().layout).toEqual({ side: "right", detailW: 640, listW });
+    b.key(keyEv("enter"), cb);
+    expect(hasId(frame(b, cb), "th-traj-detail")).toBe(false);
+    expect(b.trajReport().layout).toEqual({ side: "right", detailW: 640, listW: w });
+  }
+});
+
 test("TRD-24: the bottom dock under 700 px: no detail, and Enter, Space, a click on the selected row and Esc do nothing there; the hints leave the detail out", async () => {
   const { b, cb } = await bottomPane(650);
   const c = frame(b, cb);
