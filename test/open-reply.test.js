@@ -908,3 +908,25 @@ test.skip("following, a read that brings a new turn drops a scroll still waiting
   await settle(v);
   expect([v.current().turns.length, v.follow, v.toBottom, v.scrollTo ?? null]).toEqual([3, true, true, null]);
 });
+
+// Japanese and Chinese prose has no space between words, so a long paragraph of it is one run
+// with no space or line break, like a word longer than MD_MAX. It is ordinary text: it shows
+// whole, with no line saying it has no space and that only its start is shown. Made-up prose,
+// about 5,000 characters, with the ideographic full stop and no ASCII space or line break.
+const cjkProse = () => {
+  const s = ["今日は配送ルートの確認を朝のうちに終えました。", "倉庫の在庫は午後に数え直す予定です。", "仓库的订单按线路分配给每一位司机。", "明天的路线表会在中午之前发出。"];
+  let out = "";
+  for (let i = 0; out.length < 5000; i++) out += s[i % s.length];
+  return out;
+};
+test("a paragraph of Japanese or Chinese prose over 4,000 characters, with no space, shows whole and not as a run with no space", async () => {
+  const para = cjkProse();
+  const { v, cx, key } = await openLong(para);
+  v.probeDue = function () { this.probeLeft = 0; return []; };
+  const waiting = () => v.baseRows.some((x) => x.kind === "mdrest" && x.key.includes(`:${key}:`));
+  for (let i = 0; i < 200 && (i < 2 || waiting()); i++) draw(v, cx);
+  const card = v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`));
+  const text = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect([para.length > 5000, /[ \n]/.test(para), waiting(), card.map((x) => x.kind).filter((k) => k !== "md"), card.map((x) => x.src).join(""), text.some((x) => x.includes("with no space"))])
+    .toEqual([true, false, false, [], para, false]);
+}, 60000);
