@@ -6121,7 +6121,9 @@ export default class Threads extends View {
     if (turns.size > this.open.size) for (const k of turns.keys()) if (!this.open.has(k)) turns.delete(k);
     let m = turns.get(key);
     if (m?.text !== text) turns.set(key, (m = { text, ver, links: new Map(), prev: m?.ver === ver ? m.links : null, split: new Map(), rows: new Map() }));
-    else if (m.ver !== ver) { m.ver = ver; m.links = new Map(); m.prev = null; }
+    // New rules or a new repository drop the fit answers with the links: each part's text,
+    // linked again, would be a new key of a few KB at every change (partFits).
+    else if (m.ver !== ver) { m.ver = ver; m.links = new Map(); m.prev = null; m.fit = null; }
     return m;
   }
   // An open reply's Markdown segment split into its parts (chunks within MD_MAX, tables
@@ -6231,7 +6233,9 @@ export default class Threads extends View {
     pm.rows.set(key, row);
     return row;
   }
-  longNote(r) { return `This part is ${fmtCount(r.n)} characters with no place to break it; only its start is shown. Copy (c) copies all of it.`; }
+  // Only when text is left out: a part of at most LONG_SHOWN characters that its dollar
+  // escapes take past one view is plain text shown whole, and the line would be false.
+  longNote(r) { return r.n > r.shown.length ? `This part is ${fmtCount(r.n)} characters with no place to break it; only its start is shown. Copy (c) copies all of it.` : null; }
   // The time a draw gives an open reply's split and its parts' rows: its reshaping time, or
   // SHAPE_MIN_MS of a light draw.
   partMax() { return this.light ? SHAPE_MIN_MS : this.shapeMax(); }
@@ -6278,7 +6282,9 @@ export default class Threads extends View {
   // (partViews: the dollar escape, then pieces of at most MD_MAX bytes). Only a run with no
   // place to split it makes a piece longer than MD_MAX, and a text no longer than a view with
   // no "$" fits as it is, at the cost of one scan. Asked only of a part of at most a view and of
-  // that part with its links, so a look is a few KB. Kept per open turn (m), by text.
+  // that part with its links, so a look is a few KB. Kept per open turn (m), by text: a new text
+  // for the reply makes a new record (partMemo), and new rules drop the answers, so it holds at
+  // most two keys a part.
   partFits(m, md) {
     if (md.length <= MD_VIEW_CHARS && !md.includes("$")) return true;
     const fit = (m.fit ??= new Map());
@@ -10421,7 +10427,8 @@ export default class Threads extends View {
       case "noreply": return 6 + TV_LINE * (this.wrapped(this.noReplyText(r.turn), w, MD_CHAR) + 1);
       case "md": return (r.gap ?? 6) + (r.table ? this.tableHeight(r) : this.mdHeight(r.src ?? r.md));
       // The note's lines at its 11.5 px, 4 px, then the text shown at the reading line.
-      case "mdlong": return (r.gap ?? 6) + 18 * this.wrapped(this.longNote(r), this.prose(), (this.charW(MD_CHAR) * 11.5) / 13) + 4 + this.restHeight(r.shown.length, 1);
+      // With nothing left out (no line), the text shown alone.
+      case "mdlong": { const note = this.longNote(r); return (r.gap ?? 6) + (note ? 18 * this.wrapped(note, this.prose(), (this.charW(MD_CHAR) * 11.5) / 13) + 4 : 0) + this.restHeight(r.shown.length, 1); }
       case "seltext": return 6 + 22 + r.boxH;
       case "codehead": return 8 + 28;
       case "code": return this.codeBoxH(r);
@@ -11722,9 +11729,12 @@ export default class Threads extends View {
       case "mview": return this.showAllRow(t, "View diagram", "panel-right");
       // A part with no place to split it, too long for one Markdown view (longPart): its start
       // as plain text under a dim line saying so.
-      case "mdlong": return v_flex().mt(r.gap ?? 6).gap(4)
-        .child(div().text_size(11.5).line_height("18px").text_color(t.dim).child(this.longNote(r)))
-        .child(this.readBlock(div()).text_color(t.foreground).child(r.shown));
+      case "mdlong": {
+        const note = this.longNote(r);
+        return v_flex().mt(r.gap ?? 6).gap(4)
+          .children(note ? [div().text_size(11.5).line_height("18px").text_color(t.dim).child(note)] : [])
+          .child(this.readBlock(div()).text_color(t.foreground).child(r.shown));
+      }
       // The parts of a long reply not laid out yet: a quiet line in their place, at their rough
       // height, until the next frames bring them (partRow).
       case "mdrest": return v_flex().mt(r.gap ?? 6).h(Math.max(18, r.h - (r.gap ?? 6))).child(div().h(18).text_size(11.5).line_height("18px").text_color(t.dim).child(r.one ? "Laying out this part…" : "Laying out the rest of the reply…"));
