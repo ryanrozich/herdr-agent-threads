@@ -2947,8 +2947,12 @@ export default class Threads extends View {
     // The rows near the view are looked at past the draw's time too: the turns shapeInView just
     // shaped are memo hits, and shape() leaves the others as they are at once.
     const nearN = near?.rows.length ?? 0;
+    // While a jump lands (openLand), the rows above the view wait until its place is held.
+    const span = this.openLand ? this.nearSpan() : null;
+    const top = span ? this.viewRange[0] - span[2] : -1;
     for (let k = 0; k < order.length; k++) {
       const i = order[k];
+      if (i < top) continue;
       if (k >= nearN && (this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft += order.length - k; break; }
       const r = this.baseRows[i];
       done.add(i);
@@ -9113,6 +9117,15 @@ export default class Threads extends View {
     if (s?.loaded && this.sessions.length === 1 && s.turns.length === 0) return noTurns();
     const why = this.holdDone();
     if (why) this.letGo(why, cx);
+    // A jump that landed while rows above it are still reshaped or measured: once its scrolls
+    // and its lift are drawn, the place on screen is held, as a wheel's is (listWheel). Until
+    // then the rows above the view wait (reshapeStale).
+    if (this.openLand && this.follow) this.openLand = false;
+    if (this.openLand === "due" && !this.scrollAsk && !this.landLift) {
+      const a = this.takeAnchor();
+      if (a) { a.open = true; this.anchor = a; this.fitKey = null; }
+      this.openLand = false;
+    }
     const rows = this.rows();
     // The first rows of a session still being built, in slices over several frames (buildStep):
     // no row yet, and no empty state either, which would say there is nothing while the turns
@@ -9191,6 +9204,8 @@ export default class Threads extends View {
     } else if (this.scrollTo) {
       // A pin's place can be gone (the reply changed): the next best item, then the card.
       const st = this.scrollTo;
+      this.openLand = this.openUnsettled();
+      if (this.openLand) cx.timer.after(130, (cx) => { if (this.openLand) this.openLand = "due"; cx.notify(); });
       // The pane's own scrolls never count as the person's (stickCheck); debugScroll does.
       if (st.person) { this.upAt = Date.now() + 600; this.downAt = this.upAt; }
       else { this.scrollBusyUntil = Date.now() + 500; this.upAt = 0; this.downAt = 0; }

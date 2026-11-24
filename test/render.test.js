@@ -20227,7 +20227,8 @@ test("the opening: scrolled up mid-chat while the rows above drain, the row at t
 
 // Every way to leave the end for a turn while the rows above drain. Before, first, #n, a key step
 // and a search step were dropped: the end was held (toBottom) until the jump's wait was over,
-// and then the view went to the end.
+// and then the view went to the end. A rail jump, a pin's go-to and the outline's landed, then
+// crept up about 8 rows a frame as the rows above were reshaped.
 const LEAVE_WAYS = {
   "the rail": (v, cx, key) => { v.railJump(key, cx); },
   first: (v, cx) => { v.action("first", cx); return v.sel; },
@@ -20239,16 +20240,27 @@ const LEAVE_WAYS = {
   "the outline": (v, _cx, key, step) => { v.setOutline(true); step(); step(); v.leaveOutline(key); },
   "a pin": (v, cx, key) => { v.togglePin(key, cx); v.goPin(0, cx); },
 };
-test("the opening: a jump away from the end while the rows above drain lands on its turn, on rows shaped by the next frame", async () => {
-  for (const [name, go] of Object.entries(LEAVE_WAYS)) {
-    const { frames } = await leaveDuringDrain(go);
+test("the opening: a jump away from the end while the rows above drain lands on its turn, on rows shaped by the next frame, and stays", async () => {
+  // Frames 16 ms apart; 8 ms apart, a frame between the landing's two scrolls; and 130 ms apart,
+  // its scrolls, its lift and the hold in one gap.
+  for (const [name, go, pace] of Object.entries(LEAVE_WAYS).flatMap(([n, g]) => [16, 8, 130].map((p) => [`${n}, ${p} ms`, g, p]))) {
+    const { v, frames } = await leaveDuringDrain(go, pace);
+    expect([name, v.staleRows.length]).toEqual([name, 0]);
     const on = (f) => f[4] != null && f[4] >= 0 && f[4] < 600;
-    // The turn's top is on screen within 3 frames, with most rows left to reshape.
+    // The turn's top is on screen once the landing's scrolls are drawn (48 ms), with most rows
+    // left to reshape.
     const at = frames.findIndex(on);
-    expect([name, at >= 0 && at < 3]).toEqual([name, true]);
+    expect([name, at >= 0 && at <= Math.max(1, Math.ceil(48 / pace) - 1)]).toEqual([name, true]);
     expect([name, frames[at][0] > 400]).toEqual([name, true]);
-    // From then on: never back at the end, with no empty bubble on screen.
-    expect([name, frames.slice(at + 1).filter((f) => f[2] >= f[8] - 1 || f[3] > 0)]).toEqual([name, []]);
+    // From then on: on screen in every frame, never back at the end, with no empty bubble and no
+    // row on screen at a height not its own.
+    const later = frames.slice(at + 1);
+    expect([name, later.filter((f) => !on(f) || f[2] >= f[8] - 1 || f[3] > 0 || f[6] > 0)]).toEqual([name, []]);
+    // Once its scrolls are drawn (130 ms), the place is held: the turn's top stays where it is
+    // then, to the end of the drain and after.
+    const h = frames.findIndex((f) => f[7]);
+    expect([name, h >= at && h <= Math.ceil(130 / pace) + 2]).toEqual([name, true]);
+    expect([name, frames.slice(h).filter((f) => Math.abs(f[4] - frames[h][4]) > 1)]).toEqual([name, []]);
   }
 }, 120000);
 
