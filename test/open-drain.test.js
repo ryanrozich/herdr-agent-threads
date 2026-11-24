@@ -1008,7 +1008,12 @@ test("the opening: a row's refused draws count for its text: a released row cut 
         turn.prompt = `${turn.prompt} zerb quil`;
       }
       // Twenty draws after the 5 s of plain draws that follow the stop.
-      if (changed >= 0 && k === changed + 313 + 20) fresh = turn.refused?.n ?? 0;
+      // The count that holds for its text now (a count of the old text, or one with no text, is
+      // the one the release would read).
+      if (changed >= 0 && k === changed + 313 + 20) {
+        const r = turn.refused;
+        fresh = r && (r.sig == null || r.sig === v.markSig(turn, v.replyText(turn))) ? r.n : 0;
+      }
     },
   });
   expect(changed).toBeGreaterThan(120);

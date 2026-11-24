@@ -4932,13 +4932,13 @@ export default class Threads extends View {
       // for a draw that reshaped nothing else, which a drain may not have for its whole length.
       const after = (this.unitsRun ?? 0) > 0 || spent > 0;
       if (after || max < 0 || live || (!this.lineScreen && this.pastLine())) {
-        if (after && this.lineScreen && max >= 0 && !live) { this.oweRow(); this.refuse(turn); }
+        if (after && this.lineScreen && max >= 0 && !live) { this.oweRow(); this.refuse(turn, text); }
         return true;
       }
       // Held by the time spent for a second OWED_DRAWS draws on screen: run all the same, as the
       // estimate may be too high and nothing else would teach it down. One stop at most.
-      if (this.cutWhereNow(est) && (turn.refused?.n ?? 0) < 2 * OWED_DRAWS) {
-        if (this.lineScreen) { this.oweRow(); this.refuse(turn); }
+      if (this.cutWhereNow(est) && this.refusedN(turn, text) < 2 * OWED_DRAWS) {
+        if (this.lineScreen) { this.oweRow(); this.refuse(turn, text); }
         return true;
       }
       this.unitAlone = true;
@@ -5094,7 +5094,7 @@ export default class Threads extends View {
     if (late ? this.lineFirst && this.lineScreen && fits : est == null || fits) return false;
     if (!this.lineScreen) return true;
     this.oweRow();
-    this.refuse(turn);
+    this.refuse(turn, text);
     // Past the line the draw's first is spent once a row on screen is refused: the walk goes on
     // with the rows drawn (memo hits) and stops at the first row off screen.
     if (late) this.lineFirst = false;
@@ -5104,14 +5104,20 @@ export default class Threads extends View {
   oweRow() {
     if (!this.lineOwed && this.lineKey != null) this.lineOwed = { key: this.lineKey, view: this.viewRange?.[0], wheel: this.wheelN ?? 0 };
   }
-  // A row on screen refused by the fit check (lineCut, payOwed): counted on its turn once a
-  // draw, until it is shaped. At OWED_DRAWS, payOwed runs it alone.
-  refuse(turn) {
-    const r = (turn.refused ??= { n: 0, at: -1 });
+  // A row on screen refused by the fit check (lineCut, payOwed) or for the units run before
+  // its run alone (shapeHeld): counted on its turn once a draw, for its text (markSig), until
+  // it is shaped. At OWED_DRAWS, payOwed runs it alone. New text counts from 0: a turn held at
+  // 128 for its old text waits again (a running turn counted while its reply grew, too).
+  refuse(turn, text) {
+    const sig = this.markSig(turn, text);
+    if (turn.refused?.sig !== sig) turn.refused = { n: 0, at: -1, sig };
+    const r = turn.refused;
     if (r.at === this.renders) return;
     r.at = this.renders;
     r.n++;
   }
+  // The draws turn has been refused for this text (refuse).
+  refusedN(turn, text) { return turn.refused?.sig === this.markSig(turn, text) ? turn.refused.n : 0; }
   // The row on screen the drain's line refused last frame: reshaped now, ahead of the rows key
   // and the running turn, if the view has not moved since (no wheel, no jump waiting, the same
   // top row) and its cost with the rest of the draw fits (fitsHost: Herdr stops on the draw's
@@ -5128,10 +5134,11 @@ export default class Threads extends View {
     // a draw's first does. One that fits a lighter draw but not this one is refused and waits
     // for the walk to owe it again (owedHeldDraws counts these draws), until it has been refused
     // OWED_DRAWS draws: then it runs alone (owedRun), whatever lightBase says.
-    const est = this.hostCost(turn, this.replyText(turn));
-    const due = (turn.refused?.n ?? 0) >= OWED_DRAWS;
+    const text = this.replyText(turn);
+    const est = this.hostCost(turn, text);
+    const due = this.refusedN(turn, text) >= OWED_DRAWS;
     if (!due && est != null && !this.neverFits(est) && !this.fitsHost(est)) {
-      this.refuse(turn);
+      this.refuse(turn, text);
       this.owedHeldDraws = (this.owedHeldDraws ?? 0) + 1;
       return;
     }
