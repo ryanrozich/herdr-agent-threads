@@ -105,7 +105,8 @@ export function keyInstaller(bindings) {
 // Every key, grouped, for the ? sheet: [group, [[keys, what it does]]]. A pin key gives way
 // to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then. The Pinned
 // column has no outline (outline false), so its sheet leaves o out.
-export function keySheet(quoteKey = "q", { outline = true, ledger = false, inPane = false } = {}) {
+// bottom: the Trajectory pane along the bottom of the tab, where - and = do nothing.
+export function keySheet(quoteKey = "q", { outline = true, ledger = false, inPane = false, bottom = false } = {}) {
   const pin = (k) => quoteKey !== k;
   if (ledger) return [
     ["Trajectory", [
@@ -114,7 +115,7 @@ export function keySheet(quoteKey = "q", { outline = true, ledger = false, inPan
       [["y"], inPane ? "Back to the Chat" : "Go to the Chat"], [["Esc"], inPane ? "Close the detail, then back to the Chat" : "Close the detail"],
     ]],
     ["Pane", [
-      ...(inPane ? [] : [[["-", "="], "Make the Trajectory pane narrower or wider"]]),
+      ...(inPane || bottom ? [] : [[["-", "="], "Make the Trajectory pane narrower or wider"]]),
       [["t"], "Focus the terminal"], [[","], "Settings"], [["?"], "Show or hide this sheet"],
     ]],
   ];

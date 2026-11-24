@@ -10,7 +10,7 @@ import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sess
 import { join } from "node:path";
 import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS, weightHerdr as weightHerdrOf } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
-import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf, COMPACT_PAD as COMPACT_PAD_T } from "../mods/agent-threads/ledger.js";
+import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf, trajLayout, COMPACT_PAD as COMPACT_PAD_T } from "../mods/agent-threads/ledger.js";
 
 import {
   afterPress,
@@ -34,6 +34,7 @@ import {
   H,
   handlerAfterId,
   hcBy,
+  heldClock,
   herdrSettings,
   herdrVersion,
   hostPlatform,
@@ -74,6 +75,7 @@ import {
   settleRows,
   setup,
   simList,
+  sliced,
   stamp,
   state,
   stillAt,
@@ -85,6 +87,7 @@ import {
   tileRow,
   toastText,
   tooltips,
+  unsliced,
   until,
   views,
   work,
@@ -2608,7 +2611,7 @@ async function paneWith(file, prep, tries = 200) {
     panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
     props: { terminal: "t4", transcript: file, debug: true }, shared: {},
   };
-  const v = new Threads();
+  const v = unsliced(new Threads());
   const cx = makeCx();
   prep?.(cx, v);
   v.init(state.props, cx);
@@ -2633,7 +2636,8 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   const pcts = [];
   let v;
   const r = await paneWith(busy(), (cx, view) => {
-    v = view;
+    // It times the read's stretches and the draws: the pane's own slices.
+    v = sliced(view);
     H.marks = [];
     cx.sleepHook = () => { stamp("out"); return new Promise((res) => setTimeout(() => { stamp("in"); res(); }, 0)); };
     // The read's last notify (in its finally) closes its last stretch.
@@ -3118,6 +3122,9 @@ test("V3b: reply, latest and YOU TextViews never scroll; a message over 420 px i
   v.prefs = { ...v.prefs, bubbleColor: "plain", agentBubbleColor: "plain" }; // Markdown in the message: the plain look
   v.open = new Set(v.current().turns.map((t) => `0:${t.n}`));
   v.full = new Set(v.current().turns.flatMap((t) => [`0:${t.n}`, `l:0:${t.n}`]));
+  // Every row built first: the build is cut into slices by the clock, so one frame on a busy
+  // machine drew only some of them, and the press below found no part to open.
+  settleRows(v, cx);
   views.length = 0;
   frame(v, cx);
   const md = views.filter((x) => /^(th-probe-)?th-(md|lmd)-/.test(x.id));
@@ -3138,6 +3145,7 @@ test("V3b: reply, latest and YOU TextViews never scroll; a message over 420 px i
   const h0 = v.estimate(capped);
   // A press on the bubble (the list's item click) opens the rest in place; another closes it.
   v.click(capped.key, cx);
+  settleRows(v, cx);
   const open = v.rows().find((r) => r.key === capped.key);
   expect(open.all).toBe(true);
   const y = v.youMd(open);
@@ -3148,6 +3156,7 @@ test("V3b: reply, latest and YOU TextViews never scroll; a message over 420 px i
   expect(d.some(([n, a]) => n === "h" && a === 420)).toBe(false);
   expect(d.some(([n, a]) => n === "child" && a === "Show less")).toBe(true);
   v.click(capped.key, cx);
+  settleRows(v, cx);
   expect(v.youMd(v.rows().find((r) => r.key === capped.key)).capped).toBe(true);
 });
 
@@ -3157,6 +3166,11 @@ test("V3b: the first-frame estimate is never under the reading-line reference, a
   v.open = new Set(v.current().turns.map((t) => `0:${t.n}`));
   for (const w of [240, 380, 640]) {
     v.forcedWidth = w; v.width = w; v.meas = new Map();
+    // Every row built first: the build is cut into slices by the clock, and rows() outside a
+    // draw takes no further slice, so on a busy machine it listed only some of them. The draws
+    // measure nothing: the estimates are still the first frame's.
+    settleRows(v, cx);
+    expect(v.meas.size).toBe(0);
     let n = 0;
     for (const r of v.rows().filter((x) => x.kind === "md")) {
       const blocks = r.src.split(/\n{2,}/);
@@ -7231,6 +7245,9 @@ test("a render Herdr stopped is asked for again, and counted even when the next 
   tick.fn(cx);
   expect(notes).toBe(0);
   v.renderAt -= 300;
+  // No poke yet counts from 0 on the clock, which a test run alone can reach the tick before
+  // 250 ms past: the last poke is put as far back as the draw.
+  v.cutPokeAt = v.renderAt;
   tick.fn(cx);
   tick.fn(cx);
   expect(notes).toBe(1);
@@ -7246,7 +7263,8 @@ test("a render Herdr stopped is asked for again, and counted even when the next 
 });
 
 test("one reshaping budget a draw, and less of it when the rest of the draw is slow", async () => {
-  const { v, cx } = await pane(fixture("--extra", "2"));
+  // About the budgets themselves: the pane's own slices.
+  const { v, cx } = await pane(fixture("--extra", "2"), { sliced: true });
   v.render(cx);
   // A quick draw leaves the whole budget for reshaping and for a slice of a rows build; a
   // slow one splits what is left of 30 ms between them, each down to its floor.
@@ -7369,7 +7387,9 @@ test("the jump to the newest turn goes to the end every frame while the rows set
 const rowSig = (v) => v.baseRows.map((r, i) => `${r.kind}|${r.key}|${r.count ?? ""}|${v.baseSizes[i]}`);
 
 test("a long session's rows are built over several frames, the old rows shown till then, and come out as one build would make them", async () => {
+  // About the slices themselves: the pane's own.
   const { v, cx } = await longSession(450);
+  sliced(v);
   v.debug = false;
   v.width = 545;
   settleRows(v, cx);
@@ -7691,7 +7711,9 @@ test("a measure taken for a width the pane has left is used when the pane comes 
 });
 
 test("a rebuild sizes its rows inside the slice's time too, and the rows on screen stay until every new row has its height", async () => {
+  // About the slices themselves: the pane's own.
   const { v, cx } = await longSession(450);
+  sliced(v);
   v.debug = false;
   v.width = 545;
   settleRows(v, cx);
@@ -7733,7 +7755,7 @@ test("a long session whose read ends while its first rows still build selects th
   let fake = 0;
   performance.now = () => (fake += 2);
   let p;
-  try { p = await pane(fixture("--extra", "300")); } finally { performance.now = realPerf; }
+  try { p = await pane(fixture("--extra", "300"), { sliced: true }); } finally { performance.now = realPerf; }
   const { v, cx } = p;
   expect(v.rowJob).not.toBe(null);
   expect(v.sel).toBe(null);
@@ -8600,7 +8622,8 @@ test("the outline marks pins, keeps working narrow, has its own footer, gives wa
 // draw reshapes for at most SHAPE_MS, rows in view first, and the next frames go on.
 test("a settings change in a long session reshapes rows over several frames, the ones in view first", async () => {
   // Agent messages with no reply of their own: hidden, and never shaped, till the toggle below.
-  const { v, cx } = await paneWith(fixture("--busy", "130", "--quiet"), null, 1000);
+  // About the slices themselves: the pane's own.
+  const { v, cx } = await paneWith(fixture("--busy", "130", "--quiet"), (_cx, view) => sliced(view), 1000);
   v.width = 545;
   v.prefs = { ...v.prefs, truncate: true }; // so Reply lines changes the rows
   draw(v, cx);
@@ -17673,6 +17696,12 @@ async function pairPanes(chat = 722, opts = {}) {
   const { v, cx } = await pinPane("--extra", "6");
   v.debug = false;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  // opts.bottom: a Trajectory pane (p5) along the bottom of the tab, in a split of its own
+  // under the row (TRD-24), so not in pairRow's widths.
+  if (opts.bottom) {
+    state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+    state.shared["threads.trajByTerminal"] = { t4: { pane: "p5", dock: "bottom" } };
+  }
   let now = 1_000_000;
   const real = Date.now;
   Date.now = () => now;
@@ -20022,6 +20051,431 @@ test("a terminal at px beside the pair is never resized: its width holds through
   } finally { t.restore(); }
 });
 
+// ---- the Trajectory's docks (TRD-24, part 1: a pane knows its dock) ----
+// A Trajectory pane along the bottom of the tab (props().dock "bottom") sits in a split of its
+// own under the Chat's row. Nothing opens one yet; these check that the row's code leaves it out.
+const bottomMapped = () => {
+  state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+  state.shared["threads.trajByTerminal"] = { t4: { pane: "p5", dock: "bottom" } };
+};
+// The layout asks in order, a split's props less its transcript (each run has its own file).
+const runAsks = () => log.filter(([k, n]) => k === "run" && (n === "layout.resize" || n === "pane.split"))
+  .map(([, n, a]) => [n, a.props ? { ...a, props: { ...a.props, transcript: "f.jsonl" } } : a]);
+
+test("TRD-24: with a Trajectory along the bottom, the Pinned column opens off the Chat, its pair lands on weights and steps with - and = exactly as with none, and the bottom pane is never asked", async () => {
+  const runs = {};
+  for (const bottom of [false, true]) {
+    // A weighed Chat in a row where the terminal has 200 px to spare for its keep, not 400: the
+    // column's opening (pinKeep) counts the terminal and nothing below the row.
+    const t = await pairPanes(722, { bottom, weighed: true, total: 1462 });
+    try {
+      t.run(4000);
+      t.v.key(keyEv("="), t.cx);
+      t.run(2000);
+      t.w.key(keyEv("-"), t.cxw);
+      t.run(2000);
+      const asks = runAsks();
+      expect(asks.find(([n]) => n === "pane.split")[1]).toMatchObject({ pane: "p2", direction: "right", props: { view: "pinned" } });
+      expect(asks.some(([, a]) => a.id === "p5" || a.pane === "p5")).toBe(false);
+      runs[bottom] = { asks, widths: t.row.widths(), pair: state.shared["threads.pinPair"]?.t4 ?? null, row: state.shared["threads.row"]?.t4 ?? null };
+    } finally { t.restore(); }
+  }
+  expect(runs[true].pair.k).toBeGreaterThan(0);
+  expect(runs[true].asks.filter(([, a]) => a.weight != null).length).toBeGreaterThan(0);
+  expect(runs[true]).toEqual(runs[false]);
+});
+
+test("TRD-24: the Pinned pair with no terminal beside it and a Trajectory along the bottom shares the row by its widths, one weight each", async () => {
+  const t = await pairPanes();
+  try {
+    state.panes = state.panes.filter((p) => p.pane !== "p1");
+    bottomMapped();
+    H.log = [];
+    t.w.pairBegin(t.w.me(), t.w.mainPane(), 722, 380, null, t.cxw);
+    expect(resizes()).toEqual([{ id: "p2", weight: 722 }, { id: "p3", weight: 380 }]);
+  } finally { t.restore(); }
+});
+
+test("TRD-24: with a Trajectory along the bottom the Chat makes no row of it, weighs itself as with none, takes the terminal as its one sibling, and its close sends the Chat nothing", async () => {
+  const real = Date.now;
+  let now = real();
+  Date.now = () => now;
+  try {
+    const { v, cx } = await weightPane({}, 700);
+    bottomMapped();
+    v.poll(cx);
+    expect(v.trajRightOpen()).toBe(null);
+    expect(v.trajPaneOpen().pane).toBe("p5");
+    expect(v.rowPanes()).toBe(null);
+    expect(v.rowSibling(v.me())).toBe("p1");
+    // y goes to it, as to one on the right, and the Trajectory button says so.
+    H.log = [];
+    v.key(keyEv("y"), cx);
+    expect(log).toEqual([["run", "pane.focus", { pane: "p5" }]]);
+    expect(v.floatButtons()[1].slice(2, 5)).toEqual(["Go to the Trajectory (y)", "trajectory", true]);
+    // The Chat's own weight, as with nothing beside it.
+    H.log = [];
+    v.toWeight();
+    expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
+    // Its probe goes on past the next poll: a bottom pane does not stop it.
+    v.poll(cx);
+    expect(v.weighing).not.toBe(null);
+    v.weighing = null;
+    v.weightNow = 1;
+    // The bottom pane closes: it took no width, so none comes back, and no weight follows.
+    H.log = [];
+    state.panes = state.panes.filter((p) => p.pane !== "p5");
+    v.poll(cx);
+    now += 1000;
+    v.poll(cx);
+    expect(resized()).toEqual([]);
+    expect(state.shared["threads.row"]?.t4?.ids ?? null).toBe(null);
+    // settings.json's trajectory object is read and shown in the report; nothing acts on it yet.
+    v.applyExtras(JSON.stringify({ trajectory: { dock: "bottom", height: 412 } }));
+    v.report();
+    expect(state.shared["threads.debug"].t4.trajPrefs).toEqual({ dock: "bottom", height: 412 });
+    expect(v.prefsNotes).toEqual([]);
+  } finally { Date.now = real; }
+});
+
+test("TRD-24: a Trajectory pane opened along the bottom says so in its map entry and its report; - and = pass on there, its key sheet leaves them out, and its width is kept as no owner's", async () => {
+  const { v } = await pane(fixture("--extra", "3"));
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+  const props = state.props;
+  state.props = { ...props, view: "trajectory", dock: "bottom" };
+  const b = new Threads();
+  const cb = makeCx();
+  b.init(state.props, cb);
+  await settle(b);
+  state.props = props;
+  expect([b.trajPane, b.traj, b.trajDock]).toEqual([true, true, "bottom"]);
+  b.poll(cb);
+  cb.flush(0);
+  expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p5", dock: "bottom" } });
+  expect(v.trajBottomId()).toBe("p5");
+  b.width = 1400;
+  b.paneW = 1400;
+  b.report();
+  expect(state.shared["threads.debug"]["t4:trajectory"].traj).toMatchObject({ pane: true, dock: "bottom" });
+  // - and = do nothing here and pass on to Herdr.
+  H.log = [];
+  let stopped = 0;
+  cb.stop_propagation = () => { stopped++; };
+  b.key(keyEv("="), cb);
+  b.key(keyEv("-"), cb);
+  b.command("wider", cb);
+  expect([resizes(), stopped]).toEqual([[], 0]);
+  // The key sheet has no - and = line; a right pane's has.
+  b.keysOpen = true;
+  expect(wordsOf(frame(b, cb))).not.toContain("Make the Trajectory pane narrower or wider");
+  b.trajDock = "right";
+  expect(wordsOf(frame(b, cb))).toContain("Make the Trajectory pane narrower or wider");
+  b.trajDock = "bottom";
+  b.keysOpen = false;
+  // Its width, long settled, is shared for its neighbours but never kept as the right dock's.
+  b.firstSizeAt = Date.now() - 5000;
+  b.shareWidth();
+  expect(state.shared["threads.width"].p5).toBe(1400);
+  expect(state.shared["threads.trajWidth"]?.px ?? null).toBe(null);
+  b.trajDock = "right";
+  b.shareWidth();
+  expect(state.shared["threads.trajWidth"]).toEqual({ px: 1402 });
+});
+
+test("TRD-24: a Trajectory settings note stays when a link or sender rule changes, and the report keeps it", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  const note = 'trajectory.dock "top" is not "right" or "bottom"; using "right"';
+  v.applyExtras(JSON.stringify({ trajectory: { dock: "top", height: 120 } }));
+  const both = [note, "trajectory.height 120 is under 270 px; using 270"];
+  expect(v.prefsNotes).toEqual(both);
+  // A link rule list and a sender rule list applied from the card rebuild the notes.
+  v.useRules("links", [{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://example.com/$1" }], cx);
+  expect(v.prefsNotes).toEqual(both);
+  v.useRules("senders", [], cx);
+  expect(v.prefsNotes).toEqual(both);
+  v.report();
+  expect(state.shared["threads.debug"].t4.settingsNotes).toEqual(both);
+  // Fixed in the file: gone.
+  v.applyExtras(JSON.stringify({ trajectory: { dock: "bottom" } }));
+  v.useRules("links", [], cx);
+  expect(v.prefsNotes).toEqual([]);
+});
+
+test("TRD-24: a bottom Trajectory pane's dock holds in its map entry whichever writes first, the pane finding itself or the Chat settling its split", async () => {
+  delete recordFiles[PINS];
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  const props = state.props;
+  // The Chat splits; the new pane comes up with a bottom dock in its props (part 3's split).
+  const open = () => {
+    delete state.shared["threads.trajByTerminal"];
+    state.panes = state.panes.filter((p) => p.pane !== "p5");
+    v.splitAsk = null;
+    v.key(keyEv("y"), cx);
+    expect(v.splitAsk?.map).toBe("threads.trajByTerminal");
+    state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+    state.props = { ...props, view: "trajectory", dock: "bottom" };
+    const b = new Threads();
+    const cb = makeCx();
+    b.init(state.props, cb);
+    state.props = props;
+    return { b, cb };
+  };
+  const bottom = { t4: { pane: "p5", dock: "bottom" } };
+  // The Chat first: its entry names the pane with no dock, and the pane's first look adds it.
+  {
+    const { b, cb } = open();
+    await settle(b);
+    v.settleSplit(cx);
+    expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p5" } });
+    b.poll(cb);
+    cb.flush(0);
+    expect(state.shared["threads.trajByTerminal"]).toEqual(bottom);
+    expect(v.trajBottomId()).toBe("p5");
+  }
+  // The pane first: the Chat's write after its split keeps the dock the pane gave.
+  {
+    const { b, cb } = open();
+    await settle(b);
+    b.poll(cb);
+    cb.flush(0);
+    expect(state.shared["threads.trajByTerminal"]).toEqual(bottom);
+    v.settleSplit(cx);
+    expect(state.shared["threads.trajByTerminal"]).toEqual(bottom);
+    b.poll(cb);
+    cb.flush(0);
+    expect(state.shared["threads.trajByTerminal"]).toEqual(bottom);
+    expect(v.trajBottomId()).toBe("p5");
+  }
+  // An entry for another pane, still open, is not this pane's: the Chat's write replaces it whole.
+  open();
+  state.shared["threads.trajByTerminal"] = { t4: { pane: "p1", dock: "bottom" } };
+  v.settleSplit(cx);
+  expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p5" } });
+});
+
+test("TRD-24: a right Trajectory pane finding itself under a stale bottom entry for its own id writes its entry whole, with no dock", async () => {
+  const { v } = await pane(fixture("--extra", "3"));
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+  state.shared["threads.trajByTerminal"] = { t4: { pane: "p5", dock: "bottom" } };
+  const props = state.props;
+  state.props = { ...props, view: "trajectory" };
+  const b = new Threads();
+  const cb = makeCx();
+  b.init(state.props, cb);
+  await settle(b);
+  state.props = props;
+  expect([b.trajPane, b.trajDock]).toEqual([true, "right"]);
+  b.poll(cb);
+  cb.flush(0);
+  expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p5" } });
+  expect(v.trajBottomId()).toBe(null);
+  expect(v.trajRightOpen()?.pane).toBe("p5");
+});
+
+// ---- the Trajectory's docks (TRD-24, part 2: the bottom dock's layout) ----
+// A Trajectory pane along the bottom (props().dock "bottom"), w px wide and h tall.
+async function bottomPane(w, h = 400, dock = "bottom") {
+  await pane(fixture("--extra", "3"));
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+  const props = state.props;
+  state.props = { ...props, view: "trajectory", ...(dock === "bottom" ? { dock } : {}) };
+  const b = new Threads();
+  const cb = makeCx();
+  b.init(state.props, cb);
+  await settle(b);
+  state.props = props;
+  b.width = w;
+  b.paneW = w;
+  b.rootH = h;
+  return { b, cb };
+}
+const detailCalls = (c) => afterId(c, "th-traj-detail") ?? [];
+
+test("TRD-24: the bottom dock from 700 px: the detail open at the list's right, at least 360 px, taking what the list leaves past 1,100 px; the list's columns go by the list's width", async () => {
+  for (const [w, detailW, listW, start, bar] of [[1700, 600, 1100, true, true], [1460, 360, 1100, true, true], [1100, 360, 740, true, true], [800, 360, 440, true, false], [700, 360, 340, false, false]]) {
+    const { b, cb } = await bottomPane(w);
+    const c = frame(b, cb);
+    expect(hasId(c, "th-traj-detail")).toBe(true);
+    const d = detailCalls(c);
+    expect(d).toContainEqual(["w", detailW]);
+    expect(d.some(([n]) => n === "border_l")).toBe(true);
+    expect(d.some(([n]) => n === "border_t")).toBe(false);
+    const rep = b.trajReport();
+    expect(rep.layout).toEqual({ side: "right", detailW, listW });
+    expect(rep.cols).toEqual({ start, bar, filters: true, detailRight: true });
+    expect(rep.detail).not.toBe(null);
+    // The rows draw the start column (40 px) and the bar (BAR_W, 64 px) as the list's width says.
+    const steps = b.ledgerRows().filter((r) => r.kind === "tr").length;
+    const cells = (px) => c.filter(([n, x]) => n === "w" && x === px).length;
+    expect(steps).toBeGreaterThan(0);
+    expect([cells(40) >= steps, cells(64) >= steps]).toEqual([start, bar]);
+    expect([cells(40) === 0, cells(64) === 0]).toEqual([!start, !bar]);
+    // Enter closes it, and the list takes the whole width; Enter again brings it back.
+    b.key(keyEv("enter"), cb);
+    expect(b.detailOpen()).toBe(false);
+    expect(hasId(frame(b, cb), "th-traj-detail")).toBe(false);
+    expect(b.trajReport().layout).toEqual({ side: "right", detailW, listW: w });
+    b.key(keyEv("enter"), cb);
+    expect(b.detailOpen()).toBe(true);
+  }
+});
+
+test("TRD-24: the bottom dock past 1,740 px: the detail is drawn 640 px wide and the list takes the rest, open or closed", async () => {
+  for (const [w, listW] of [[1741, 1101], [2000, 1360], [2650, 2010], [3000, 2360]]) {
+    const { b, cb } = await bottomPane(w);
+    const c = frame(b, cb);
+    expect([w, detailCalls(c).some(([n, x]) => n === "w" && x === 640)]).toEqual([w, true]);
+    expect(b.trajReport().layout).toEqual({ side: "right", detailW: 640, listW });
+    b.key(keyEv("enter"), cb);
+    expect(hasId(frame(b, cb), "th-traj-detail")).toBe(false);
+    expect(b.trajReport().layout).toEqual({ side: "right", detailW: 640, listW: w });
+  }
+});
+
+test("TRD-24: the bottom dock under 700 px: no detail, and Enter, Space, a click on the selected row and Esc do nothing there; the hints leave the detail out", async () => {
+  const { b, cb } = await bottomPane(650);
+  const c = frame(b, cb);
+  expect(hasId(c, "th-traj-detail")).toBe(false);
+  expect(b.trajReport().layout).toEqual({ side: "none", detailW: null, listW: 650 });
+  expect(b.trajReport().cols).toEqual({ start: true, bar: true, filters: true, detailRight: false });
+  expect(b.trajReport().detail).toBe(null);
+  // Even after the person had opened it at a wider width.
+  b.tdetail = true;
+  expect(b.detailOpen()).toBe(false);
+  expect(hasId(frame(b, cb), "th-traj-detail")).toBe(false);
+  let stopped = 0;
+  cb.stop_propagation = () => { stopped++; };
+  for (const k of ["enter", "space", "escape"]) b.key(keyEv(k), cb);
+  expect(stopped).toBe(0);
+  expect(b.ledgerAction("ldetail", cb)).toBe(false);
+  const shown = b.ledgerRows();
+  const sel = shown[b.ledgerSel(shown)].key;
+  b.ledgerClick(sel);
+  expect([b.detailOpen(), b.tsel]).toEqual([false, sel]);
+  expect(b.footerHints().map(([k]) => k)).not.toContain("↵");
+  // Back at 700 px it is open again, as the person left it.
+  b.width = 700;
+  b.paneW = 700;
+  expect(b.detailOpen()).toBe(true);
+  expect(b.footerHints().map(([k]) => k)).toContain("↵");
+});
+
+test("TRD-24: the right dock keeps its own layout at every width: the detail 300 px at the right from 900 px, under the list and closed below, the columns by the pane's width", async () => {
+  for (const [w, side] of [[1700, "right"], [960, "right"], [800, "under"], [650, "under"]]) {
+    const { b, cb } = await bottomPane(w, 400, "right");
+    expect(b.trajDock).toBe("right");
+    if (side === "right") {
+      const d = detailCalls(frame(b, cb));
+      expect(d).toContainEqual(["w", 300]);
+      expect(d.some(([n]) => n === "border_l")).toBe(true);
+    } else {
+      expect(b.detailOpen()).toBe(false);
+      b.key(keyEv("enter"), cb);
+      const d = detailCalls(frame(b, cb));
+      expect(d.some(([n]) => n === "border_t")).toBe(true);
+    }
+    expect(b.trajReport().layout.side).toBe(side);
+    expect(b.trajReport().cols).toEqual({ start: true, bar: true, filters: true, detailRight: side === "right" });
+    // The report's list width follows the detail: the pane's less 300 px open at the right, the
+    // pane's when closed or under the list.
+    expect(b.trajReport().layout.listW).toBe(side === "right" && b.detailOpen() ? w - 300 : w);
+    b.tdetail = !b.detailOpen();
+    expect(b.trajReport().layout).toEqual({ side, detailW: side === "right" ? 300 : null, listW: side === "right" && b.detailOpen() ? w - 300 : w });
+  }
+});
+
+test("TRD-24: the list box measures its height, and the report says how many rows it keeps, with room left for a timeline above it", async () => {
+  const { b, cb } = await bottomPane(1100, 270);
+  const c = frame(b, cb);
+  expect(b.trajReport().rowsLeft).toBe(null);
+  handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 740, height: 130 }, cb);
+  expect(b.trajReport().listH).toBe(130);
+  expect(b.trajReport().rowsLeft).toBe(5);
+  // A change under a px is not a new height.
+  handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 740, height: 130.6 }, cb);
+  expect(b.trajReport().listH).toBe(130);
+  handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 740, height: 260 }, cb);
+  expect(b.trajReport().rowsLeft).toBe(10);
+  // Herdr's zoom: the handler hears zoomed px, the rows are design px.
+  H.herdrSettings = { font_family: "Mono", zoom: 2 };
+  try {
+    handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 1480, height: 200 }, cb);
+    expect([b.trajReport().listH, b.trajReport().rowsLeft]).toEqual([100, 4]);
+  } finally { H.herdrSettings = { font_family: "Mono" }; }
+});
+
+test("TRD-24: along the bottom a turn's heading drops its figures by the list's width, as a right pane of that width does; on the right they go by the pane's width, as before", async () => {
+  // The list's words: the detail, built after it, shows a turn's figures at any width.
+  const listWords = (c) => { const i = c.findIndex((e) => e[0] === "id" && e[1] === "th-traj-detail"); return wordsOf(i < 0 ? c : c.slice(0, i)); };
+  const headTok = (c) => listWords(c).filter((s) => /^[\d.]+[km]? tok$/.test(s)).length;
+  const headCalls = (c) => listWords(c).filter((s) => /^\d+ calls?$/.test(s)).length;
+  const heads = (b) => b.ledgerRows().filter((r) => r.kind === "trh" && r.tokens && r.calls).length;
+  // [dock, pane px, detail open, tokens shown, calls shown]
+  for (const [dock, w, open, tok, calls] of [
+    ["bottom", 700, true, false, true], ["bottom", 760, true, false, true], ["bottom", 780, true, true, true],
+    ["bottom", 700, false, true, true], ["bottom", 650, true, true, true],
+    ["right", 340, false, false, true], ["right", 400, false, false, true], ["right", 1000, true, true, true],
+  ]) {
+    const { b, cb } = await bottomPane(w, 400, dock);
+    b.tdetail = open;
+    expect(heads(b)).toBeGreaterThan(0);
+    const c = frame(b, cb);
+    expect([dock, w, open, headTok(c) > 0, headCalls(c) > 0]).toEqual([dock, w, open, tok, calls]);
+  }
+  // A right pane as wide as the bottom list draws the same heading figures.
+  const { b: r, cb: rc } = await bottomPane(340, 400, "right");
+  const { b: d, cb: dc } = await bottomPane(700, 400);
+  d.tdetail = true;
+  expect([headTok(frame(d, dc)), headCalls(frame(d, dc)) > 0]).toEqual([headTok(frame(r, rc)), headCalls(frame(r, rc)) > 0]);
+});
+
+const trajLayoutOf = (w, open) => { const L = trajLayout(w, "bottom", open); return { side: L.side, detailW: L.detailW, listW: L.listW }; };
+// A pane at from px told it is to px: whether paneW takes it, and the layout after.
+async function onePx(dock, from, to, open, counts) {
+  const { b, cb } = await bottomPane(from, 400, dock);
+  b.tdetail = open;
+  const before = b.trajReport().layout;
+  const c = frame(b, cb);
+  handlerAfterId(c, "threads-root", "on_size_change")({ width: to, height: 400 }, cb);
+  expect([dock, from, to, open, b.paneW]).toEqual([dock, from, to, open, counts ? to : from]);
+  if (counts && dock === "bottom") expect(b.trajReport().layout).toEqual(trajLayoutOf(to, b.detailOpen()));
+  else if (dock === "bottom") expect(b.trajReport().layout).toEqual(before);
+  if (dock === "right") expect(b.trajReport().cols).toEqual(trajLayout(counts ? to : from, "right", b.detailOpen()).cols);
+  if (dock === "bottom") expect(b.footerHints().some(([k]) => k === "↵")).toBe(b.paneW >= 700);
+}
+test("TRD-24: along the bottom a 1 px size change across any layout threshold counts: the side detail, the start and bar columns, and a heading's figures; one across none waits", async () => {
+  // [dock, from px, to px, detail as the person left it, counts]
+  for (const [dock, from, to, open, counts] of [
+    ["bottom", 699, 700, undefined, true], ["bottom", 700, 699, undefined, true],
+    ["bottom", 779, 780, undefined, true], ["bottom", 780, 779, undefined, true],
+    ["bottom", 859, 860, undefined, true], ["bottom", 860, 859, undefined, true],
+    ["bottom", 339, 340, undefined, true], ["bottom", 419, 420, undefined, true], ["bottom", 499, 500, undefined, true],
+    // The filter bar goes by the pane's width.
+    ["bottom", 539, 540, undefined, true], ["bottom", 540, 539, undefined, true],
+    // The detail closed: the list is the pane, and 780 crosses nothing more than 779; at 700 only
+    // the side changes, which brings the detail's hint (and Enter) or takes it away.
+    ["bottom", 779, 780, false, false], ["bottom", 419, 420, false, true],
+    ["bottom", 699, 700, false, true], ["bottom", 700, 699, false, true],
+    ["bottom", 800, 801, undefined, false], ["bottom", 1459, 1460, undefined, false],
+  ]) await onePx(dock, from, to, open, counts);
+});
+// On the right each of its layout's thresholds counts too, both ways, each in a test of its own:
+// the detail's side (900 px), the start and bar columns (420, 500) and the filter bar (540).
+for (const [px, what] of [[900, "the detail's side"], [420, "the start column"], [500, "the bar column"], [540, "the filter bar"]]) {
+  test(`TRD-24: on the right a 1 px size change across ${px} px (${what}) counts, both ways`, async () => {
+    await onePx("right", px - 1, px, undefined, true);
+    await onePx("right", px, px - 1, undefined, true);
+  });
+}
+test("TRD-24: on the right a 1 px size change across none of its thresholds waits, and one across the compact width counts", async () => {
+  for (const [from, to, counts] of [[699, 700, false], [800, 801, false], [197, 198, true]]) await onePx("right", from, to, undefined, counts);
+});
+
 // ---- the opening (TRD-94): the pane's first session opens at its end, still ----
 // A pane armed by a draw before its session is read, whose read stops (each step waits) while
 // hold() says so. step(f) lets it go on until f() holds, then stops it again.
@@ -20569,26 +21023,33 @@ test("the opening: the first session's stat and peek that come back after anothe
 });
 
 test("a later session still being read, with no loading state over it, shows no running turn before a later chunk has the turn's end", async () => {
-  let second = null;
-  const { v, cx, go } = await openingPane(busy(), (v) => second != null && v.current() === second && second.offset > 0);
-  v.opening.at -= 1000;
-  go((v) => second != null && v.current() === second && second.offset > 0);
-  await settle(v);
-  openFrames(v, cx);
-  expect(v.openActive()).toBe(false);
-  // A new session (a /clear) whose first turn ends in its second chunk, held after the first.
-  v.adopt({ kind: "found", id: "made-up-second", file: endInChunk2(), live: true }, cx);
-  second = v.current();
-  await until(() => second.offset > 0, "the second session's first chunk");
-  expect([Boolean(second.loaded), second.turns.length, second.turns[0].done]).toEqual([false, 1, false]);
-  expect(v.isLive(second, 1, 0)).toBe(false);
-  // Not the running turn: no live row, and no working card.
-  const rows = v.rows();
-  expect(rows.filter((r) => r.live || r.running).map((r) => r.kind)).toEqual([]);
-  expect(drawnText(frame(v, cx)).join("|")).not.toMatch(/No reply yet|Working/);
-  go(() => false);
-  await settle(v);
-  expect(second.turns[0].done).toBe(true);
+  // The rows on screen, as Herdr's list draws them: with every row of the busy fixture drawn
+  // in each frame, the frames to the end of the opening took 15 s, and over 30 s on CI.
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    let second = null;
+    const { v, cx, go } = await openingPane(busy(), (v) => second != null && v.current() === second && second.offset > 0);
+    v.opening.at -= 1000;
+    go((v) => second != null && v.current() === second && second.offset > 0);
+    await settle(v);
+    // On a held clock, the same frames on any machine: on the real one a busy machine needed
+    // more of them, as each slice of the rows did less.
+    heldClock(() => openFrames(v, cx));
+    expect(v.openActive()).toBe(false);
+    // A new session (a /clear) whose first turn ends in its second chunk, held after the first.
+    v.adopt({ kind: "found", id: "made-up-second", file: endInChunk2(), live: true }, cx);
+    second = v.current();
+    await until(() => second.offset > 0, "the second session's first chunk");
+    expect([Boolean(second.loaded), second.turns.length, second.turns[0].done]).toEqual([false, 1, false]);
+    expect(v.isLive(second, 1, 0)).toBe(false);
+    // Not the running turn: no live row, and no working card.
+    const rows = v.rows();
+    expect(rows.filter((r) => r.live || r.running).map((r) => r.kind)).toEqual([]);
+    expect(drawnText(frame(v, cx)).join("|")).not.toMatch(/No reply yet|Working/);
+    go(() => false);
+    await settle(v);
+    expect(second.turns[0].done).toBe(true);
+  } finally { H.listWindow = null; }
 }, 30000);
 
 test("the agent message counts follow a session's read ending: a running agent turn counted hidden while read is shown once it is", async () => {
