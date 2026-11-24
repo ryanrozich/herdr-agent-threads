@@ -133,8 +133,11 @@ test("every key key() takes ahead of keyAction counts as its row says: the Traje
       const k = `${state} ${label(e)}`;
       const want = s.want(v, e);
       const n0 = v.readerMoves ?? 0;
+      const ask = v.scrollTo;
       try { v.key(e, cx); } catch (err) { got[k] = `threw ${err?.message}`; wanted[k] = want; back(); continue; }
       got[k] = (v.readerMoves ?? 0) - n0;
+      // A key that counts nothing asks the list for no scroll either.
+      if (!got[k] && v.scrollTo && v.scrollTo !== ask) got[k] = "asked the list to scroll";
       wanted[k] = want;
       back();
     }
@@ -287,8 +290,11 @@ test("every pointer handler the pane draws has a row, and each counts as its row
       const ev = row[3] === "item" ? item : row[3];
       const want = typeof row[2] === "function" ? row[2](v) : row[2];
       const n0 = moves(v);
+      const ask = v.scrollTo;
       try { fn(ev, cx); } catch (e) { wrong.push(`${k}: threw ${e?.message}`); continue; }
       if (moves(v) - n0 !== want) wrong.push(`${k}: ${moves(v) - n0}, not ${want} (${id})`);
+      // A handler that counts nothing asks the list for no scroll either.
+      else if (!want && v.scrollTo && v.scrollTo !== ask) wrong.push(`${k}: asked the list to scroll and counted nothing (${id})`);
       // Back to the state, for the next handler.
       for (let j = 0; j < 4 && v.action("escape", cx); j++);
       if (v.traj) v.leaveTraj();
@@ -616,8 +622,11 @@ test("every command form the pane takes has a row, and each counts as its row sa
     if (f.startsWith("ring:") || f.startsWith("settings")) { v.action("settings", cx); v.render(cx); }
     v.sel = v.sel ?? v.turnKeys(v.rows()).at(-1);
     const n0 = moves(v);
+    const ask = v.scrollTo;
     try { v.command(name, cx); } catch (e) { got[f] = `threw ${e?.message}`; want[f] = n; continue; }
     got[f] = moves(v) - n0;
+    // A command that counts nothing asks the list for no scroll either.
+    if (!got[f] && v.scrollTo && v.scrollTo !== ask) got[f] = "asked the list to scroll";
     want[f] = n;
     for (let k = 0; k < 4 && v.action("escape", cx); k++);
     if (v.traj) v.leaveTraj();
