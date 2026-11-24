@@ -112,6 +112,15 @@ const counting = (v) => { const h = v.hitsNow(); return Boolean(h && !h.done); }
 const counted = (v) => !v.rowJob && !counting(v);
 const settled = (v) => counted(v) && !v.staleRows?.length && !(v.shapeLeft > 0);
 
+// The figures here are about the slices: each draw builds, shapes and scans only what its
+// slice lets it. A pane whose slices never end (the harness's whole-slice pane) does all of
+// it in the first draw, so every figure would be about that, not about Herdr's draws.
+test("the search figures' pane cuts its rows build and its shaping into slices by the clock, as in Herdr", async () => {
+  const { v } = await longPane(600);
+  expect(v.buildMax()).toBeLessThanOrEqual(10);
+  expect(v.shapeMax()).toBeLessThanOrEqual(12);
+});
+
 // Runs fn on the clock, with Herdr's stop armed for v's draws. The clock goes on from the real
 // one's time (base), so a time the pane kept from before (a slice's end, a row's cut) is past,
 // as it would be: from 0, how far ahead it looked would depend on how long the run had gone.
