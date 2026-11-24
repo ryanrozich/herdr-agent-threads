@@ -6,9 +6,12 @@
 //
 // bun runs every test file in one process and loads this module once, so each test file calls
 // setup() as it starts: it re-installs the module stand-ins and, through reset(), puts every
-// setting below back to its default and empties every shared list and count. Nothing is reset
-// between the tests of one file. What reset() leaves alone: keyBinds, since the mod binds its
-// keys once per process (ui.js), so a later file's panes bind nothing and the record of that
+// setting below back to its default and empties every shared list and count. reset() also runs
+// before every test (test/preload.js calls the hook set at the bottom of this file), so a pin,
+// a setting or a record one test wrote never reaches the next. What a file sets at its top
+// level after setup(), or in its own beforeAll, is put back before each test too, so such
+// state belongs in the test or in the file's beforeEach. What reset() leaves alone: keyBinds,
+// since the mod binds its keys once per process (ui.js), so a later file's panes bind nothing and the record of that
 // one binding has to stay; app and the mod copied into it, made once; and main.js and ui.js
 // themselves, loaded once, with their own module state.
 import { mock, expect } from "bun:test";
@@ -257,8 +260,47 @@ export function setup() {
   }));
 }
 setup();
+// Before every test, in every file: test/preload.js runs this hook (a hook registered here
+// would bind only to the file that loaded this module first).
 export const { default: Threads } = await import("../mods/agent-threads/main.js");
-export const { thumbSize, tileRow, bubbleMax, ROW, columnWidth, railLook, rowHeight, MD_MAX, alpha: alphaForTest, dayKey, capList, LIST_MAX, RowWindow } = await import("../mods/agent-threads/ui.js");
+// The panes that saved or queued a pin save, so a save still in flight when its test ends can
+// be let finish, and a queued one dropped, before the next test (a late write would land in
+// that test's pins record).
+const pinPanes = new Set();
+for (const name of ["savePins", "pinChangedLater"]) {
+  const real = Threads.prototype[name];
+  Threads.prototype[name] = function (...args) { pinPanes.add(this); return real.apply(this, args); };
+}
+// Waits for every pin save in flight (the chain each pane keeps), not for the clock. A save
+// that has not ended in capMs fails the call; the cap's timer is cleared when the saves end,
+// and the loop stops when the cap wins, so nothing keeps running behind a failed call.
+export async function pinsIdle(capMs = 2000) {
+  let timer;
+  let over = false;
+  const give = new Promise((_, no) => { timer = setTimeout(() => { over = true; no(new Error("a pin save never ended")); }, capMs); });
+  const idle = (async () => {
+    for (let again = true; again && !over;) {
+      again = false;
+      for (const v of pinPanes) {
+        const chain = v.pinChain;
+        await chain?.catch(() => {});
+        if (over) return;
+        await new Promise((r) => setTimeout(r, 0)); // the pane's follow-up (pinSaving, readPins) runs
+        if (v.pinChain !== chain || v.pinSaving) again = true;
+      }
+    }
+  })();
+  try { await Promise.race([idle, give]); } finally { over = true; clearTimeout(timer); }
+}
+// Before every test: the last test's panes finish their saves and drop their queued ones,
+// then everything goes back to its start. A save that never ends fails this call once (after
+// capMs); the panes are forgotten and the state reset either way, so the tests after it start
+// clean and are not made to wait on the same stuck pane.
+globalThis.__threadsHarnessEachTest = async (capMs) => {
+  for (const v of pinPanes) v.pinDueAt = null;
+  try { await pinsIdle(capMs); } finally { pinPanes.clear(); reset(); }
+};
+export const { thumbSize, tileRow, bubbleMax, ROW, columnWidth, railLook, rowHeight, MD_MAX, alpha: alphaForTest, dayKey } = await import("../mods/agent-threads/ui.js");
 
 export function fixture(...flags) {
   const dir = mkdtempSync(join(tmpdir(), "threads-fx-"));
@@ -533,10 +575,10 @@ export const PINS = join(app, "data/agent-threads/pins.json");
 export async function pinPane(...flags) {
   delete recordFiles[PINS];
   const { v, cx } = await pane(fixture(...flags));
-  await new Promise((r) => setTimeout(r, 20)); // the first read of pins.json
+  await until(() => v.pinsRead, "the first read of pins.json");
   return { v, cx, keys: () => v.turnKeys(v.rows()) };
 }
-export const saved = async () => { await new Promise((r) => setTimeout(r, 30)); return JSON.parse(recordFiles[PINS] ?? "{}"); };
+export const saved = async () => { await pinsIdle(); return JSON.parse(recordFiles[PINS] ?? "{}"); };
 export const allPins = (j) => Object.values(j.sessions ?? {}).flatMap((x) => x.pins);
 export const toastText = (v) => v.toast?.text ?? null;
 // Pins the turns at these indexes, in this order, then shows the Pinned view in this pane.

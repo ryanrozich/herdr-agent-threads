@@ -5,20 +5,17 @@ import { test, expect } from "bun:test";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 
 import {
-  capList,
   draw,
   dropTimers,
   fixture,
   frame,
   H,
   lastList,
-  LIST_MAX,
   openAt,
   pane,
   PINS,
   probeFrame,
   rec,
-  RowWindow,
   scripted,
   settle,
   settleList,
@@ -29,6 +26,7 @@ import {
   stillAt,
   theme,
 } from "./render-harness.js";
+import { capList, LIST_MAX, RowWindow } from "../mods/agent-threads/ui.js";
 
 setup();
 
