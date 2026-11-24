@@ -87,9 +87,9 @@ import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pi
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious, behindLook } from "./settings.js";
 import { MOD } from "./name.js";
 import {
-  LEDGER_ROW, LEDGER_HEAD, LEDGER_FILTERS, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, barFrac, coarse, rowTimes, trajCompact, compactRow, COMPACT_PAD, HEAD_ICON_MIN,
+  LEDGER_ROW, LEDGER_HEAD, LEDGER_FILTERS, LEDGER_KINDS, ledgerTurn, headParts, ledgerTotals, barFrac, coarse, rowTimes, trajCompact, compactRow, COMPACT_PAD, HEAD_ICON_MIN,
   trajInks, SUB_ALPHA, ALL_ROWS, filterRows, filterButtons, toggleFilter, ledgerStatus, detailOf, turnRunning, slantPoints, sessionHasEnds,
-  BAR_W, BAR_H, BAR_SLANT, LINE_H, LINE_SLANT,
+  BAR_W, BAR_H, BAR_SLANT, LINE_H, LINE_SLANT, trajLayout, rowsLeft,
 } from "./ledger.js";
 import { VERSION, versionLine, parseBuild } from "./version.js";
 // build.js, what install.sh found (version.js). A dynamic import, so a copy whose build.js
@@ -11576,7 +11576,10 @@ export default class Threads extends View {
   // not fit the pane's width gives way from the right, "? keys" last (ui.js fitHints). In
   // Select view: how to select, copy, quote and go back.
   footerHints() {
-    if (this.traj) return fitHints([["↑↓", "move"], ["↵", "detail"], ["f", "next failure"], ["m", "user message"], ["y", "chat"], ["?", "keys"]], this.pw());
+    if (this.traj) {
+      const detail = this.trajShape(false).side !== "none" ? [["↵", "detail"]] : [];
+      return fitHints([["↑↓", "move"], ...detail, ["f", "next failure"], ["m", "user message"], ["y", "chat"], ["?", "keys"]], this.pw());
+    }
     const narrow = this.narrow();
     if (this.selecting) return narrow ? [["⌘C", "copy"], [this.quoteKey, "quote"], ["Esc", "back"]]
       : [["drag", "select"], ["⌘C", "copy"], ...(this.quotable() ? [[this.quoteKey, "quote"]] : []), ["Esc", "back"]];
@@ -11642,8 +11645,11 @@ export default class Threads extends View {
     const shown = this.ledgerRows();
     const i = this.ledgerSel(shown);
     const w = this.pw();
+    const shape = this.trajShape();
     return {
-      pane: this.trajPane, inPane: !this.trajPane, dock: this.trajPane ? this.trajDock : null, width: Math.round(w), cols: ledgerCols(w), going: L.going,
+      pane: this.trajPane, inPane: !this.trajPane, dock: this.trajPane ? this.trajDock : null, width: Math.round(w), cols: shape.cols, going: L.going,
+      layout: { side: shape.side, detailW: shape.detailW, listW: shape.listW },
+      listH: this.tlistH != null ? Math.round(this.tlistH) : null, rowsLeft: rowsLeft(this.tlistH),
       rows: shown.length, sel: shown[i]?.key ?? null, fails: this.failCount(L, shown, i), filter: this.tfilter,
       detail: this.detailOpen() && shown[i] ? detailOf(shown[i]) : null,
       heads: L.totals.heads.slice(-5).map((h) => ({ n: h.n, total: headParts(h, w).total, stale: h.stale, lastAt: h.lastAt })),
@@ -11878,9 +11884,28 @@ export default class Threads extends View {
     if (i < 0) for (let j = shown.length - 1; j >= 0 && i < 0; j--) if (shown[j].kind === "trh") i = j;
     return i;
   }
+  // The pane's layout for its dock and width (ledger.js trajLayout), the list as wide as the
+  // detail leaves it when open. The Trajectory in the Chat's own pane lays out as on the right.
+  trajShape(open = this.detailOpen()) { return trajLayout(this.pw(), this.trajPane ? this.trajDock : "right", open); }
+  // The width the list's rows size their figures by (headParts, compactRow): along the bottom
+  // the list's, so a 340 px list beside the detail shows what a 340 px right pane shows; on the
+  // right, and in the Chat's own pane, the pane's, as before.
+  rowW() { return this.trajPane && this.trajDock === "bottom" ? this.trajShape().listW : this.pw(); }
+  // Along the bottom, what a width gives the layout (trajLayout: the detail's side, the list's
+  // columns; headParts: a heading's figures by the list's width), so the size callback counts a
+  // 1 px change across any of them. "" on the right, where only its own widths count.
+  dockForm(x) {
+    if (!(this.trajPane && this.trajDock === "bottom")) return "";
+    const L = trajLayout(x, "bottom", this.tdetail ?? true);
+    const h = headParts({ calls: 1, tokens: 1 }, L.listW);
+    return `|${L.side}${L.cols.start ? "s" : ""}${L.cols.bar ? "b" : ""}${L.cols.filters ? "f" : ""}${h.calls ? "c" : ""}${h.tokens ? "t" : ""}`;
+  }
   // Whether the detail shows: as the person last left it, or by the layout until then (open at
-  // the right from 900 px, closed under the ledger).
-  detailOpen() { return this.tdetail ?? ledgerCols(this.pw()).detailRight; }
+  // its right, closed under the ledger). Along the bottom under 700 px there is none.
+  detailOpen() {
+    const side = this.trajShape(false).side;
+    return side !== "none" && (this.tdetail ?? side === "right");
+  }
 
   // A Trajectory key (ui.js ledgerKey). Returns false when it did nothing, so Esc reaches Herdr.
   ledgerAction(name, cx) {
@@ -11914,7 +11939,7 @@ export default class Threads extends View {
       case "lfailBack": if (held) return false; seek((r) => r.failed === true, -1); return true;
       case "luser": if (held) return false; seek((r) => r.lk === "you", 1); return true;
       case "luserBack": if (held) return false; seek((r) => r.lk === "you", -1); return true;
-      case "ldetail": this.toggleDetail(shown[i]?.key ?? null); return true;
+      case "ldetail": return this.toggleDetail(shown[i]?.key ?? null);
       case "trajectory": return this.openTraj();
       case "escape":
         if (this.keysOpen || this.settingsOpen) return this.action("escape", cx);
@@ -11931,10 +11956,14 @@ export default class Threads extends View {
     }
   }
   // The detail shown or hidden. Opening it under the list (narrower than 900 px) leaves the
-  // list shorter: the selected row (key) is scrolled back into view.
+  // list shorter: the selected row (key) is scrolled back into view. Where the layout has no
+  // detail (the bottom dock under 700 px) nothing changes: false, so the key passes on.
   toggleDetail(key) {
+    const side = this.trajShape(false).side;
+    if (side === "none") return false;
     this.tdetail = !this.detailOpen();
-    if (this.tdetail && key && !ledgerCols(this.pw()).detailRight) this.tscrollTo = key;
+    if (this.tdetail && key && side === "under") this.tscrollTo = key;
+    return true;
   }
   // A click on a row selects it; on the selected row it shows or hides the detail.
   ledgerClick(key) {
@@ -11966,7 +11995,9 @@ export default class Threads extends View {
     // The column beside the Trajectory's pane, kept for its close (shareWidth).
     if (this.trajPane) { const col = this.pinnedPaneOpen(); if (col) this.colId = col.pane; }
     const w = this.pw();
-    const cols = ledgerCols(w);
+    // The detail's side and width, and the list's columns by its width (ledger.js trajLayout).
+    const shape = this.trajShape();
+    const cols = shape.cols;
     const L = this.ledger();
     // A rows build left for later slices (ledger): the next frame goes on with it.
     if (this.ledgerJob && !this.buildNext) {
@@ -11980,9 +12011,12 @@ export default class Threads extends View {
     const dark = (contrast(t.background, "#000000") ?? 1) < (contrast(t.foreground, "#000000") ?? 21);
     const inks = trajInks(t, dark);
     const detail = this.detailOpen() && selRow ? detailOf(selRow) : null;
-    const right = cols.detailRight;
+    const right = shape.side === "right";
     const list = this.ledgerList(t, shown, i, cols, inks, cx, right);
-    const panel = detail ? this.ledgerDetail(t, detail, inks, right) : null;
+    const panel = detail ? this.ledgerDetail(t, detail, inks, right, shape.detailW) : null;
+    // TRD-23's timeline goes here, across the whole pane above the list and the detail, shown
+    // only where it leaves enough rows (rowsLeft with the list box's measured height, tlistH).
+    const timeline = null;
     return v_flex()
       .id("threads-root")
       .track_focus(this.h)
@@ -11995,8 +12029,9 @@ export default class Threads extends View {
         const pw = size.width / this.zoom();
         this.measuredWidth = size.width;
         // A change of 1 px counts when it takes the pane across 200 or 64 px (ledger.js trajCompact), or
-        // across HEAD_ICON_MIN inside the frame, where the compact heading's list icon gives way.
-        const form = (x) => `${trajCompact(Math.round(x) + PANE_FRAME)}${x >= HEAD_ICON_MIN ? "+" : ""}`;
+        // across HEAD_ICON_MIN inside the frame, where the compact heading's list icon gives way;
+        // along the bottom, also across any of its layout's thresholds (dockForm).
+        const form = (x) => `${trajCompact(Math.round(x) + PANE_FRAME)}${x >= HEAD_ICON_MIN ? "+" : ""}${this.dockForm(x)}`;
         const cross = this.paneW != null && form(pw) !== form(this.paneW);
         if (!this.forcedWidth && (cross || Math.abs(pw - (this.paneW ?? -9)) > 1)) { this.paneW = pw; this.shareWidth(); cx.notify(); }
       })
@@ -12004,6 +12039,7 @@ export default class Threads extends View {
       .bg(t.background).text_color(t.foreground).text_size(13)
       .child(this.trajHeading(t, L, shown, i))
       .when(cols.filters, (el) => el.child(this.filterBar(t, L.totals, w, inks, this.ledgerHeld(L))))
+      .when(Boolean(timeline), (el) => el.child(timeline))
       .child(right
         ? h_flex().id("th-traj-body").flex_1().min_h(0).w_full().items_start().child(list).when(Boolean(panel), (el) => el.child(panel))
         : v_flex().id("th-traj-body").flex_1().min_h(0).w_full().child(list).when(Boolean(panel), (el) => el.child(panel)))
@@ -12098,6 +12134,11 @@ export default class Threads extends View {
       }
     }
     return div().id("th-traj-listbox").flex_1().min_h(0).min_w(0).w_full().relative().when(right, (el) => el.h_full())
+      // Its height, in design px, for the rows it keeps (ledger.js rowsLeft).
+      .on_size_change((size, cx) => {
+        const h = size.height / this.zoom();
+        if (Math.abs(h - (this.tlistH ?? -9)) >= 1) { this.tlistH = h; cx.notify(); }
+      })
       .child(v_virtual_list("th-traj-list", shown.length, LEDGER_ROW, (j) => shown[j]?.key ?? `gone:${j}`,
         (range) => {
           const out = [];
@@ -12118,7 +12159,8 @@ export default class Threads extends View {
       return h_flex().id(r.key).h(LEDGER_ROW).px(10).items_center().text_size(11.5).text_color(t.dim)
         .child(div().truncate().child(`New session${r.ts ? ` · ${fmtTime(r.ts)}` : ""}`));
     }
-    const c = compactRow(r, this.trajPx(), this.pw());
+    const rw = this.rowW();
+    const c = compactRow(r, Math.round(rw) + PANE_FRAME, rw);
     if (c && r.kind !== "sess") return this.ledgerCompact(t, r, on, inks, c);
     if (r.kind === "trh") return this.ledgerHead(t, r, on, inks);
     const k = LEDGER_KINDS[r.lk] ?? LEDGER_KINDS.text;
@@ -12222,7 +12264,7 @@ export default class Threads extends View {
   // recorded event, and that end is one LINE_SLANT px slant.
   ledgerHead(t, r, on, inks) {
     const mono = this.mono();
-    const p = headParts(r, this.pw());
+    const p = headParts(r, this.rowW());
     const dot = " · ";
     const parts = [p.calls, p.failed ? "failed" : null, p.tokens, p.total].filter(Boolean);
     const line = r.line;
@@ -12252,8 +12294,9 @@ export default class Threads extends View {
   }
 
   // The detail: the row's tag and title with a close button, its fields, then its whole words.
-  // At the right of the ledger from 900 px, else under it.
-  ledgerDetail(t, d, inks, right) {
+  // At the right of the ledger, width px wide (from 900 px on the right, from 700 px along the
+  // bottom: ledger.js trajLayout), else under it.
+  ledgerDetail(t, d, inks, right, width = 300) {
     const k = d.kind ? LEDGER_KINDS[d.kind] : null;
     const ink = k ? inks[k.ink] ?? t.dim : t.muted;
     const tagInk = d.kind === "failed" ? t.blocked : ink;
@@ -12261,7 +12304,7 @@ export default class Threads extends View {
       .child(div().flex_none().w(96).text_size(12).text_color(t.dim).child(label))
       .child(div().flex_1().min_w(0).text_size(12).text_color(label === "Result" && value === "failed" ? t.blocked : t.foreground).child(value));
     const box = v_flex().id("th-traj-detail").flex_none().min_h(0).bg(t.background)
-      .when(right, (el) => el.w(300).h_full().border_l(1).border_color(t.border))
+      .when(right, (el) => el.w(width ?? 300).h_full().border_l(1).border_color(t.border))
       .when(!right, (el) => el.w_full().h(Math.max(140, Math.min(300, Math.round((this.rootH || 600) * 0.42)))).border_t(1).border_color(t.border));
     return box
       .child(h_flex().flex_none().h(34).px(12).gap(8).items_center().border_b(1).border_color(t.border)

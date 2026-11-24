@@ -10,7 +10,7 @@ import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sess
 import { join } from "node:path";
 import { pinRowHeight, PIN_ROW, pinRowShape, pinPromptText, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS, weightHerdr as weightHerdrOf } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
-import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf, COMPACT_PAD as COMPACT_PAD_T } from "../mods/agent-threads/ledger.js";
+import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf, trajLayout, COMPACT_PAD as COMPACT_PAD_T } from "../mods/agent-threads/ledger.js";
 
 const root = join(import.meta.dir, "..");
 const modDir = join(root, "mods/agent-threads");
@@ -21967,4 +21967,183 @@ test("TRD-24: a right Trajectory pane finding itself under a stale bottom entry 
   expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p5" } });
   expect(v.trajBottomId()).toBe(null);
   expect(v.trajRightOpen()?.pane).toBe("p5");
+});
+
+// ---- the Trajectory's docks (TRD-24, part 2: the bottom dock's layout) ----
+// A Trajectory pane along the bottom (props().dock "bottom"), w px wide and h tall.
+async function bottomPane(w, h = 400, dock = "bottom") {
+  await pane(fixture("--extra", "3"));
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+  const props = state.props;
+  state.props = { ...props, view: "trajectory", ...(dock === "bottom" ? { dock } : {}) };
+  const b = new Threads();
+  const cb = makeCx();
+  b.init(state.props, cb);
+  await settle(b);
+  state.props = props;
+  b.width = w;
+  b.paneW = w;
+  b.rootH = h;
+  return { b, cb };
+}
+const detailCalls = (c) => afterId(c, "th-traj-detail") ?? [];
+
+test("TRD-24: the bottom dock from 700 px: the detail open at the list's right, at least 360 px, taking what the list leaves past 1,100 px; the list's columns go by the list's width", async () => {
+  for (const [w, detailW, listW, start, bar] of [[1700, 600, 1100, true, true], [1460, 360, 1100, true, true], [1100, 360, 740, true, true], [800, 360, 440, true, false], [700, 360, 340, false, false]]) {
+    const { b, cb } = await bottomPane(w);
+    const c = frame(b, cb);
+    expect(hasId(c, "th-traj-detail")).toBe(true);
+    const d = detailCalls(c);
+    expect(d).toContainEqual(["w", detailW]);
+    expect(d.some(([n]) => n === "border_l")).toBe(true);
+    expect(d.some(([n]) => n === "border_t")).toBe(false);
+    const rep = b.trajReport();
+    expect(rep.layout).toEqual({ side: "right", detailW, listW });
+    expect(rep.cols).toEqual({ start, bar, filters: true, detailRight: true });
+    expect(rep.detail).not.toBe(null);
+    // The rows draw the start column (40 px) and the bar (BAR_W, 64 px) as the list's width says.
+    const steps = b.ledgerRows().filter((r) => r.kind === "tr").length;
+    const cells = (px) => c.filter(([n, x]) => n === "w" && x === px).length;
+    expect(steps).toBeGreaterThan(0);
+    expect([cells(40) >= steps, cells(64) >= steps]).toEqual([start, bar]);
+    expect([cells(40) === 0, cells(64) === 0]).toEqual([!start, !bar]);
+    // Enter closes it, and the list takes the whole width; Enter again brings it back.
+    b.key(keyEv("enter"), cb);
+    expect(b.detailOpen()).toBe(false);
+    expect(hasId(frame(b, cb), "th-traj-detail")).toBe(false);
+    expect(b.trajReport().layout).toEqual({ side: "right", detailW, listW: w });
+    b.key(keyEv("enter"), cb);
+    expect(b.detailOpen()).toBe(true);
+  }
+});
+
+test("TRD-24: the bottom dock under 700 px: no detail, and Enter, Space, a click on the selected row and Esc do nothing there; the hints leave the detail out", async () => {
+  const { b, cb } = await bottomPane(650);
+  const c = frame(b, cb);
+  expect(hasId(c, "th-traj-detail")).toBe(false);
+  expect(b.trajReport().layout).toEqual({ side: "none", detailW: null, listW: 650 });
+  expect(b.trajReport().cols).toEqual({ start: true, bar: true, filters: true, detailRight: false });
+  expect(b.trajReport().detail).toBe(null);
+  // Even after the person had opened it at a wider width.
+  b.tdetail = true;
+  expect(b.detailOpen()).toBe(false);
+  expect(hasId(frame(b, cb), "th-traj-detail")).toBe(false);
+  let stopped = 0;
+  cb.stop_propagation = () => { stopped++; };
+  for (const k of ["enter", "space", "escape"]) b.key(keyEv(k), cb);
+  expect(stopped).toBe(0);
+  expect(b.ledgerAction("ldetail", cb)).toBe(false);
+  const shown = b.ledgerRows();
+  const sel = shown[b.ledgerSel(shown)].key;
+  b.ledgerClick(sel);
+  expect([b.detailOpen(), b.tsel]).toEqual([false, sel]);
+  expect(b.footerHints().map(([k]) => k)).not.toContain("↵");
+  // Back at 700 px it is open again, as the person left it.
+  b.width = 700;
+  b.paneW = 700;
+  expect(b.detailOpen()).toBe(true);
+  expect(b.footerHints().map(([k]) => k)).toContain("↵");
+});
+
+test("TRD-24: the right dock keeps its own layout at every width: the detail 300 px at the right from 900 px, under the list and closed below, the columns by the pane's width", async () => {
+  for (const [w, side] of [[1700, "right"], [960, "right"], [800, "under"], [650, "under"]]) {
+    const { b, cb } = await bottomPane(w, 400, "right");
+    expect(b.trajDock).toBe("right");
+    if (side === "right") {
+      const d = detailCalls(frame(b, cb));
+      expect(d).toContainEqual(["w", 300]);
+      expect(d.some(([n]) => n === "border_l")).toBe(true);
+    } else {
+      expect(b.detailOpen()).toBe(false);
+      b.key(keyEv("enter"), cb);
+      const d = detailCalls(frame(b, cb));
+      expect(d.some(([n]) => n === "border_t")).toBe(true);
+    }
+    expect(b.trajReport().layout.side).toBe(side);
+    expect(b.trajReport().cols).toEqual({ start: true, bar: true, filters: true, detailRight: side === "right" });
+    // The report's list width follows the detail: the pane's less 300 px open at the right, the
+    // pane's when closed or under the list.
+    expect(b.trajReport().layout.listW).toBe(side === "right" && b.detailOpen() ? w - 300 : w);
+    b.tdetail = !b.detailOpen();
+    expect(b.trajReport().layout).toEqual({ side, detailW: side === "right" ? 300 : null, listW: side === "right" && b.detailOpen() ? w - 300 : w });
+  }
+});
+
+test("TRD-24: the list box measures its height, and the report says how many rows it keeps, with room left for a timeline above it", async () => {
+  const { b, cb } = await bottomPane(1100, 270);
+  const c = frame(b, cb);
+  expect(b.trajReport().rowsLeft).toBe(null);
+  handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 740, height: 130 }, cb);
+  expect(b.trajReport().listH).toBe(130);
+  expect(b.trajReport().rowsLeft).toBe(5);
+  // A change under a px is not a new height.
+  handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 740, height: 130.6 }, cb);
+  expect(b.trajReport().listH).toBe(130);
+  handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 740, height: 260 }, cb);
+  expect(b.trajReport().rowsLeft).toBe(10);
+  // Herdr's zoom: the handler hears zoomed px, the rows are design px.
+  herdrSettings = { font_family: "Mono", zoom: 2 };
+  try {
+    handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 1480, height: 200 }, cb);
+    expect([b.trajReport().listH, b.trajReport().rowsLeft]).toEqual([100, 4]);
+  } finally { herdrSettings = { font_family: "Mono" }; }
+});
+
+test("TRD-24: along the bottom a turn's heading drops its figures by the list's width, as a right pane of that width does; on the right they go by the pane's width, as before", async () => {
+  // The list's words: the detail, built after it, shows a turn's figures at any width.
+  const listWords = (c) => { const i = c.findIndex((e) => e[0] === "id" && e[1] === "th-traj-detail"); return wordsOf(i < 0 ? c : c.slice(0, i)); };
+  const headTok = (c) => listWords(c).filter((s) => /^[\d.]+[km]? tok$/.test(s)).length;
+  const headCalls = (c) => listWords(c).filter((s) => /^\d+ calls?$/.test(s)).length;
+  const heads = (b) => b.ledgerRows().filter((r) => r.kind === "trh" && r.tokens && r.calls).length;
+  // [dock, pane px, detail open, tokens shown, calls shown]
+  for (const [dock, w, open, tok, calls] of [
+    ["bottom", 700, true, false, true], ["bottom", 760, true, false, true], ["bottom", 780, true, true, true],
+    ["bottom", 700, false, true, true], ["bottom", 650, true, true, true],
+    ["right", 340, false, false, true], ["right", 400, false, false, true], ["right", 1000, true, true, true],
+  ]) {
+    const { b, cb } = await bottomPane(w, 400, dock);
+    b.tdetail = open;
+    expect(heads(b)).toBeGreaterThan(0);
+    const c = frame(b, cb);
+    expect([dock, w, open, headTok(c) > 0, headCalls(c) > 0]).toEqual([dock, w, open, tok, calls]);
+  }
+  // A right pane as wide as the bottom list draws the same heading figures.
+  const { b: r, cb: rc } = await bottomPane(340, 400, "right");
+  const { b: d, cb: dc } = await bottomPane(700, 400);
+  d.tdetail = true;
+  expect([headTok(frame(d, dc)), headCalls(frame(d, dc)) > 0]).toEqual([headTok(frame(r, rc)), headCalls(frame(r, rc)) > 0]);
+});
+
+const trajLayoutOf = (w, open) => { const L = trajLayout(w, "bottom", open); return { side: L.side, detailW: L.detailW, listW: L.listW }; };
+test("TRD-24: along the bottom a 1 px size change across any layout threshold counts: the side detail, the start and bar columns, and a heading's figures; one across none waits, and the right dock's rule is unchanged", async () => {
+  // [dock, from px, to px, detail as the person left it, counts]
+  for (const [dock, from, to, open, counts] of [
+    ["bottom", 699, 700, undefined, true], ["bottom", 700, 699, undefined, true],
+    ["bottom", 779, 780, undefined, true], ["bottom", 780, 779, undefined, true],
+    ["bottom", 859, 860, undefined, true], ["bottom", 860, 859, undefined, true],
+    ["bottom", 339, 340, undefined, true], ["bottom", 419, 420, undefined, true], ["bottom", 499, 500, undefined, true],
+    // The filter bar goes by the pane's width.
+    ["bottom", 539, 540, undefined, true], ["bottom", 540, 539, undefined, true],
+    // The detail closed: the list is the pane, and 780 crosses nothing more than 779; at 700 only
+    // the side changes, which brings the detail's hint (and Enter) or takes it away.
+    ["bottom", 779, 780, false, false], ["bottom", 419, 420, false, true],
+    ["bottom", 699, 700, false, true], ["bottom", 700, 699, false, true],
+    ["bottom", 800, 801, undefined, false], ["bottom", 1459, 1460, undefined, false],
+    // On the right only the compact widths (200 px with the 2 px frame) and the heading's icon
+    // count, as before this change: its own thresholds (900, 420, 500) wait like any 1 px change,
+    // an older gap kept for a change of its own.
+    ["right", 899, 900, undefined, false], ["right", 699, 700, undefined, false], ["right", 419, 420, undefined, false],
+    ["right", 197, 198, undefined, true],
+  ]) {
+    const { b, cb } = await bottomPane(from, 400, dock);
+    b.tdetail = open;
+    const before = b.trajReport().layout;
+    const c = frame(b, cb);
+    handlerAfterId(c, "threads-root", "on_size_change")({ width: to, height: 400 }, cb);
+    expect([dock, from, to, open, b.paneW]).toEqual([dock, from, to, open, counts ? to : from]);
+    if (counts && dock === "bottom") expect(b.trajReport().layout).toEqual(trajLayoutOf(to, b.detailOpen()));
+    else if (dock === "bottom") expect(b.trajReport().layout).toEqual(before);
+    if (dock === "bottom") expect(b.footerHints().some(([k]) => k === "↵")).toBe(b.paneW >= 700);
+  }
 });
