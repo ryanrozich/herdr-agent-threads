@@ -1512,9 +1512,12 @@ test("an older step going on by itself back through queued turns lands on the ne
     r.kept = v.sel === last;
     T.apply(s, { k: "t", t: "The zebra list is in every one of them." });
     T.apply(s, { k: "d", ms: 1000, ts });
+    // The tail checked again: the turns the check back passed were open, so where it got to
+    // is cleared, and it starts again from the selection.
+    r.cleared = v.hitsNow().back == null;
     for (let k = 0; k < 40 && v.sel === last; k++) drawOnce(v, cx);
   }); } finally { X = 1; }
-  expect({ stayed: r.stayed, passed: r.passed, kept: r.kept, landed: v.sel }).toEqual({ stayed: true, passed: true, kept: true, landed: `0:${base + 2399}` });
+  expect({ stayed: r.stayed, passed: r.passed, kept: r.kept, cleared: r.cleared, landed: v.sel }).toEqual({ stayed: true, passed: true, kept: true, cleared: true, landed: `0:${base + 2399}` });
   expect(direct(v, "zebra")).toContain(`0:${base + 2399}`);
 }, 300000);
 
@@ -1579,6 +1582,35 @@ test("a draw going on with a step counts the scan's time once", async () => {
   }); } finally { X = 1; }
   expect(r.seen).toBeGreaterThan(0);
   expect(r.same).toBe(true);
+}, 300000);
+
+// A draw going on with an older step's check back in a tail (tailBack) runs the step's slice
+// in place of the scan's: no slice of the scan (scanHits) in that draw, so its time is the
+// step's slice and the rest of the draw, and each such draw fits Herdr's time.
+test("a draw going on with an older step's check back runs no slice of the scan beside it, and each such draw fits", async () => {
+  const z = await zebraTail();
+  const { v, cx, last } = z;
+  const r = { stepped: 0, scans: 0, late: 0 };
+  X = 2;
+  try { priced(v, () => {
+    zebraSearch(z);
+    drawOnce(v, cx);
+    v.action("olderMatch", cx);
+    r.kept = v.sel === last && Boolean(v.hitsNow().step);
+    const scan = v.scanHits;
+    let n = 0;
+    v.scanHits = function (...a) { n++; return scan.apply(this, a); };
+    for (let k = 0; k < 40 && v.hitsNow().step; k++) {
+      n = 0;
+      const d = drawOnce(v, cx);
+      r.stepped++;
+      r.scans += n;
+      if (d.stopped || d.ms > LIMIT) r.late++;
+    }
+    v.scanHits = scan;
+  }); } finally { X = 1; }
+  expect({ kept: r.kept, scans: r.scans, late: r.late, landed: v.sel }).toEqual({ kept: true, scans: 0, late: 0, landed: z.nearest });
+  expect(r.stepped).toBeGreaterThan(0);
 }, 300000);
 
 // A new session (after a clear or a restart) is a new set: a step going on by itself in the
