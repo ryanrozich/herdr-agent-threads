@@ -13,6 +13,7 @@ The same commands CI runs (`.github/workflows/ci.yml`), plus the private scan:
 ```sh
 bun test                                     # the whole suite (CI runs it through sh test/leftover-check.sh)
 bunx @biomejs/biome@2.6.4 lint               # lint, with the paths from biome.jsonc
+sh test/lint-size.sh                         # every file Biome lints under its 1 MiB limit
 shellcheck -S warning $(git ls-files '*.sh') # shell scripts
 sh test/scan-private.sh                      # no home paths, names, emails or real ids, in text and in PNGs
 ```
