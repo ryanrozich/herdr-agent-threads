@@ -10,7 +10,7 @@
 // random orders of made-up bars, checked against their union after every add.
 import { test, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newSession, apply, parseChunk, nextChunk } from "../mods/agent-threads/core/turns.js";
@@ -19,10 +19,9 @@ import { timelineLayout, timelineHit, itemBox, tlLen, tlStep, tlTracks, tlJoin }
 
 const root = join(import.meta.dir, "..");
 const extractor = join(root, "mods/agent-threads/core/extract.sh");
-const dir = mkdtempSync(join(tmpdir(), "threads-tlorder-"));
 const NOW = Date.parse("2027-01-01T00:00:00Z");
 
-function session(name, ...flags) {
+function session(dir, name, ...flags) {
   const file = join(dir, `${name}.jsonl`);
   execFileSync("bun", [join(root, "test/make-fixture.js"), file, "00000000-0000-4000-8000-000000000061", "/tmp/threads-demo", ...flags], { stdio: "ignore" });
   const s = newSession("s", file);
@@ -39,8 +38,18 @@ function session(name, ...flags) {
   const heads = s.turns.map((t, i) => ledgerTurn(s, t, 0, i === s.turns.length - 1 && !t.done && !t.interrupted).head);
   return { s, heads };
 }
-const short = session("order", "--only", "0", "--order");
-const many = session("order-many", "--only", "100", "--order");
+// The made-up sessions are written to a folder of their own and read; make(dir) returns what
+// the tests use, and the folder goes once it returns or throws (seen: the folders made).
+const seen = [];
+function fixtures(make) {
+  const dir = mkdtempSync(join(tmpdir(), "threads-tlorder-"));
+  seen.push(dir);
+  return make(dir);
+}
+const { short, many } = fixtures((dir) => ({
+  short: session(dir, "order", "--only", "0", "--order"),
+  many: session(dir, "order-many", "--only", "100", "--order"),
+}));
 const byPrompt = (o, text) => o.heads[o.s.turns.findIndex((t) => t.prompt === text)];
 
 // One turn's bars by span key, in the order the layout puts them in (its row order), each as
@@ -76,6 +85,15 @@ function union(bars) {
   return out.map(([a, b, torn]) => (torn ? [a, b, 1] : [a, b]));
 }
 const alone = (h) => timelineLayout([h], 1440, "clock", NOW);
+
+test("timeline order fixtures: the folder the sessions are written to is gone once they are read, and when making them fails", () => {
+  expect(seen.length).toBe(1);
+  expect(existsSync(seen[0])).toBe(false);
+  let dir = null;
+  expect(() => fixtures((d) => { dir = d; throw new Error("no session"); })).toThrow("no session");
+  expect(dir).toBeTruthy();
+  expect(existsSync(dir)).toBe(false);
+});
 
 test("timeline order (make-fixture.js --order): a note listed after a later one but stamped earlier is its own bar, with the gap before the later one empty", () => {
   const h = byPrompt(short, "Why does the retry path warn on an empty queue?");
