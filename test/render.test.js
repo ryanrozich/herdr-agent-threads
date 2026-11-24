@@ -6683,11 +6683,15 @@ test("a reply longer than Herdr draws in one Markdown view opens whole: list ite
 //   them after its split and the rest of the draw.
 // - call and char, a wrapped text worked out for a height; rest, the rest of a draw: mixed
 //   Markdown of 16 to 96 KB drew in 20 to 38.5 ms on main.
+// - segLine and segChar, the passes over the whole reply in an open turn's build: the rig's
+//   open of 120 KB of short paragraphs at fcae757c (1,900 lines, 35 parts, 46.9 ms) spent
+//   18.2 ms in the reply's links (linkedSegs, linkSeg here) and 8.6 ms in the rest of the
+//   build (segmentsOf here, its whole-text pass), which the harness had left out.
 // On the rig 26 parts of short paragraphs never drew: 67 of 73 stopped draws died in the link
 // pass. Past stop ms Herdr stops a draw (costedFrames). The tests that bound a draw run at these
 // prices and at twice them (PRICE_SCALES): at twice, the bounds on frames double and a draw
 // after the first need only stay under the stop, as the fixed part of a draw doubles too.
-const P121 = { line: 0.033, unit: 0.00005, row: 0.009, call: 0.004, char: 0.0001, rest: 8, stop: 50 };
+const P121 = { line: 0.033, unit: 0.00005, row: 0.009, call: 0.004, char: 0.0001, rest: 8, stop: 50, segLine: 0.0096, segChar: 0.00007 };
 const SPLIT_PER_CHAR = 1.72;
 const PRICE_SCALES = [1, 2];
 const shortParas = (n) => Array.from({ length: n }, (_, i) => `Paragraph ${i + 1}: the cart total rounds per line, see ACME-${i + 1}.`).join("\n\n");
@@ -6751,6 +6755,9 @@ function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0, scale = 1, onF
   v.expanded = function (item, out) { hook("expanded", item); return ex.call(this, item, out); };
   v.linkOne = function (md) { hook("link", md); if (this.links.length) { linked++; spend(md.split("\n").filter((x) => x.trim()).length * P.line); } return lo.call(this, md); };
   v.wrapped = function (s, ...a) { spend(P.call + s.length * P.char); return wr.call(this, s, ...a); };
+  const ls = v.linkSeg, so = v.segmentsOf;
+  v.linkSeg = function (md, ...a) { spend(md.split("\n").filter((x) => x.trim()).length * P.segLine); return ls.call(this, md, ...a); };
+  v.segmentsOf = function (text) { spend(text.length * P.segChar); return so.call(this, text); };
   // A read of the split is priced by the work it did, what it scanned and what it made; one
   // Herdr stopped is lost, as its state is written back only at its end (mdSplitOn).
   const ss = v.splitSome, hi = v.height;
@@ -6816,7 +6823,7 @@ function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0, scale = 1, onF
     cx.timer = timer;
     cx.notify = notify;
     cx.timers = timers.map((x) => ({ ms: Math.max(0, x.due - t), fn: x.fn }));
-    delete v.linkOne; delete v.wrapped; delete v.splitSome; delete v.height; delete v.expanded;
+    delete v.linkOne; delete v.wrapped; delete v.splitSome; delete v.height; delete v.expanded; delete v.linkSeg; delete v.segmentsOf;
   }
   const ok = frames.filter((x) => x.ok);
   return { stops: frames.length - ok.length, first: frames.findIndex((x) => x.ok) + 1, open: frames[0]?.ms ?? 0, settled, settledMs, linked, splits, readMost: Math.round(readMost * 100) / 100, most: Math.max(0, ...ok.map((x) => x.ms)), later: Math.max(0, ...ok.slice(1).map((x) => x.ms)), frames };

@@ -4877,7 +4877,7 @@ export default class Threads extends View {
     if (!text) out.push({ ...item, kind: "noreply", key: `nr:${key}` });
     let used = 0;
     let left = 0;
-    const segs = segments(text);
+    const segs = this.segmentsOf(text);
     // Editors cannot be made while drawing: note the turn, and flushCode() makes them
     // on the next tick.
     const stale = segs.some((seg, i) => seg.kind === "code" && this.code.get(`${key}:${i}`)?.text !== seg.text)
@@ -5969,7 +5969,7 @@ export default class Threads extends View {
     let matches = 25;
     const out = segs.map((seg) => {
       if (seg.kind !== "md" || chars <= 0 || matches <= 0) { chars -= seg.text.length; return seg.kind === "md" ? { md: seg.text, links: 0 } : null; }
-      const r = linkify(seg.text, this.links, ctx, { maxChars: chars, maxMatches: matches });
+      const r = this.linkSeg(seg.text, ctx, { maxChars: chars, maxMatches: matches });
       chars -= seg.text.length;
       matches -= r.links;
       return r;
@@ -5978,6 +5978,9 @@ export default class Threads extends View {
     memo.set(key, { sig, out });
     return out;
   }
+  // The two passes over a whole reply in an open turn's build, apart so the tests can price them.
+  linkSeg(md, ctx, caps) { return linkify(md, this.links, ctx, caps); }
+  segmentsOf(text) { return segments(text); }
   // An interim text with the link rules applied, kept for the step until the rules or the
   // repo change. Every rebuild of the rows asks for each step of every open turn, and the
   // rules run a set of patterns over the text: for hundreds of steps that ran past Herdr's
