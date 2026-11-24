@@ -388,6 +388,58 @@ test("timeline press: an unfinished call's bar that starts left of its narrow tu
   expect(timelineHit(L, heads, p.x + 0.1, "tools")).toEqual({ turn: heads[10].key, key: heads[10].key });
 });
 
+test("timeline press: a bar of the turn the press is in and one reaching back from the next both under it: the one drawn on top, failed over the rest, half height over full, then the narrowest", () => {
+  // As above, 100 turns of 60 s across 500 px. Turn 11 (index 10) ends with a Grep at 58 to
+  // 59 s, drawn 3 px wide at its turn's end; turn 12 (index 11) stopped with a Bash that never
+  // returned, 6 px wide, starting left of its turn over the Grep's last px.
+  const mk = (grep, rest) => Array.from({ length: 100 }, (_, i) => ({
+    ...head(turn(i + 1, i === 10 ? ["a", [grep]] : i === 11 ? ["a", ...rest] : ["a"], i === 11 ? { interrupted: true, reply: null } : {})),
+    t0: T0 + i * 120000,
+  }));
+  const press = (heads) => {
+    const L = timelineLayout(heads, 500, "clock", T0 + 1e9);
+    const [p, t] = [L.turns[10], L.turns[11]];
+    // Both bars are under a press half a px inside the turn's end.
+    const x = p.x + p.w - 0.5;
+    expect(t.x + t.w - 6).toBeLessThan(x);
+    expect(p.x + p.w - 3).toBeLessThan(x);
+    return timelineHit(L, heads, x, "tools");
+  };
+  const grepOf = (heads) => stepsOf(heads[10]).find((it) => it.lane === "tools").key;
+  const bashOf = (heads) => stepsOf(heads[11]).find((it) => it.open).key;
+  // The Bash starts while a Read runs: on the half-height track, drawn over the full Grep.
+  const a = mk(["Grep", "g", 58000, 59000], [[["Read", "b", 500, 2000]], [["Bash", "sleep", 1000, null]]]);
+  expect(stepsOf(a[11]).find((it) => it.open).track).toBe(1);
+  expect(press(a)).toEqual({ turn: a[11].key, key: bashOf(a) });
+  // Both full height, one ink (one span): the narrower, the Grep.
+  const b = mk(["Grep", "g", 58000, 59000], [[["Bash", "sleep", 1000, null]], [["Read", "b", 2000, 3000]]]);
+  expect(stepsOf(b[11]).find((it) => it.open).track).toBe(0);
+  expect(press(b)).toEqual({ turn: b[10].key, key: grepOf(b) });
+  // The Grep failed: its red bar is drawn over the half-height Bash.
+  const c = mk(["Grep", "g", 58000, 59000, true], [[["Read", "b", 500, 2000]], [["Bash", "sleep", 1000, null]]]);
+  expect(press(c)).toEqual({ turn: c[10].key, key: grepOf(c) });
+});
+
+test("timeline press: looks at the turns that start within 4 px right of the press and no further, so at 5,600 turns it reads as many turns at turn 10 as at turn 5,000", () => {
+  const one = head(turn(4, ["a", [["Bash", "x", 1000, 2000]]]));
+  const heads = Array.from({ length: 5600 }, (_, i) => ({ ...one, key: `0:${i + 1}`, n: i + 1, t0: T0 + i * 120000 }));
+  const L = timelineLayout(heads, 1371, "clock", T0 + 1e9);
+  let reads = 0;
+  const turns = new Proxy(L.turns, { get(o, k, r) { if (typeof k === "string" && /^[0-9]+$/.test(k)) reads++; return Reflect.get(o, k, r); } });
+  const P = { ...L, turns };
+  const cost = (ti) => {
+    reads = 0;
+    const got = timelineHit(P, heads, L.turns[ti].x + 0.01, "tools");
+    expect(got.turn).toBe(heads[ti].key);
+    return reads;
+  };
+  const pitch = L.turns[1].x - L.turns[0].x;
+  const [early, late] = [cost(10), cost(5000)];
+  // The halving takes 12 or 13 looks; then the turn and those within 4 px right of the press.
+  expect(Math.abs(early - late)).toBeLessThanOrEqual(2);
+  expect(late).toBeLessThan(14 + 2 * Math.ceil(4 / pitch + 2) + 6);
+});
+
 test("timeline press: a press at no number finds nothing", () => {
   const h = head(turn(1, [[["Read", "a", 30000, 40000]]]));
   const L = timelineLayout([h], 400, "clock");
