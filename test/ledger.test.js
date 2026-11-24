@@ -510,7 +510,7 @@ test("compact tooltips carry what the compact row drops: a heading's calls, fail
 });
 
 // TRD-87 picks 3 and 4: the bottom dock's detail at the list's right from 700 px, at least 360 px
-// and whatever the list leaves past 1,100 px; none under 700. The right dock as before.
+// and whatever the list leaves past 1,100 px, at most 640; none under 700. The right dock as before.
 test("trajLayout: the bottom dock's detail side and widths, and the list's columns by the list's width; the right dock by ledgerCols", () => {
   const at = (w, open = true) => { const L = trajLayout(w, "bottom", open); return [L.side, L.detailW, L.listW, L.cols.start, L.cols.bar, L.cols.filters, L.cols.detailRight]; };
   expect(at(1700)).toEqual(["right", 600, 1100, true, true, true, true]);

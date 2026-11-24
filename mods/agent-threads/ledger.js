@@ -172,8 +172,9 @@ export function ledgerCols(width) {
 // The pane's layout by its dock (TRD-24). On the right (and in the Chat's own pane) the detail
 // sits at the ledger's right, DETAIL_W wide, from WIDE_MIN, and under it narrower; the columns go
 // by the pane's width (ledgerCols). Along the bottom (TRD-87, picks 3 and 4) the detail sits at
-// the list's right from DOCK_SIDE_MIN, DOCK_DETAIL_MIN wide at least and taking whatever the
-// list leaves past DOCK_LIST_MAX; under DOCK_SIDE_MIN there is none, since under the list it
+// the list's right from DOCK_SIDE_MIN, DOCK_DETAIL_MIN wide at least, taking what the list leaves
+// past DOCK_LIST_MAX up to DOCK_DETAIL_MAX (a block of text about 85 characters wide), past which
+// the list takes the rest; under DOCK_SIDE_MIN there is none, since under the list it
 // would leave no rows at the dock's least height. There the list's start and bar columns go by
 // the list's own width, and the filter bar, across the whole pane, by the pane's.
 // open: whether the detail is shown, so the list has the width the detail leaves it.
@@ -182,6 +183,7 @@ export const DETAIL_W = 300;
 export const DOCK_SIDE_MIN = 700;
 export const DOCK_LIST_MAX = 1100;
 export const DOCK_DETAIL_MIN = 360;
+export const DOCK_DETAIL_MAX = 640;
 export function trajLayout(width, dock = "right", open = true) {
   const w = Number.isFinite(width) ? width : 0;
   const pane = ledgerCols(w);
@@ -190,7 +192,7 @@ export function trajLayout(width, dock = "right", open = true) {
     return { side, detailW: side === "right" ? DETAIL_W : null, listW: side === "right" && open ? w - DETAIL_W : w, cols: pane };
   }
   const side = w >= DOCK_SIDE_MIN ? "right" : "none";
-  const detailW = side === "right" ? Math.max(DOCK_DETAIL_MIN, w - DOCK_LIST_MAX) : null;
+  const detailW = side === "right" ? Math.min(DOCK_DETAIL_MAX, Math.max(DOCK_DETAIL_MIN, w - DOCK_LIST_MAX)) : null;
   const listW = side === "right" && open ? w - detailW : w;
   const list = ledgerCols(listW);
   return { side, detailW, listW, cols: { start: list.start, bar: list.bar, filters: pane.filters, detailRight: side === "right" } };
