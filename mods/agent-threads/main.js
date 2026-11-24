@@ -6645,7 +6645,9 @@ export default class Threads extends View {
       // session of agent messages only, with agentRail off), every turn is a stop, as before.
       case "prev": case "next": {
         const d = name === "next" ? 1 : -1;
-        const stop = steps.some((k) => this.railStop(k)) ? (k) => this.railStop(k) : () => true;
+        // Show earlier and Show later are stops either way (railStop finds no turn for them),
+        // but no rail tick: only a turn's tick turns the rail's stops on.
+        const stop = steps.some((k) => k !== "older" && k !== "newer" && this.railStop(k)) ? (k) => this.railStop(k) : () => true;
         let i = at < 0 ? steps.length : at + d;
         if (at < 0) do i--; while (i > 0 && !stop(steps[i]));
         else while (i >= 0 && i < steps.length && !stop(steps[i])) i += d;

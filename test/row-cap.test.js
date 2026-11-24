@@ -1717,3 +1717,24 @@ test("RowWindow: the note over a turn a search hides, which a pin's return shows
   // A turn without a note keeps the day-band rule as before.
   expect(w.start(list, list.index.get("0:21"), -1)).toBe(list.index.get("0:21"));
 });
+
+test("in a window of agent messages only, with Agent messages on the rail off, up and down go a turn at a time: Show earlier is no rail tick", async () => {
+  const { v, cx } = await capSession(150, SMALL);
+  for (const t of v.current().turns) t.agent = true;
+  v.prefs = { ...v.prefs, agentTurns: true, agentRail: false };
+  v.rowsKey = null;
+  v.jumpLatest(true);
+  frames(v, cx);
+  const keys = v.turnKeys(v.rows());
+  expect(v.rows().some((r) => r.key === "older")).toBe(true);
+  expect(keys.some((k) => v.railStop(k))).toBe(false);
+  v.sel = "0:140";
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:139");
+  v.action("next", cx);
+  expect(v.sel).toBe("0:140");
+  // From the window's first turn, up goes on to Show earlier.
+  v.sel = keys[0];
+  v.action("prev", cx);
+  expect(v.sel).toBe("older");
+});
