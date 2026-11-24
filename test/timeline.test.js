@@ -607,13 +607,32 @@ test("timeline spans out of order: a bar that ends before an earlier row's bar s
   expect(raw[2]).toEqual([1320, 1440]);
   // Drawn: each bar in its place, the 477 px between them empty.
   expect(L.spans.get("model|model|0")).toEqual([[240, 243], [720, 723], [1320, 1440]]);
-  // So a press between them finds no bar: the turn's heading.
-  expect(timelineHit(L, [h], 400, "model", T0 + 1e7)).toEqual({ turn: h.key, key: h.key });
   // Out of order and touching (29.9 s and then 30 s, 0.6 px apart, overlapping): one bar.
   const g = head(notesAt(2, [30000, 29900]));
   const G = timelineLayout([g], 1440, "clock", T0 + 1e7);
   expect(rawBars(G, g, 0, "model").slice(0, 2)).toEqual([[720, 723], [717.6, 720.6]]);
   expect(G.spans.get("model|model|0")).toEqual([[717.6, 723], [1320, 1440]]);
+});
+
+test("timeline press in the gap between two bars out of order: no step, only the turn's heading, and no drawn span there", () => {
+  // The two notes at 30 s and then 10 s: bars at 720 to 723 and 240 to 243 px.
+  const h = head(notesAt(1, [30000, 10000]));
+  const L = timelineLayout([h], 1440, "clock", T0 + 1e7);
+  const [, later, earlier] = rowsOf(h);
+  expect([later.lk, earlier.lk]).toEqual(["text", "text"]);
+  const at = (x, lane) => timelineHit(L, [h], x, lane, T0 + 1e7);
+  const drawn = (x) => L.spans.get("model|model|0").some(([a, b]) => a <= x && x <= b);
+  // Within 4 px of a bar, its step; at more than 4 px from both, in the model lane or in
+  // none, the turn's heading, and no drawn span covers the press either.
+  expect(at(246, "model")).toEqual({ turn: h.key, key: earlier.key });
+  expect(at(717, "model")).toEqual({ turn: h.key, key: later.key });
+  for (const x of [247.5, 300, 400, 480, 600, 715.5]) {
+    expect(at(x, "model")).toEqual({ turn: h.key, key: h.key });
+    expect(at(x, null)).toEqual({ turn: h.key, key: h.key });
+    expect(drawn(x)).toBe(false);
+  }
+  expect(drawn(241)).toBe(true);
+  expect(drawn(721)).toBe(true);
 });
 
 test("timeline spans out of order: an unfinished call's torn end is kept, apart from a bar left of it or joined with one that reaches it", () => {
