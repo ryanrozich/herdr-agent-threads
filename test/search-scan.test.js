@@ -943,15 +943,17 @@ for (const x of [1, 2]) test(`with 2,000 turns after the last one with a reply a
   } finally { X = 1; }
   if (process.env.THREADS_SEARCH_FIGURES) console.log(JSON.stringify({ tail: 2000, x, countingWhileChanging: seen.slice(0, 60).filter((d) => d.counting).length, drawsAfterLast: after }));
   expect(seen.filter((d) => d.stopped || !d.ms)).toEqual([]);
+  // The limit itself: counting in every draw while a turn comes in before each.
+  expect(seen.slice(0, 60).filter((d) => !d.counting)).toEqual([]);
   expect(seen.filter((d) => d.counting && d.text !== "Counting…")).toEqual([]);
   expect(after != null && after <= 20).toBe(true);
   expect(places(v)).toEqual(want(v, "zqxjvk"));
   expect(fieldText(v)).toBe("No matches");
 }, 120000);
 
-// A reply comes in while a tail longer than a slice is checked again, and then a turn after it:
-// the turns of the tail not checked yet when the reply came are still checked, though the
-// reply makes them settled.
+// A reply comes in while a tail longer than a slice is checked again, and then two turns after
+// it: once the reply's turn is before the newest, the turns before it are settled, and the
+// tail's turns not checked yet are still checked.
 test("a reply coming in while a 2,000-turn tail is checked again, then a turn after it, leaves the count and every place right", async () => {
   const { v, cx, s } = await longPane(5600);
   tailMore(s, 2000);
@@ -965,16 +967,19 @@ test("a reply coming in while a 2,000-turn tail is checked again, then a turn af
     T.apply(s, { k: "p", o: "human", t: `Turn ${s.turns.length}: please look again, with a reply.`, ts });
     T.apply(s, { k: "t", t: "Looked." });
     T.apply(s, { k: "d", ms: 1000, ts });
+    const reply = s.turns.length - 1;
     drawOnce(v, cx);
-    tail = v.hitsNow().cur.tail;
+    tailMore(s, 1);
+    drawOnce(v, cx);
+    tail = { ...v.hitsNow().cur.tail, reply };
     tailMore(s, 1);
     for (let k = 0; k < 40 && counting(v); k++) drawOnce(v, cx);
   });
-  // The reply came while the tail was part checked.
-  expect(tail != null && tail.next < s.turns.length - 2).toBe(true);
+  // The tail was part checked, short of the reply's turn, when the turn after it came in.
+  expect(tail.next != null && tail.next < tail.reply).toBe(true);
   expect(counting(v)).toBe(false);
-  // 2,000 + 3 + the reply's turn + 1.
-  expect(want(v, "look again").keys.length).toBe(2005);
+  // 2,000 + 3 + the reply's turn + 2.
+  expect(want(v, "look again").keys.length).toBe(2006);
   expect(places(v)).toEqual(want(v, "look again"));
 }, 120000);
 
