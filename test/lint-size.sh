@@ -19,11 +19,17 @@ if [ -z "$files" ]; then
   exit 1
 fi
 over=0
+missing=0
 count=0
 big=0
 bigf=
 while IFS= read -r f; do
-  [ -f "$f" ] || continue
+  # A file Biome named that is not here means the list was misread: no size was checked.
+  if [ ! -f "$f" ]; then
+    echo "lint-size: Biome listed $f, which is not a file here" >&2
+    missing=1
+    continue
+  fi
   size=$(wc -c < "$f" | tr -d ' ')
   count=$((count + 1))
   if [ "$size" -gt "$big" ]; then big=$size; bigf=$f; fi
@@ -34,6 +40,14 @@ while IFS= read -r f; do
 done <<EOF
 $files
 EOF
+if [ "$missing" -ne 0 ]; then
+  echo "lint-size: run from the repository root; Biome's list did not match the files" >&2
+  exit 1
+fi
+if [ "$count" -eq 0 ]; then
+  echo "lint-size: no file was checked" >&2
+  exit 1
+fi
 if [ "$over" -ne 0 ]; then
   echo "lint-size: split the file, or move part of it into a module of its own" >&2
   exit 1

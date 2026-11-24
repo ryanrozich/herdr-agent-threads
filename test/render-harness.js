@@ -3,6 +3,14 @@
 // and .hover() run their callbacks, and the virtual list draws every item unless a test sets
 // a window (listWindow). The pane reads synthetic fixtures through the real extractor (exec
 // runs it). Used by test/render.test.js; other test files can share it.
+//
+// bun runs every test file in one process and loads this module once, so each test file calls
+// setup() as it starts: it re-installs the module stand-ins and, through reset(), puts every
+// setting below back to its default and empties every shared list and count. Nothing is reset
+// between the tests of one file. What reset() leaves alone: keyBinds, since the mod binds its
+// keys once per process (ui.js), so a later file's panes bind nothing and the record of that
+// one binding has to stay; app and the mod copied into it, made once; and main.js and ui.js
+// themselves, loaded once, with their own module state.
 import { mock, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
@@ -48,7 +56,9 @@ export let hcOut = JSON.stringify({ foreground: { name: "claude", argv: ["claude
 export let hcBy = {};
 export let recordFiles = {};
 export let focusNow = null;
-export let afterFocus = (args) => { focusNow = { terminal: state.panes.find((p) => p.pane === args?.pane)?.terminal ?? null }; };
+// After pane.focus: the focused pane's terminal, from the panes the test set.
+function focusPane(args) { focusNow = { terminal: state.panes.find((p) => p.pane === args?.pane)?.terminal ?? null }; }
+export let afterFocus = focusPane;
 export const mdSources = [];
 // Overlays the mod opened (the image gallery).
 export const overlays = [];
@@ -69,7 +79,8 @@ export const editors = [];
 // Plain scroll handles made (the image viewer's panel), with the children each was asked to reveal.
 export const scrollHandles = [];
 export let focusCalls = 0;
-// Every list given to cx.bind_keys, for the whole file: the mod installs its keys once.
+// Every list given to cx.bind_keys, for the whole run: the mod installs its keys once per
+// process, so reset() keeps this.
 export const keyBinds = [];
 export const never = () => new Promise(() => {});
 // The items the virtual list draws, as Herdr does for what is on screen: all of them unless a
@@ -165,9 +176,40 @@ if (process.env.THREADS_CHILD === "read-timing") {
   const { parseLine, apply } = real;
   mock.module(turnsPath, () => ({ ...real, parseLine: (c, line) => { work.lines++; return parseLine(c, line); }, apply: (s, e) => { work.events++; return apply(s, e); } }));
 }
-// The module stand-ins for gpui-kit, gpui-base and Herdr. Installed here before main.js is
-// imported, and again by each test file as it starts: another file may have put its own in.
+// Every setting back to its default, and every shared list and count emptied (keyBinds
+// stays; see the top of this file).
+export function reset() {
+  calls = 0;
+  rec = null;
+  state = { panes: [], terminals: [], props: {}, shared: {} };
+  log = [];
+  hcOut = JSON.stringify({ foreground: { name: "claude", argv: ["claude"], pid: 42 } });
+  hcBy = {};
+  recordFiles = {};
+  focusNow = null;
+  afterFocus = focusPane;
+  focusCalls = 0;
+  listWindow = null;
+  lastList = null;
+  herdrSettings = { font_family: "Mono" };
+  hostPlatform = "linux";
+  herdrVersion = "0.1.17";
+  marks = null;
+  pinWrites = 0;
+  extractHook = null;
+  keepSettings = false;
+  settingsStale = false;
+  lacking.clear();
+  stubHas.clear();
+  for (const list of [mdSources, overlays, closed, views, editors, scrollHandles, settingsWrites]) list.length = 0;
+  for (const k of Object.keys(hostReads)) hostReads[k] = 0;
+  for (const k of Object.keys(work)) work[k] = 0;
+}
+// The module stand-ins for gpui-kit, gpui-base and Herdr, and the settings reset. Installed
+// here before main.js is imported, and again by each test file as it starts: another file may
+// have put its own stand-ins in, or left settings behind.
 export function setup() {
+  reset();
   mock.module("gpui-kit", () => ({ View: class {}, div: () => el, svg: (p) => { if (rec) rec.push(["svg", p]); return el; }, image: () => el }));
   mock.module("gpui-base", () => ({
     v_flex: () => el, h_flex: () => el,

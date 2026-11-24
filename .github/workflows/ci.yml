@@ -33,8 +33,10 @@ jobs:
         run: bunx @biomejs/biome@2.6.4 lint
 
       # Biome skips a file of 1 MiB or more with a warning and exits 0: this fails instead,
-      # naming the file and its size. Biome's own list of files decides which are checked.
+      # naming the file and its size. Biome's own list of files decides which are checked. It runs
+      # after a failed lint too (not after a cancel), so both results show in one run.
       - name: Linted files under Biome's size limit
+        if: success() || failure()
         run: sh test/lint-size.sh
 
       - name: Shell scripts (shellcheck)
