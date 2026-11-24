@@ -20161,7 +20161,7 @@ test("capList: 10,000 items go to the list as they are, and one more keeps the n
   expect(past.rows.length).toBe(10000);
   expect(past.sizes.length).toBe(10000);
   expect(past.cut).toBe(2);
-  expect(past.rows[0]).toMatchObject({ kind: "note", key: "capped", text: "2 earlier list items are not shown" });
+  expect(past.rows[0]).toMatchObject({ kind: "note", key: "capped", text: "2 earlier list items are not shown. Click to show them." });
   expect(past.sizes[0]).toBe(34);
   expect(past.rows[1].key).toBe("0:3");
   expect(past.rows.at(-1).key).toBe("0:10001");
@@ -20205,7 +20205,7 @@ test("the list's last guard: at its cap every item goes to the list, and one pas
   const rows = v.rows();
   expect(rows.length).toBe(n - 1);
   expect(lastList.sizes.length).toBe(n - 1);
-  expect(rows[0]).toMatchObject({ kind: "note", key: "capped", text: "2 earlier list items are not shown" });
+  expect(rows[0]).toMatchObject({ kind: "note", key: "capped", text: "2 earlier list items are not shown. Click to show them." });
   expect(v.turnKeys(rows).at(-1)).toBe("0:150");
   // A row's index still finds it past the cut, and one cut away is not in the list.
   expect(v.rowIndex("0:150")).toBe(rows.findIndex((r) => r.key === "0:150"));
@@ -20673,7 +20673,7 @@ test("a jump to one turn with more items than the list takes lands on its head, 
   expect(inList(v, parts.at(-1).key)).toBe(false);
   expect(inList(v, "capped")).toBe(false);
   expect(rows.at(-1)).toMatchObject({ kind: "note", key: "capped-later" });
-  expect(rows.at(-1).text).toMatch(/^[\d,]+ later list items are not shown$/);
+  expect(rows.at(-1).text).toMatch(/^[\d,]+ later list items are not shown\. Click to show them\.$/);
   // The note at the bottom on screen is not the session's end: no follow.
   try {
     listWindow = (n) => ({ start: n - 5, end: n });
@@ -20714,8 +20714,9 @@ test("capList keeps the item a reader went to: a head kept above a note, or a mi
   expect(keys(capList(rows, sizes, 10, 34, 25)).slice(0, 2)).toEqual(["capped", "r21"]);
   const head = capList(rows, sizes, 10, 34, 3);
   expect(keys(head)).toEqual(["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "capped-later"]);
-  expect(head.rows.at(-1).text).toBe("21 later list items are not shown");
+  expect(head.rows.at(-1).text).toBe("21 later list items are not shown. Click to show them.");
   expect(head.cut).toBe(21);
+  expect([head.rows.at(-1).go, capList(rows, sizes, 10, 34, 25).rows[0].go]).toEqual(["r9", "r20"]);
   const mid = capList(rows, sizes, 10, 34, 15);
   expect(mid.rows.length).toBe(10);
   expect(mid.sizes.length).toBe(10);
@@ -20723,6 +20724,7 @@ test("capList keeps the item a reader went to: a head kept above a note, or a mi
   expect(mid.rows[0]).toMatchObject({ key: "capped" });
   expect(mid.rows.at(-1)).toMatchObject({ key: "capped-later" });
   expect(mid.cut).toBe(22);
+  expect([mid.rows[0].go, mid.rows.at(-1).go]).toEqual(["r10", "r19"]);
   expect(Number(mid.rows[0].text.split(" ")[0]) + Number(mid.rows.at(-1).text.split(" ")[0])).toBe(22);
 });
 
@@ -20830,4 +20832,51 @@ test("RowWindow at its edges: the slide and the stop at exactly their counts, tw
   w.keep(list, 19, 40, false);
   expect(w.place(list, { seen: 36 }).z).toBe(36);
   expect(w.has(list, "0:36")).toBe(true);
+  // Show later and Show earlier move one block, the other end following to slide rows.
+  w.keep(list, 20, 30, false);
+  expect(w.later(list)).toBe("0:31");
+  expect(w.at).toMatchObject({ a: 23, z: 33 });
+  w.keep(list, 20, 30, false);
+  expect(w.earlier(list)).toBe("0:21");
+  expect(w.at).toMatchObject({ a: 17, z: 27 });
+});
+
+test("under the list's cap a jump does not rebuild the list's fit for the row it went to", async () => {
+  const { v, cx } = await capSession(150);
+  v.jumpLatest(true);
+  frames(v, cx);
+  v.command("search:#10", cx);
+  frames(v, cx);
+  let fits = 0;
+  const fit = v.windowed.bind(v);
+  v.windowed = (W) => { fits++; return fit(W); };
+  v.capKey = "0:20";
+  draw(v, cx);
+  expect(fits).toBe(0);
+});
+
+test("past the cap, a press on a cut note brings the items it stands for in, to the turn's end and back", async () => {
+  const { v, cx } = await capSession(150, { ...SMALL, max: 40 }, 140, 80);
+  v.open.add("0:141");
+  v.command("search:#141", cx);
+  frames(v, cx, 6);
+  const parts = v.baseRows.filter((r) => r.key.startsWith("md:0:141:")).map((r) => r.key);
+  const note = () => v.rows().find((r) => r.key === "capped-later");
+  expect(note().text).toMatch(/^[\d,]+ later list items are not shown\. Click to show them\.$/);
+  for (let i = 0; i < 10 && note(); i++) {
+    const was = v.rows().filter((r) => parts.includes(r.key)).at(-1).key;
+    v.click("capped-later", cx);
+    frames(v, cx);
+    expect(parts.indexOf(v.rows().filter((r) => parts.includes(r.key)).at(-1).key)).toBeGreaterThan(parts.indexOf(was));
+  }
+  expect(inList(v, parts.at(-1))).toBe(true);
+  expect(v.rows().find((r) => r.key === "capped").text).toMatch(/earlier list items are not shown\. Click to show them\.$/);
+  // Back up: the list goes to the item just above the first it holds.
+  const first = v.rows().find((r) => parts.includes(r.key)).key;
+  const asked = [];
+  v.scroll = { scroll_to_item(i) { asked.push(v.rowsMemo?.[i]?.key); }, scroll_to_bottom() { asked.push("end"); } };
+  v.click("capped", cx);
+  frames(v, cx);
+  expect(asked[0]).toBe(parts[parts.indexOf(first) - 1]);
+  expect(inList(v, parts.at(-1))).toBe(false);
 });

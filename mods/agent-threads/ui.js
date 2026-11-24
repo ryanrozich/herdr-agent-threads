@@ -2508,25 +2508,26 @@ export function landExact(slots, i, want) {
 // noteH px that says how many earlier items it left out (cut). at: the item a reader went
 // to (a jump, a pin), or -1. When the newest items would leave it out, the items from the
 // list's start are kept over a note of the later ones left out, or, with it further down,
-// the items around it between two notes.
+// the items around it between two notes. A note's go is the key of the item next to it that
+// it left out, where a press on it goes (main.js capMore).
 export const LIST_MAX = 10000;
 export function capList(rows, sizes, max, noteH, at = -1) {
   if (rows.length <= max) return { rows, sizes, cut: 0 };
-  const note = (key, n, which) => ({ kind: "note", key, text: `${n.toLocaleString()} ${which} list items are not shown` });
+  const note = (key, n, which, go) => ({ kind: "note", key, go, text: `${n.toLocaleString()} ${which} list items are not shown. Click to show them.` });
   let keep = max - 1;
   if (at < 0 || at >= rows.length - keep) {
     const cut = rows.length - keep;
-    return { rows: [note("capped", cut, "earlier"), ...rows.slice(-keep)], sizes: [noteH, ...sizes.slice(-keep)], cut };
+    return { rows: [note("capped", cut, "earlier", rows[cut - 1].key), ...rows.slice(-keep)], sizes: [noteH, ...sizes.slice(-keep)], cut };
   }
   if (at < keep) {
     const cut = rows.length - keep;
-    return { rows: [...rows.slice(0, keep), note("capped-later", cut, "later")], sizes: [...sizes.slice(0, keep), noteH], cut };
+    return { rows: [...rows.slice(0, keep), note("capped-later", cut, "later", rows[keep].key)], sizes: [...sizes.slice(0, keep), noteH], cut };
   }
   keep = max - 2;
   const a = at - Math.floor(keep / 2);
   const z = a + keep;
   return {
-    rows: [note("capped", a, "earlier"), ...rows.slice(a, z), note("capped-later", rows.length - z, "later")],
+    rows: [note("capped", a, "earlier", rows[a - 1].key), ...rows.slice(a, z), note("capped-later", rows.length - z, "later", rows[z].key)],
     sizes: [noteH, ...sizes.slice(a, z), noteH],
     cut: rows.length - keep,
   };

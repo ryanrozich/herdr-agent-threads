@@ -2707,7 +2707,7 @@ export default class Threads extends View {
     // The pane's height only moves the spacer under a short list: Herdr's banner changes it, and
     // as part of the rows' key it rebuilt every row after each stopped draw.
     const W = this.winPlace();
-    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}|${this.landLift ?? 0}|${this.anchorLift ?? 0}|${this.anchorSlot ? `${this.anchorSlot.i}:${this.anchorSlot.h}` : ""}|${W.a}:${W.z}|${this.win.cap.max}|${this.capKey ?? ""}`;
+    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}|${this.landLift ?? 0}|${this.anchorLift ?? 0}|${this.anchorSlot ? `${this.anchorSlot.i}:${this.anchorSlot.h}` : ""}|${W.a}:${W.z}|${this.win.cap.max}|${W.z - W.a + 4 > this.win.cap.max ? (this.capKey ?? "") : ""}`;
     if (this.fitKey !== fit) {
       let { rows, sizes } = this.windowed(W);
       // The tail is the session's end: none under a window that stops short of it.
@@ -2728,7 +2728,8 @@ export default class Threads extends View {
       // the gap and the Show earlier item, less the rows the window leaves out above.
       this.winOff = (rows[0]?.kind === "spacer" || rows[0]?.kind === "gap" ? 1 : 0) + (W.a > 0 ? 1 : 0) - W.a;
       // Past the cap, the item the reader went to is kept (capKey); the Pinned view reads
-      // from its top.
+      // from its top. capKey is in the fit's key only when the rows (and the list's own items:
+      // a gap or spacer, Show earlier and later, the tail) could pass the cap.
       let at = rows.length > this.win.cap.max && this.capKey != null ? rows.findIndex((r) => r.key === this.capKey) : -1;
       if (at < 0 && this.view === "pinned") at = 0;
       const cap = capList(rows, sizes, this.win.cap.max, this.estimate({ kind: "note" }), at);
@@ -2818,6 +2819,17 @@ export default class Threads extends View {
     this.toBottom = false;
     this.sel = key;
     this.scrollTo = { key, how: "head", win: true };
+    this.fitKey = null;
+  }
+  // A press on capList's note: the list goes to the item next to it that it left out, which
+  // capList then keeps (capKey), so the reader reads on past the cut.
+  capMore(key) {
+    const go = this.rowsMemo?.find((r) => r.key === key)?.go;
+    if (go == null) return;
+    this.follow = false;
+    this.toBottom = false;
+    this.capKey = go;
+    this.scrollTo = { key: go, how: "top" };
     this.fitKey = null;
   }
   // The keys up and down step through, with the window's Show earlier and Show later items.
@@ -6127,6 +6139,7 @@ export default class Threads extends View {
     }
     // A plain click clears Herdr's text selection, so the fill comes back.
     this.textSel = null;
+    if (key === "capped" || key === "capped-later") { this.capMore(key); return cx.notify(); }
     if (key === "older" || key === "newer") {
       this.toList();
       this.showMore(key === "newer");
