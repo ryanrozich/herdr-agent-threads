@@ -587,7 +587,7 @@ test("a splice that finds an open turn missing from its session changes no row a
   const i0 = s.turns.findIndex((t) => `${v.sessions.length - 1}:${t.n}` === keys[0]);
   const made = [];
   const sr = v.spliceRows;
-  v.spliceRows = function (...a) { const before = this.baseRows.slice(); const out = sr.apply(this, a); made.push([out, this.splicing, before.length]); return out; };
+  v.spliceRows = function (...a) { const before = this.baseRows.slice(); const out = sr.apply(this, a); made.push([out, Boolean(this.splicing), before.length]); return out; };
   s.turns[i0] = { ...s.turns[i0] };
   v.toggle(keys[0], cx);
   v.toggle(keys[1], cx);
