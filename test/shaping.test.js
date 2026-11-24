@@ -171,21 +171,32 @@ test("shaping: scrolled up, a turn left for its cost past the rows on screen end
   let calls = 0;
   let inView = false;
   const shape = v.shape;
-  v.shape = function (...a) { if (!inView) calls++; return shape.apply(this, a); };
+  let looked = new Set();
+  v.shape = function (...a) { if (!inView) { calls++; looked.add(a[0]); } return shape.apply(this, a); };
   const siv = v.shapeInView;
   v.shapeInView = function (...a) { inView = true; try { return siv.apply(this, a); } finally { inView = false; } };
+  // The second turn on screen made long enough that its expected cost (about 15 ms) does not
+  // fit what is left once the first turn in view is reshaped: in that draw it is left for its
+  // cost among the rows drawn, and the walk still looks at the rows drawn after it.
+  const big = v.rowsMemo.slice(700, 712).map((x) => x.turn).filter(Boolean)[1];
+  big.prompt = `${big.prompt} ${"zerb kazo quil ".repeat(40)}`;
   // Each pass: its walk's shape() calls, the rows it took off the list, the rows on screen
-  // still to reshape as it began (the walk's first rows, looked at even when left), and whether
-  // it walked as a reader scrolled up does.
+  // still to reshape as it began (the walk's first rows, looked at even when left), whether
+  // it walked as a reader scrolled up does, the rows drawn among them not looked at, and
+  // whether big was among them and left.
   const passes = [];
   const rs = v.reshapeStale;
   v.reshapeStale = function (...a) {
     const c0 = calls;
     const s0 = this.staleRows.length;
-    const drawn = this.follow ? 0 : (this.nearStale(this.staleRows)?.drawn ?? 0);
+    const near = this.follow ? null : this.nearStale(this.staleRows);
+    const drawn = near?.drawn ?? 0;
+    const drawnTurns = (near?.rows.slice(0, drawn) ?? []).map((i) => this.baseRows[i]?.turn).filter(Boolean);
     const up = !this.follow;
+    looked = new Set();
     const r = rs.apply(this, a);
-    passes.push([calls - c0, s0 - this.staleRows.length, drawn, up, s0]);
+    const bi = this.baseRows.findIndex((x) => x.turn === big);
+    passes.push([calls - c0, s0 - this.staleRows.length, drawn, up, s0, drawnTurns.filter((t) => !looked.has(t)).length, drawnTurns.includes(big) && this.staleRows.includes(bi)]);
     return r;
   };
   // Scrolled up to turn 700 of 1,500, away from the end.
@@ -198,6 +209,9 @@ test("shaping: scrolled up, a turn left for its cost past the rows on screen end
     const up = passes.filter((x) => x[3] && x[4] > 100);
     expect(up.length).toBeGreaterThan(20);
     expect(up.some((x) => x[2] > 0)).toBe(true);
+    // big was left among the rows drawn, and every row drawn was looked at all the same.
+    expect(up.filter((x) => x[6]).length).toBeGreaterThan(0);
+    expect(up.filter((x) => x[6]).map((x) => x[5])).toEqual(up.filter((x) => x[6]).map(() => 0));
     // Every such pass looks at the rows on screen, the rows it reshapes, and the one turn past
     // them it leaves for its cost: never at the hundreds of rows still waiting after it.
     for (const [n, d, drawn] of up) expect(n).toBeLessThanOrEqual(d + drawn + 1);
