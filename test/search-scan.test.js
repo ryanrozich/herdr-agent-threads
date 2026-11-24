@@ -1086,7 +1086,7 @@ for (const seed of PLANTED) test(`many turns coming in at once, or one before th
 }, 120000);
 
 // More of the newest session's changes: a long piece read at once (more than HITS_TAIL turns,
-// so the set is found again, in slices, not checked again in one go), a hidden match among the
+// so they are checked again in slices, not in one go), a hidden match among the
 // turns checked again, and the session finishing its read (its newest turn turns live, which
 // shows an agent message).
 for (const seed of PLANTED) test(`a long piece read at once, a hidden match checked again, and a read finishing keep the count right and the draws in time${plantName(seed)}`, async () => {

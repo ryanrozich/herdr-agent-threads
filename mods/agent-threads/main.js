@@ -199,8 +199,8 @@ const WIDTHS_KEPT = 3;
 // Rows left unsized at the end of a build slice that are sized in it anyway (buildStep).
 const SIZE_REST = 64;
 // A turn come in while a search is on: the newest turns, from the one keptFrom's rule keeps
-// (hitsTail), are checked again for the matches when they are this many or fewer; more, and
-// all of them are.
+// (hitsTail), are checked again for the matches at once when they are this many or fewer;
+// more, and they are checked again in slices, as the scan's next slice.
 const HITS_TAIL = 64;
 // The hold (REWRAP_PAUSE_MS) is for a conversation whose last full re-wrap, at a column width
 // not kept, took more than this much of the pane's own draw time; before one has finished,
@@ -9031,19 +9031,20 @@ export default class Threads extends View {
   // selection read them, and a draw with nothing changed checks no turn. Not in the Pinned
   // view, whose matches are among its pins (matchKeys over its rows).
   // The set: what it was found for (base, and each session, its version, turn count, turns
-  // array and loaded; a session read again from the top, restart, has a new array); at, a match's key to its place, and by, back: places run from bot (the oldest
-  // found) up to top - 1 (the newest); hidden, the matches among hidden agent messages:
-  // hidOld of them in the older sessions, and hidL, their turn indexes in the newest; cur, the
-  // next turn to check, going back from the newest, with bot, hidOld and the length of hidL
-  // as they were there; done once every turn is checked.
+  // array and loaded; a session read again from the top, restart, has a new array); at, a
+  // match's key to its place, and by, back: places run from bot (the oldest found) up to
+  // top - 1 (the newest); hidden, the matches among hidden agent messages: hidOld of them in
+  // the older sessions, and hidL, their turn indexes in the newest; cur, the next turn to
+  // check, going back from the newest, with bot, hidOld and the length of hidL as they were
+  // there, and tail, the newest session's turns still to check again (hitsTail): next, the
+  // first of them, and top as it was there; done once every turn is checked.
   // Herdr can stop a draw anywhere in a slice: cur moves only at a slice's end, in one write,
   // and each slice first cuts the set back to it (hitsCut), so the turns a stopped slice
   // checked are checked again and counted once.
   // It is found again from the newest turn for a new search, the agent messages shown or
-  // hidden, new sender rules (each slice of their marking, remark), a session added or
-  // changed other than the newest, or more than HITS_TAIL turns of the newest to check again
-  // (hitsTail). The rows' own build does not depend on it, and opening or closing a turn
-  // changes nothing in it.
+  // hidden, new sender rules (each slice of their marking, remark), or a session added,
+  // shortened or changed other than the newest. The rows' own build does not depend on it, and
+  // opening or closing a turn changes nothing in it.
   hitsNow() {
     const q = this.filterText();
     if (!q || this.view === "pinned") return null;
@@ -9051,6 +9052,8 @@ export default class Threads extends View {
     const L = S.length - 1;
     const base = `${q}|${this.prefs.agentTurns ? 1 : 0}|${this.sendersVer}|${this.remarkVer ?? 0}`;
     let h = this.hits;
+    // The newest session's tail checked again (hitsTail) in this call.
+    let tail = false;
     if (h && h.base === base && h.sessions.length === S.length && S.every((s, i) => s === h.sessions[i])) {
       let older = false;
       let newest = false;
@@ -9060,17 +9063,19 @@ export default class Threads extends View {
         if (i < L) older = true;
         else newest = true;
       }
-      if (older || (newest && !this.hitsTail(h))) h = null;
+      if (older || (newest && !(tail = this.hitsTail(h)))) h = null;
     } else h = null;
     h ??= { base, q, agents: Boolean(this.prefs.agentTurns), sessions: S.slice(), at: new Map(), by: new Map(), top: 0, bot: 0,
-      hidOld: 0, hidL: [], cur: { si: L, ti: L >= 0 ? S[L].turns.length - 1 : -1, bot: 0, hidOld: 0, hidL: 0 }, done: false,
+      hidOld: 0, hidL: [], cur: { si: L, ti: L >= 0 ? S[L].turns.length - 1 : -1, bot: 0, hidOld: 0, hidL: 0, tail: null }, done: false,
       get hidden() { return this.hidOld + this.hidL.length; } };
     h.vers = S.map((s) => s.version);
     h.arrs = S.map((s) => s.turns);
     h.lens = S.map((s) => s.turns.length);
     h.loaded = S.map((s) => Boolean(s.loaded));
-    // A new set's first slice, wherever it is first asked for (scanStep).
+    // A new set's first slice, wherever it is first asked for (scanStep). A tail too long to
+    // check again at once: its first slice, here, the same way.
     if (h !== this.hits) { this.hits = h; this.scanHits(h, now() + this.scanMax()); }
+    else if (tail && h.cur.tail) this.scanHits(h, now() + this.scanMax(), true);
     return h;
   }
 
@@ -9104,14 +9109,29 @@ export default class Threads extends View {
     return h;
   }
 
-  // Checks turns of the set, going back from h.cur, until the clock passes until (read every
-  // 32 turns, as the rows' build does). The turns checked.
-  scanHits(h, until) {
+  // Checks turns of the set until the clock passes until (read every 32 turns, as the rows'
+  // build does): first the newest session's tail to check again (cur.tail), oldest first, each
+  // match the newest so far; then, unless tailOnly, going back from cur. The turns checked.
+  scanHits(h, until, tailOnly = false) {
     const S = this.sessions;
     this.hitsCut(h);
-    let { si, ti } = h.cur;
     let n = 0;
-    const mark = (si, ti) => ({ si, ti, bot: h.bot, hidOld: h.hidOld, hidL: h.hidL.length });
+    const tail = h.cur.tail;
+    if (tail) {
+      const L = S.length - 1;
+      const turns = S[L].turns;
+      for (let ti = tail.next; ti < turns.length; ti++) {
+        if ((++n & 31) === 0 && until !== Infinity && now() > until) { h.cur = { ...h.cur, hidL: h.hidL.length, tail: { next: ti, top: h.top } }; return n - 1; }
+        this.hitCheck(h, S[L], L, ti, true);
+      }
+      h.cur = { ...h.cur, hidL: h.hidL.length, tail: null };
+    }
+    if (tailOnly || h.cur.si < 0) {
+      if (h.cur.si < 0) h.done = true;
+      return n;
+    }
+    let { si, ti } = h.cur;
+    const mark = (si, ti) => ({ si, ti, bot: h.bot, hidOld: h.hidOld, hidL: h.hidL.length, tail: null });
     while (si >= 0) {
       const s = S[si];
       for (; ti >= 0; ti--) {
@@ -9126,17 +9146,23 @@ export default class Threads extends View {
     return n;
   }
 
-  // The set cut back to where its last whole slice ended (cur): the places below cur.bot and
-  // the hidden matches past cur's counts are from a slice that was stopped. Safe to stop and
-  // do again.
+  // The set cut back to where its last whole slice ended (cur): the places below cur.bot,
+  // from cur.tail.top up (a newer place a stop left half made, by and at written and top not
+  // yet moved, included), and the hidden matches past cur's counts are from a slice that was
+  // stopped. Safe to stop and do again.
   hitsCut(h) {
     const c = h.cur;
-    for (let p = h.bot; p < c.bot; p++) {
+    const drop = (p) => {
       const k = h.by.get(p);
       h.by.delete(p);
       if (k !== undefined && h.at.get(k) === p) h.at.delete(k);
-    }
+    };
+    for (let p = h.bot; p < c.bot; p++) drop(p);
     h.bot = c.bot;
+    if (c.tail) {
+      for (let p = c.tail.top; p <= h.top; p++) drop(p);
+      if (h.top > c.tail.top) h.top = c.tail.top;
+    }
     h.hidOld = c.hidOld;
     if (h.hidL.length > c.hidL) h.hidL.length = c.hidL;
   }
@@ -9168,8 +9194,11 @@ export default class Threads extends View {
   // Only the newest session changed (a turn came in, the running one grew or ended): the
   // matches before the first turn keptFrom's rule keeps (the turns before the last done turn
   // with a reply are settled; a reply links back only to the turns after it) stay, and the
-  // turns from there are checked again. False when that is more than HITS_TAIL turns, or the
-  // session got shorter: the set is found again.
+  // turns from there, the tail, are checked again, oldest first, each match the newest so far:
+  // at once when they are HITS_TAIL or fewer, else as the scan's next slice (scanHits), first
+  // in hitsNow and then first in each draw's slice. The count is final for every turn before
+  // the tail all the while. A tail longer than a slice that changes before every draw is not
+  // done while it changes. False when the session got shorter: the set is found again.
   hitsTail(h) {
     const S = this.sessions;
     const L = S.length - 1;
@@ -9178,30 +9207,30 @@ export default class Threads extends View {
     if (turns.length < was || was < 2) return false;
     let safe = was - 1;
     while (safe > 0 && !(turns[safe - 1].done && turns[safe - 1].after?.length)) safe--;
-    if (turns.length - safe > HITS_TAIL) return false;
-    // A slice stopped earlier is cut back first, and a newer place a stop left half made (by
-    // and at written, top not yet moved) is dropped.
+    // A slice stopped earlier is cut back first. A tail still being checked again: from its
+    // next turn on, the turns are not checked yet.
     this.hitsCut(h);
-    const o = h.by.get(h.top);
-    if (o !== undefined) { h.by.delete(h.top); if (h.at.get(o) === h.top) h.at.delete(o); }
+    if (h.cur.tail) safe = Math.min(safe, h.cur.tail.next);
     // The matches from safe on: the newest places, and the hidden ones in the newest session.
     while (h.top > h.bot) {
-      const k = h.by.get(h.top - 1);
-      const c = k.indexOf(":");
-      if (Number(k.slice(0, c)) !== L || Number(k.slice(c + 1)) - 1 < safe) break;
-      h.by.delete(h.top - 1);
-      h.at.delete(k);
-      h.top--;
+      const p = h.top - 1;
+      const k = h.by.get(p);
+      if (k !== undefined) {
+        const c = k.indexOf(":");
+        if (Number(k.slice(0, c)) !== L || Number(k.slice(c + 1)) - 1 < safe) break;
+        if (h.at.get(k) === p) h.at.delete(k);
+        h.by.delete(p);
+      }
+      h.top = p;
     }
     h.hidL = h.hidL.filter((ti) => ti < safe);
-    // Checked back past safe already: the turns from safe are checked again now, oldest first,
-    // each match the newest so far. Not yet: every match found is from safe on and is gone,
-    // and the scan starts again at the newest turn. Either way cur is marked again, with the
-    // counts as they are now.
-    if (h.done || h.cur.si < L || h.cur.ti < safe) {
-      for (let ti = safe; ti < turns.length; ti++) this.hitCheck(h, S[L], L, ti, true);
-      h.cur = { ...h.cur, bot: h.bot, hidOld: h.hidOld, hidL: h.hidL.length };
-    } else h.cur = { si: L, ti: turns.length - 1, bot: h.bot, hidOld: h.hidOld, hidL: h.hidL.length };
+    // The tail from safe, marked with the counts as they are now, in one write. A scan still
+    // among those turns found only matches from safe on, all gone now: it goes on from the turn
+    // before safe.
+    const inTail = h.cur.si === L && h.cur.ti >= safe;
+    h.cur = { ...h.cur, ...(inTail ? { ti: safe - 1 } : {}), bot: h.bot, hidOld: h.hidOld, hidL: h.hidL.length, tail: { next: safe, top: h.top } };
+    h.done = false;
+    if (turns.length - safe <= HITS_TAIL) this.scanHits(h, Infinity, true);
     return true;
   }
 
