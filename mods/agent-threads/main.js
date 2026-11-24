@@ -4895,7 +4895,7 @@ export default class Threads extends View {
         let parts = pm.split.get(i);
         if (!parts) pm.split.set(i, (parts = this.splitParts(md)));
         parts.forEach(({ text: src, table }, j) => {
-          const lk = parts.length === 1 && linked?.[i] && src === seg.text ? linked[i] : this.partLinks(pm.links, src);
+          const lk = parts.length === 1 && linked?.[i] && src === seg.text ? linked[i] : this.partLinks(pm, src);
           const sub = parts.length === 1 ? `${i}` : `${i}.${j}`;
           push({ ...item, kind: "md", key: `md:${key}:${sub}`, md: lk.md, src, links: lk.links, ...(j ? { gap: this.paraGap() } : {}), ...(table ? { table: true } : {}) });
         });
@@ -5979,22 +5979,23 @@ export default class Threads extends View {
   // them again; one memo for every open turn, emptied when full, did the same once the open
   // cards held more parts than it kept. Splitting the reply again on each of those draws cost
   // about half as much as linking it. New parts share the reshaping time (SHAPE_MS) with the
-  // heights after them: past it a part shows as written, and the next frame links it.
+  // heights after them: past it a part shows as written, and the next frame links it. A new
+  // text for the reply keeps the links of the parts it still has (prev, one change back).
   partMemo(key, text) {
     const ver = `${this.linksVer}|${this.links.length}|${this.repoSig()}|${this.remote.owner ?? ""}`;
     const turns = (this.partTurns ??= new Map());
     if (turns.size > this.open.size) for (const k of turns.keys()) if (!this.open.has(k)) turns.delete(k);
     let m = turns.get(key);
-    if (m?.text !== text) turns.set(key, (m = { text, ver, links: new Map(), split: new Map() }));
-    else if (m.ver !== ver) { m.ver = ver; m.links = new Map(); }
+    if (m?.text !== text) turns.set(key, (m = { text, ver, links: new Map(), prev: m?.ver === ver ? m.links : null, split: new Map() }));
+    else if (m.ver !== ver) { m.ver = ver; m.links = new Map(); m.prev = null; }
     return m;
   }
   // An open reply's Markdown segment split into its parts: chunks within MD_MAX, tables apart.
   splitParts(md) { return mdChunks(md).flatMap((src) => splitTables(src)); }
-  partLinks(memo, src) {
+  partLinks(m, src) {
     if (!this.links.length) return { md: src, links: 0 };
-    const known = memo.get(src);
-    if (known) return known;
+    const known = m.links.get(src) ?? m.prev?.get(src);
+    if (known) { m.links.set(src, known); return known; }
     if ((this.shapeSpent ?? 0) > this.shapeMax()) {
       this.shapeLeft = (this.shapeLeft ?? 0) + 1;
       this.otherLeft = (this.otherLeft ?? 0) + 1;
@@ -6002,7 +6003,7 @@ export default class Threads extends View {
     }
     const t0 = now();
     const lk = this.linkOne(src);
-    memo.set(src, lk);
+    m.links.set(src, lk);
     this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
     return lk;
   }
