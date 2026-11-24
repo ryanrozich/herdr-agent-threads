@@ -586,3 +586,50 @@ test("timeline view: a hidden strip keeps no model: b, the four-row rule or a na
   frame(q.b, q.cb);
   expect(q.b.tlModel ?? null).toBe(null);
 });
+
+test("timeline view: working on and off on the last turn at 2,000 turns places nothing again: the finished turns keep their places and only the last turn is laid out", async () => {
+  // A session of 2,000 turns cut just after a call: its newest turn is open, with no result yet.
+  // Its API error line is left out, since an error ends the turn it is in.
+  const file = fixture("--extra", "2000");
+  const lines = readFileSync(file, "utf8").split("\n").filter((l) => l && !l.includes('"isApiErrorMessage":true'));
+  writeFileSync(file, `${lines.slice(0, lines.findLastIndex((l) => l.includes('"tool_use"')) + 1).join("\n")}\n`);
+  const { b, cb } = await dockPane(file, "bottom", 1440);
+  shownFrame(b, cb);
+  const { t0, span } = b.ledger().totals.heads.at(-1);
+  try {
+    // A second after the open turn's last event, while Herdr says idle: not running, so its own
+    // length on the strip.
+    setSystemTime(new Date(t0 + span + 1000));
+    b.ledgerMemo = null;
+    frame(b, cb);
+    const m0 = b.tlModel;
+    expect(m0.geo.room).toBe(0);
+    const made = { ...TL.TL_MADE };
+    const count = () => [TL.TL_MADE.geo - made.geo, TL.TL_MADE.layout - made.layout, TL.TL_MADE.tail - made.tail];
+    // Working on: the ledger is built again, its last turn running, with a room on the strip.
+    H.state.terminals[0].status = "working";
+    b.ledgerMemo = null;
+    frame(b, cb);
+    const m1 = b.tlModel;
+    expect(m1.heads.at(-1).going).toBe(true);
+    expect(m1.geo.room).toBeGreaterThan(span);
+    expect(m1.heads.slice(0, -1).every((h, ti) => h === m0.heads[ti])).toBe(true);
+    expect(count()).toEqual([0, 0, 1]);
+    expect(m1.geo.turns.slice(0, -1).every((t, ti) => t === m0.geo.turns[ti])).toBe(true);
+    // Its end moved 1 px or less: the room is a few seconds on a strip of 2,000 turns.
+    const end = (g) => g.turns.at(-1).x + g.turns.at(-1).w;
+    expect(Math.abs(end(m1.geo) - end(m0.geo))).toBeLessThanOrEqual(1);
+    // Working off: back to the turn's own length, again with nothing placed.
+    H.state.terminals[0].status = "idle";
+    b.ledgerMemo = null;
+    frame(b, cb);
+    const m2 = b.tlModel;
+    expect(m2.geo.room).toBe(0);
+    expect(count()).toEqual([0, 0, 2]);
+    expect(m2.geo.turns.slice(0, -1).every((t, ti) => t === m0.geo.turns[ti])).toBe(true);
+    expect(b.trajReport().timeline.made).toEqual({ ...TL.TL_MADE });
+  } finally {
+    setSystemTime();
+    H.state.terminals[0].status = "idle";
+  }
+});

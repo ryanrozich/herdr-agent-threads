@@ -544,16 +544,17 @@ test("timeline numbers: every k-th turn has its number, k the smallest of 1, 2, 
       // The first turn's number, then only multiples of k, in order and apart.
       expect(L.labels[0].text).toBe("1");
       expect(L.labels[0].x).toBe(0);
-      for (const l of L.labels.slice(1)) expect(Number(l.text) % k).toBe(0);
+      for (const l of L.labels.slice(1)) if (l.text !== `${n}`) expect(Number(l.text) % k).toBe(0);
       L.labels.slice(1).forEach((l, i) => expect(clash(L.labels[i], l)).toBe(false));
-      // Every multiple of k is there, but one that would touch the first turn's number.
+      // Every multiple of k is there, but one that would touch the first turn's number, then
+      // the last turn's number (numbersWithLast).
       const want = [];
       for (let ti = k - 1; ti < n; ti += k) {
         if (ti === 0 || !fits(L, ti)) continue;
         const l = { x: numAt(L, ti), text: `${ti + 1}` };
-        if (!clash({ x: 0, text: "1" }, l)) want.push(l.text);
+        if (!clash({ x: 0, text: "1" }, l)) want.push(l);
       }
-      expect(L.labels.slice(1).map((l) => l.text)).toEqual(want);
+      expect(L.labels.slice(1).map((l) => l.text)).toEqual(numbersWithLast(L, want, n).map((l) => l.text));
       // The step below k would put two numbers too close.
       const below = STEPS[STEPS.indexOf(k) - 1];
       if (below) {
@@ -574,6 +575,43 @@ test("timeline numbers: every k-th turn has its number, k the smallest of 1, 2, 
   expect(got["2500/2000"][1]).toBeGreaterThanOrEqual(10);
   expect(got["1370/5600"][1]).toBeGreaterThanOrEqual(10);
   expect([got["1370/2000"][0], got["2500/2000"][0]]).toEqual([100, 50]);
+});
+
+// The numbers after the first, with the last turn's number end-aligned inside the strip in place
+// of those it touches; none when it would touch the first turn's. want: the multiples of k.
+function numbersWithLast(L, want, n) {
+  if (n < 2) return want;
+  const last = { x: numAt(L, n - 1), text: `${n}` };
+  if (want.some((l) => l.text === last.text) || clash({ x: 0, text: "1" }, last)) return want;
+  return [...want.filter((l) => !clash(l, last)), last];
+}
+
+test("timeline numbers: the last turn's number always shows, end-aligned inside the strip, and only the number it touches gives way, with 1234 selected or nothing", () => {
+  for (const cw of [1370, 1143, 2500]) {
+    const heads = strip(2000);
+    const L = timelineLayout(heads, cw, "clock", T0, null);
+    const last = { x: numAt(L, 1999), text: "2000" };
+    // The last turn starts within a number's width of the strip's end: its number is moved in.
+    expect(L.turns[1999].x + TL.tlNumW("2000")).toBeGreaterThan(cw);
+    expect(last.x).toBe(cw - TL.tlNumW("2000"));
+    // The last multiple of k before it: kept unless the two touch.
+    const k = L.every;
+    const prev = { x: numAt(L, 1999 - k), text: `${2000 - k}` };
+    for (const ti of [null, 1233]) {
+      const nums = TL.tlNumbers(L, heads, ti);
+      const texts = nums.map((l) => l.text);
+      expect(nums.at(-1)).toMatchObject({ ti: 1999, x: last.x, text: "2000" });
+      expect(nums.at(-1).x + TL.tlNumW("2000")).toBeLessThanOrEqual(cw);
+      expect(texts.includes(prev.text)).toBe(!clash(prev, last));
+      nums.slice(1).forEach((l, i) => expect(clash(nums[i], l)).toBe(false));
+      if (ti != null) expect(texts).toContain("1234");
+      // The last number's length: the room to the strip's end is under TL_NUM_LEN, so none.
+      expect(nums.at(-1).total).toBe(null);
+    }
+    // Both cases met: at 1,370 px the hundred before it is dropped, at 2,500 px it is kept.
+    if (cw === 1370) expect([k, clash(prev, last)]).toEqual([100, true]);
+    if (cw === 2500) expect([k, clash(prev, last)]).toEqual([50, false]);
+  }
 });
 
 test("timeline numbers: the selected turn's number always shows and wins a clash; only the numbers it touches give way, the first turn's too", () => {
@@ -762,6 +800,50 @@ test("timeline model: with events arriving in the running turn, the finished tur
     d2[n - 2] = { ...d2[n - 2] };
     timelineModel(m3, [...d2, runningHead(n, 33, t0)], cw, "clock", t0 + 260000, null);
     expect(TL.TL_MADE.geo - g1).toBe(1);
+  }
+});
+
+test("timeline model: working on or off on the last turn alone places nothing again where its end moves 1 px or less: the finished turns keep their places and only the last is laid out", () => {
+  for (const [n, cw, kept] of [[2000, 1370, true], [5600, 1143, true], [3, 1370, false]]) {
+    const done = strip(n - 1);
+    const t0 = T0 + (n - 1) * 100000;
+    const run = runningHead(n, 6, t0);
+    const fin = { ...run, going: false, total: run.span };
+    const at = t0 + run.span + 1000;
+    const room = liveRoom(run.span + 1000);
+    const m0 = timelineModel(null, [...done, fin], cw, "clock", at, null);
+    expect([m0.geo.room, m0.geo.live]).toEqual([0, -1]);
+    const count = (b) => ({ geo: TL.TL_MADE.geo - b.geo, layout: TL.TL_MADE.layout - b.layout, tail: TL.TL_MADE.tail - b.tail, tracks: TL.TL_MADE.tracks - b.tracks });
+    // Working on: the last heading new and running, so it has a room on the strip. The finished
+    // turns' tracks are the last layout's either way (timelineLayout kept).
+    let before = { ...TL.TL_MADE };
+    const m1 = timelineModel(m0, [...done, { ...run }], cw, "clock", at, null);
+    const c1 = count(before);
+    expect([m1.geo.room, m1.geo.live, m1.geo.walls[n - 1]]).toEqual([room, n - 1, room]);
+    // A whole placing of these heads, to bound how far the kept places are from it.
+    const fresh = timelineGeo(m1.heads, cw, "clock", at);
+    const moved = Math.abs(fresh.turns[n - 1].x + fresh.turns[n - 1].w - (m0.geo.turns[n - 1].x + m0.geo.turns[n - 1].w));
+    const wide = (m) => (tlBox(m.L, n - 1).w >= 2 ? 1 : 0);
+    if (kept) {
+      expect(moved).toBeLessThanOrEqual(1);
+      expect(c1).toEqual({ geo: 0, layout: 0, tail: 1, tracks: wide(m1) });
+      expect(m1.geo.turns.slice(0, -1).every((t, ti) => t === m0.geo.turns[ti])).toBe(true);
+      expect(m1.geo.turns[n - 1].x).toBe(m0.geo.turns[n - 1].x);
+      for (let ti = 0; ti < n; ti++) expect(Math.abs(m1.geo.turns[ti].x - fresh.turns[ti].x)).toBeLessThanOrEqual(1);
+    } else {
+      expect(moved).toBeGreaterThan(1);
+      expect(c1).toEqual({ geo: 1, layout: 1, tail: 0, tracks: wide(m1) });
+    }
+    // The strip is the one a whole layout of those places makes: the running turn's bars grow.
+    expect(drawn(m1.L)).toEqual(drawn(timelineLayout(m1.heads, cw, "clock", at, null, m1.geo)));
+    expect(m1.L.geo).toBe(m1.geo);
+    // Working off: the last heading new and finished again, back to its own length.
+    before = { ...TL.TL_MADE };
+    const m2 = timelineModel(m1, [...done, { ...fin }], cw, "clock", at, null);
+    expect([m2.geo.room, m2.geo.live, m2.geo.walls[n - 1]]).toEqual([0, -1, run.span]);
+    expect(count(before)).toEqual(kept ? { geo: 0, layout: 0, tail: 1, tracks: wide(m2) } : { geo: 1, layout: 1, tail: 0, tracks: wide(m2) });
+    if (kept) expect(m2.geo.turns.every((t, ti) => ti === n - 1 ? t.w === m0.geo.turns[ti].w : t === m0.geo.turns[ti])).toBe(true);
+    expect(drawn(m2.L)).toEqual(drawn(timelineLayout(m2.heads, cw, "clock", at, null, m2.geo)));
   }
 });
 
