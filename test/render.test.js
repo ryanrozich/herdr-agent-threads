@@ -20045,6 +20045,49 @@ function spanSettled(v) {
   return !v.partsWaiting(v.rowsMemo, a + off, b + off);
 }
 
+// The rows the last list drew with a blank shape: empty bubbles on screen.
+const blankInView = (v) => { const r = lastList?.range; let n = 0; for (let i = r?.start ?? 0; i < (r?.end ?? 0); i++) if (v.rowsMemo?.[i]?.shape?.blank) n++; return n; };
+// A reader who leaves the end by go() once the list shows, while the rows above drain. The list
+// as Herdr keeps it: an offset in px (host.off) and 600 px of rows from it; a scroll to the end
+// or to a row applies to the heights of the draw that asked for it. Each frame after go():
+// [rows left, the first and last row drawn, blank rows among them].
+async function leaveDuringDrain(go) {
+  const host = { off: 0, end: false, want: null };
+  const top = (z, i) => z.slice(0, i).reduce((x, y) => x + y, 0);
+  H.listWindow = (n, id) => {
+    const z = lastList.sizes;
+    if (!String(id).startsWith("threads-list")) return { start: 0, end: n };
+    if (host.end) host.off = Math.max(0, top(z, n) - 600);
+    else if (host.want != null) host.off = top(z, host.want);
+    host.end = false;
+    host.want = null;
+    let a = 0, y = 0;
+    while (a < n - 1 && y + z[a] <= host.off) y += z[a++];
+    let b = a;
+    while (b < n && y < host.off + 600) y += z[b++];
+    return { start: a, end: b };
+  };
+  try {
+    const { v, cx, step } = await plainOpening(2400);
+    v.listH = 600;
+    v.scroll = { scroll_to_bottom() { host.end = true; }, scroll_to_item(i) { host.want = i; } };
+    for (let k = 0; v.openActive() && k < 400; k++) step();
+    step();
+    expect(v.staleRows.length).toBeGreaterThan(400);
+    // A turn far from the end, among the rows left.
+    const key = v.baseRows[v.staleRows[v.staleRows.length >> 1]].key;
+    go(v, cx, key, host, step);
+    const frames = [];
+    for (let k = 0; (v.rowJob || v.staleRows?.length) && k < 400; k++) {
+      // A scroll to a place waits SCROLL_WAIT_MS at most while rows are left: as if it had.
+      if (v.scrollTo) v.scrollWait = 1;
+      step();
+      frames.push([v.staleRows?.length ?? 0, lastList.range.start, lastList.range.end, blankInView(v)]);
+    }
+    return { v, frames };
+  } finally { H.listWindow = null; }
+}
+
 test("the opening: a long plain chat shows within a few frames of its read, once the rows near the end are shaped and measured", async () => {
   H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
   try {
@@ -20160,11 +20203,25 @@ test("the opening: scrolled up mid-chat while the rows above drain, the row at t
     const sizes = v.baseSizes.slice();
     const stale = v.staleRows.length;
     expect(stale).toBeGreaterThan(400);
-    for (let k = 0; v.staleRows.length && k < 400; k++) { step(); expect(place()).toEqual(at); }
+    // No empty bubble on screen after the frame of the wheel: the rows drawn are reshaped first.
+    for (let k = 0; v.staleRows.length && k < 400; k++) { step(); expect(place()).toEqual(at); expect(blankInView(v)).toBe(0); }
     // Rows above it were reshaped to other heights meanwhile.
     const ai = v.baseIndex.get(at[0]);
     expect(v.baseSizes.slice(0, ai).filter((h, i) => h !== sizes[i]).length).toBeGreaterThan(100);
   } finally { H.listWindow = null; }
+}, 30000);
+
+test("the opening: a jump away from the end while the rows above drain lands on rows shaped by the next frame", async () => {
+  for (const go of [(v, cx, key) => v.railJump(key, cx)]) {
+    const { frames } = await leaveDuringDrain(go);
+    // The frame that lands: the rows drawn are far from the ones before.
+    const at = frames.findIndex((f) => f[2] < frames[0][2] - 100);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(3);
+    expect(frames[at][0]).toBeGreaterThan(400);
+    // Only the frame that lands can show empty bubbles.
+    expect(frames.slice(at + 1).filter((f) => f[3] > 0)).toEqual([]);
+  }
 }, 30000);
 
 test("the drain uses its shaping time: a pass reshapes rows until the draw's budget is spent, in every frame", async () => {
@@ -20234,8 +20291,12 @@ test("the drain's order: while following, every pass walks the rows left newest 
       const s0 = v.staleRows.filter((i) => v.baseRows[i].kind === "turn").sort((a, b) => a - b);
       v.reshapeStale(v.status());
       expect(walked.length).toBeGreaterThan(5);
-      // Newest first while following, oldest first otherwise, from that end of the rows left.
-      expect(walked).toEqual((follow ? s0.slice().reverse() : s0).slice(0, walked.length));
+      // Newest first while following. Otherwise the rows near the view first, those drawn and
+      // then outward, then the rest oldest first.
+      const [a, b, off] = nearRows(v);
+      const d = (i) => Math.max(0, v.viewRange[0] - off - i, i - (v.viewRange[1] - off) + 1);
+      const near = s0.filter((i) => i >= a && i < b).sort((x, y) => d(x) - d(y) || x - y);
+      expect(walked).toEqual((follow ? s0.slice().reverse() : [...near, ...s0.filter((i) => i < a || i >= b)]).slice(0, walked.length));
       expect(up(v.staleRows)).toBe(true);
       return walked;
     };

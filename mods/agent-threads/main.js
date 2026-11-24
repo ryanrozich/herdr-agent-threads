@@ -2933,19 +2933,28 @@ export default class Threads extends View {
     this.shapeLeft = 0;
     this.otherLeft = 0;
     this.shapeInView(status);
-    const left = [];
-    // Nearest the newest first when following, where the view is. Once this draw's time is
-    // spent the rest wait as they are, without a look at each.
+    // The rows this pass is done with: reshaped, or with nothing to reshape.
+    const done = new Set();
+    // Nearest the newest first when following, where the view is. Not following, the rows in
+    // and near the view first (nearStale), then the rest oldest first: shapeInView shapes the
+    // turns in view but not their rows, and a reader scrolled up saw the rows on screen as
+    // empty bubbles until the walk came to them. Once this draw's time is spent the rest wait
+    // as they are, without a look at each.
     const stale = this.staleRows ?? [];
-    const order = this.follow ? stale.slice().reverse() : stale;
+    const near = this.follow ? null : this.nearStale(stale);
+    const order = this.follow ? stale.slice().reverse() : near ? [...near.rows, ...stale.slice(0, near.lo), ...stale.slice(near.hi)] : stale;
     const cg = order.length ? this.closedLookNow() : null;
+    // The rows near the view are looked at past the draw's time too: the turns shapeInView just
+    // shaped are memo hits, and shape() leaves the others as they are at once.
+    const nearN = near?.rows.length ?? 0;
     for (let k = 0; k < order.length; k++) {
       const i = order[k];
-      if ((this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft += order.length - k; for (; k < order.length; k++) left.push(order[k]); break; }
+      if (k >= nearN && (this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft += order.length - k; break; }
       const r = this.baseRows[i];
+      done.add(i);
       if (r?.kind !== "turn" || !r.turn) continue;
       const sh = this.shape(r.turn);
-      if (this.shapeStale) { left.push(i); continue; }
+      if (this.shapeStale) { done.delete(i); continue; }
       if (sh === r.shape) continue;
       if (Boolean(sh.thumbs) !== Boolean(r.shape?.thumbs)) return false;
       const nr = { ...r, shape: sh };
@@ -2957,12 +2966,27 @@ export default class Threads extends View {
         this.keptFor().rows.set(r.key, { turn: r.turn, s: r.s, sig: this.closedSig(r.key, r.turn, r.si, cg), rows: [nr], sizes: [this.baseSizes[i]], at: i, shape: sh });
       }
     }
-    // In index order, as every other list of them is: walked newest first, they are put back.
-    // Left in walk order, the next pass's reverse walked them oldest first, every other pass.
-    this.staleRows = this.follow ? left.reverse() : left;
+    // In index order, as every other list of them is, whatever order the walk took. (Left in
+    // walk order, the next pass's reverse walked them oldest first, every other pass.)
+    this.staleRows = done.size ? stale.filter((i) => !done.has(i)) : stale;
     this.probeList();
     this.fitKey = null;
     return true;
+  }
+  // The rows left to reshape near the view (nearSpan), the ones drawn first and then outward
+  // from them, and where they sit in stale ([lo, hi)), which is in index order. Null if none.
+  nearStale(stale) {
+    const span = this.nearSpan();
+    if (!span || !stale.length) return null;
+    const [a, b, off] = span;
+    const at = (x) => { let lo = 0, hi = stale.length; while (lo < hi) { const m = (lo + hi) >> 1; if (stale[m] < x) lo = m + 1; else hi = m; } return lo; };
+    const lo = at(a);
+    const hi = at(b);
+    if (lo === hi) return null;
+    const v0 = this.viewRange[0] - off;
+    const v1 = this.viewRange[1] - off;
+    const d = (i) => (i < v0 ? v0 - i : i >= v1 ? i - v1 + 1 : 0);
+    return { lo, hi, rows: stale.slice(lo, hi).sort((x, y) => d(x) - d(y) || x - y) };
   }
 
   // The index of a list item in rowsMemo, from baseIndex (the list adds a spacer or a gap
