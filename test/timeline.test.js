@@ -553,7 +553,7 @@ test("timeline press: on turns under 2 px, drawn as one span per lane from the t
   let past = 0;
   for (let x = 0.05; x < 600; x += 0.1) {
     if (wide.some((t) => x > t.x - 6 && x < t.x + t.w + 6)) continue;
-    const under = L.turns.map((t, ti) => ti).filter((ti) => L.turns[ti].w < 2 && heads[ti].cnt?.tools && x >= span(L.turns[ti])[0] && x <= span(L.turns[ti])[1]);
+    const under = L.turns.map((_, ti) => ti).filter((ti) => L.turns[ti].w < 2 && heads[ti].cnt?.tools && x >= span(L.turns[ti])[0] && x <= span(L.turns[ti])[1]);
     if (!under.length) continue;
     pressed++;
     const got = timelineHit(L, heads, x, "tools");
