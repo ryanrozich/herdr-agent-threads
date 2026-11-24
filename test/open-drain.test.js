@@ -601,9 +601,14 @@ test("a jump in the same frame as a pending scroll to the end lands on its turn"
 
 // A wheel up into rows still to reshape (or move(v, cx, host)), on a clock where a reshape costs
 // ms and a draw base before its walk. Each frame: when its reshapes started (ms into the
-// render), blank rows drawn, rows drawn, rows taken from outside them.
+// render), blank rows drawn, rows drawn, rows taken from outside them, and whether Herdr
+// stopped it. With until, the work before the walk runs until base ms into the render, as work
+// bounded from the render's start does, rather than costing base. With stop, after the move a
+// draw past HOST_MS is stopped as Herdr stops one: a reshape that runs past it does not end,
+// and the render is left open.
 const wheelUp = (v, _cx, host) => { host.off = Math.max(0, host.off - 30000 / v.zoom()); v.listWheel({ delta: { y: 30000 } }); };
-async function costlyWheel(ms, base, frames, move = wheelUp) {
+const STOP = new Error("stopped at 50 ms");
+async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, stop = false } = {}) {
   const realPerf = performance.now.bind(performance);
   let clock = 0;
   performance.now = () => (clock += 0.001);
@@ -614,17 +619,37 @@ async function costlyWheel(ms, base, frames, move = wheelUp) {
     v.opening.at -= 1000;
     v.shapeBudget = 12;
     let starts = [];
+    let on = false;
+    const past = (x) => on && stop && x.renderOpen && clock - x.renderAt > 50;
     const reshape = v.reshape;
-    v.reshape = function (...a) { if (this.renderOpen) starts.push(Math.round(clock - this.renderAt)); clock += ms; return reshape.apply(this, a); };
+    v.reshape = function (...a) {
+      if (this.renderOpen) starts.push(Math.round(clock - this.renderAt));
+      clock += ms;
+      if (past(this)) throw STOP;
+      return reshape.apply(this, a);
+    };
     const walk = v.reshapeStale;
-    v.reshapeStale = function (...a) { if (this.renderOpen) clock += base; return walk.apply(this, a); };
+    v.reshapeStale = function (...a) { if (this.renderOpen) clock = until ? Math.max(clock, this.renderAt + base) : clock + base; return walk.apply(this, a); };
+    // What the read's reshapes cost on this clock.
+    for (const s of v.sessions) for (const x of s.turns) if (x.shapeMs != null) x.shapeMs = ms;
     go(() => false);
     await settle(v);
     v.listH = 600;
     v.scroll = { scroll_to_bottom() { host.end = true; }, scroll_to_item(i) { host.want = i; } };
-    const step = () => { for (const x of cx.timers) x.ms -= 16; cx.flush(16); starts = []; frame(v, cx); return starts; };
+    let stopped = false;
+    const step = () => {
+      for (const x of cx.timers) x.ms -= 16;
+      cx.flush(16);
+      starts = [];
+      stopped = false;
+      try { frame(v, cx); } catch (e) { if (e !== STOP) throw e; stopped = true; }
+      if (past(v)) stopped = true;
+      if (stopped) { v.renderOpen = true; H.rec = null; }
+      return starts;
+    };
     for (let k = 0; v.openActive() && k < 600; k++) step();
     step();
+    on = true;
     move(v, cx, host);
     const out = [];
     for (let k = 0; k < frames; k++) {
@@ -634,7 +659,7 @@ async function costlyWheel(ms, base, frames, move = wheelUp) {
       const off = v.rowsMemo[0]?.kind === "spacer" || v.rowsMemo[0]?.kind === "gap" ? 1 : 0;
       // Rows taken this frame from outside the rows drawn.
       const away = [...stale].filter((i) => !v.staleRows.includes(i) && (i + off < r.start || i + off >= r.end)).length;
-      out.push({ starts: s, blank: blankInView(v), drawn: r.end - r.start, away });
+      out.push({ starts: s, blank: blankInView(v), drawn: r.end - r.start, away, stopped });
     }
     return { v, frames: out };
   } finally { H.listWindow = null; performance.now = realPerf; }
@@ -726,25 +751,34 @@ test("the opening: a jump during the drain onto costly rows keeps each draw's re
   expect([v.sel, lastList.keys.slice(r.start, r.end).includes(aim), frames.slice(6).filter((f) => f.blank > 0).length]).toEqual([aim, true, 0]);
 }, 60000);
 
-// The draw's work before the walk takes 30, 34, 36 or 40 ms (a slow fit, or waited rows run
-// before the frame), with rows of 8 ms and the view scrolled up into rows still to reshape.
-// Before, past 35 ms the line let no reshape of the drain start: at 36 and 40 ms the rows on
-// screen stayed empty bubbles in every frame and the drain stopped. The draw's first reshape
-// goes past the line (up to HOST_MS), so every frame reshapes one row, the top row on screen
-// first, and the rows on screen fill by the third frame after the wheel, as at 30 and 34 ms.
-test("the opening: a draw that reaches its walk late still reshapes a row on screen in each frame, and the drain goes on", async () => {
-  // Per start: frames without exactly one reshape, frames from the third with a blank row on
-  // screen, and whether rows are still left after the 30.
+// The draw's work before the walk runs to 36, 40, 44 or 48 ms (work bounded from the render's
+// start, as waited rows are), with rows of 2, 8 or 20 ms and the view scrolled up into rows
+// still to reshape, and Herdr's stop at 50 ms. Before, past 35 ms the drain's first reshape
+// was let start up to 50 ms: one costlier than the time left was stopped, then 5 s of plain
+// draws, then stopped again, and no row was reshaped. Now none starts that is expected to end
+// past the stop: where the first fits it starts at the walk; where it does not, the next frame
+// reshapes it first, near 0 ms. No draw is stopped, a row is reshaped in every frame, and the
+// rows on screen are filled by the sixth frame after the wheel.
+test("the opening: a draw that reaches its walk late starts no reshape expected to end past Herdr's stop, and reshapes the row it refused first in the next frame", async () => {
   const got = [];
-  for (const base of [30, 34, 36, 40]) {
-    const { v, frames } = await costlyWheel(8, base, 30);
-    got.push([base, frames.filter((f) => f.starts.length !== 1).length, frames.slice(2).filter((f) => f.blank > 0).length, v.staleRows.length > 400]);
+  const want = [];
+  for (const base of [36, 40, 44, 48]) {
+    for (const ms of [2, 8, 20]) {
+      const { v, frames } = await costlyWheel(ms, base, 30, wheelUp, { until: true, stop: true });
+      // Draws stopped; a reshape in every frame where the walk's first fits (base + ms and the
+      // margin within 50 ms), else in at least every second frame (the frame a costly owed row
+      // took the draw's shaping time owes none); starts that end past 50 ms; frames from the
+      // sixth with a blank row on screen; and rows still left after the 30.
+      let run = 0;
+      let most = 0;
+      for (const f of frames) { run = f.starts.length ? 0 : run + 1; most = Math.max(most, run); }
+      const fits = base + ms + 3 <= 50;
+      got.push([base, ms, frames.filter((f) => f.stopped).length, most <= (fits ? 0 : 1), frames.flatMap((f) => f.starts).filter((s) => s + ms > 50).length, frames.slice(5).filter((f) => f.blank > 0).length, v.staleRows.length > 400]);
+      want.push([base, ms, 0, true, 0, 0, true]);
+    }
   }
-  expect(got).toEqual([30, 34, 36, 40].map((b) => [b, 0, 0, true]));
-  // Past Herdr's stop (HOST_MS) not even the first starts: the draw is stopped there anyway.
-  const { frames } = await costlyWheel(8, 52, 6);
-  expect(frames.flatMap((f) => f.starts)).toEqual([]);
-}, 120000);
+  expect(got).toEqual(want);
+}, 300000);
 
 // Two jumps 60 ms apart, in different frames, during the drain: each one's 130 ms timer is for
 // its own landing. Before, the first's ended the second's 70 ms in: its place was held before
