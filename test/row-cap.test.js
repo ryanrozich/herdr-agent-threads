@@ -1180,7 +1180,7 @@ test("latest while a jump waits for the rows to reshape shows the end in the nex
 
 // A render Herdr stopped leaves renderOpen set, and the next render asks again for the scroll
 // it took on (renderWant). A wheel or latest after it is the reader's newer word.
-test("after a render Herdr stopped, a wheel still drops the jump that waits and a wheel up the end it took on, and latest still holds the end", async () => {
+test("after a render Herdr stopped, a wheel still drops the jump that waits and a wheel up the end it took on, latest still holds the end, and with no wheel since the end is asked for again", async () => {
   const got = {};
   const want = {};
   {
@@ -1224,6 +1224,22 @@ test("after a render Herdr stopped, a wheel still drops the jump that waits and 
     for (let k = 0; k < 4; k++) { probeFrame(v, cx); got.latest.push([sim.last().end, v.scrollTo?.key ?? null]); }
     want.latest = [[true, null], [true, null], [true, null], [true, null]];
     fastRows(v);
+    H.listWindow = null;
+  }
+  {
+    // A wheel long before: the end that a stopped render took on is still asked for again.
+    const { v, cx, sim } = await cutScene();
+    sim.wheel(300);
+    settleList(v, cx, sim);
+    v.action("latest", cx);
+    v.render(cx);
+    dropTimers(v, cx);
+    expect(v.toBottom).toBe(false);
+    v.renderOpen = true;
+    const frame = v.frame.bind(v);
+    v.frame = (c, light) => { got.again = v.toBottom; return frame(c, light); };
+    v.render(cx);
+    want.again = true;
     H.listWindow = null;
   }
   expect(got).toEqual(want);
