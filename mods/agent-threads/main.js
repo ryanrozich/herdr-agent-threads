@@ -6134,7 +6134,10 @@ export default class Threads extends View {
     const sig = `${this.linksVer}|${this.repoSig()}|${segs.map((x) => `${x.kind}${x.text.length}`).join(",")}`;
     const memo = (this.linkMemo ??= new Map());
     const m = memo.get(key);
-    if (m?.sig === sig) return m.out;
+    // The texts as well: a reply of the same segments' kinds and lengths can be another (the
+    // same turn number in another transcript, a reply rewritten). The same text is most often
+    // the same string, which compares at once.
+    if (m?.sig === sig && m.texts.every((t, i) => t === segs[i].text)) return m.out;
     const ctx = this.linkCtx();
     let chars = 20000;
     let matches = 25;
@@ -6147,7 +6150,7 @@ export default class Threads extends View {
       return r;
     });
     if (memo.size > 200) memo.clear();
-    memo.set(key, { sig, out });
+    memo.set(key, { sig, texts: segs.map((x) => x.text), out });
     return out;
   }
   // The two passes over a whole reply in an open turn's build, apart so the tests can price them.
