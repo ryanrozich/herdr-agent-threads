@@ -2178,7 +2178,7 @@ test("a press's open 300 ms on is dropped by a jump made in the wait: a rail cli
 // ---- the window's memos over a live session: what a change past the window's start reads ----
 
 // The session's rows read by RowWindow.outside and by the day pill (stickyDay), counted, and
-// the looks for the window's day band (bandAbove). The base rows are given through one proxy
+// the looks for the window's day (each time stickyDay finds the days of new rows). The base rows are given through one proxy
 // per array, so every identity the pane keeps still holds, and only reads made inside those
 // two are counted. Set before the memos are made: they hold the rows they were made from.
 function memoReads(v) {
@@ -2194,10 +2194,9 @@ function memoReads(v) {
   Object.defineProperty(v, "baseRows", { configurable: true, get: () => counted(raw), set: (x) => { raw = x; } });
   const within = (name, fn) => (...args) => { const was = inside; inside = name; try { return fn(...args); } finally { inside = was; } };
   v.win.outside = within("outside", v.win.outside.bind(v.win));
-  v.stickyDay = within("day", v.stickyDay.bind(v));
-  const band = v.bandAbove.bind(v);
+  const day = within("day", v.stickyDay.bind(v));
   n.looks = 0;
-  v.bandAbove = (base, at) => { n.looks++; return band(base, at); };
+  v.stickyDay = () => { const was = v.dayOfRows; const out = day(); if (v.dayOfRows !== was) n.looks++; return out; };
   return n;
 }
 // A session of n short turns, the newest still running, on two days: the first 100 turns on
