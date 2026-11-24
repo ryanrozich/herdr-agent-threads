@@ -209,6 +209,8 @@ export function bandRows(L, heads, lo, hi) {
     const wall = G.walls[ti] ?? wallOf(h);
     const len = stepN(h);
     for (let i = 0; i < len; i++) {
+      // A row with no lane (an interrupted turn's Interrupted row) is no bar.
+      if (!laneKeys(h.rows[i + 1])) continue;
       // Where a bar starts does not depend on its track.
       const bx = stepBox(h, i, 0, T[ti].x * z - x0, T[ti].w * z, wall, L.scale, len);
       if (!bx || bx.x0 < lo || bx.x0 > hi) continue;
@@ -235,14 +237,25 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
   if (!n) return out;
   const walls = G.walls;
   // Spans by lane, ink and track: "tools|failed|0" -> [[x0, x1]], joined where they touch. A
-  // span whose right end is an unfinished call's is [x0, x1, 1]: drawn with its torn end.
+  // span whose right end is an unfinished call's is [x0, x1, 1]: drawn with its torn end. A
+  // joined span is the union of both: in a turn under 6 px wide an unfinished call's bar starts
+  // left of the bars before it (itemBox), and may reach back over the span before, which it
+  // then joins too, so the spans stay apart and in order.
   const add = (k, a, b, torn = false) => {
     let list = out.spans.get(k);
     if (!list) { list = []; out.spans.set(k, list); }
-    const last = list[list.length - 1];
+    let last = list[list.length - 1];
     if (last && a <= last[1] + 0.5) {
+      if (a < last[0]) last[0] = a;
       if (b > last[1]) { last[1] = b; if (torn) last[2] = 1; else last.length = 2; }
       else if (torn && b === last[1]) last[2] = 1;
+      while (list.length > 1 && list[list.length - 2][1] + 0.5 >= last[0]) {
+        const p = list[list.length - 2];
+        if (last[0] < p[0]) p[0] = last[0];
+        if (last[1] >= p[1]) { p[1] = last[1]; if (last[2]) p[2] = 1; else p.length = 2; }
+        list.pop();
+        last = p;
+      }
       return;
     }
     list.push(torn ? [a, b, 1] : [a, b]);
@@ -414,11 +427,12 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
   let lo = 0;
   let hi = T.length - 1;
   while (lo < hi) { const m = (lo + hi + 1) >> 1; if (T[m].x <= fx) lo = m; else hi = m - 1; }
+  // Past the turn into its break: the nearer turn. The press stays where it is, so a step is
+  // found only within 4 px of it.
+  if (fx > T[lo].x + T[lo].w && T[lo + 1] && T[lo + 1].x - fx < fx - (T[lo].x + T[lo].w)) lo++;
   const t = T[lo];
   const h = heads[lo];
   if (!h || h.key !== t.key) return null;
-  // Past the turn into its break: the nearer turn.
-  if (fx > t.x + t.w && T[lo + 1] && T[lo + 1].x - fx < fx - (t.x + t.w)) return timelineHit(L, heads, T[lo + 1].x * z - x0, lane, nowMs);
   const wall = L.geo?.walls[lo] ?? wallOf(h);
   const tx = t.x * z - x0;
   const tw = t.w * z;
@@ -430,7 +444,8 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
   let bestD = 4;
   const len = stepN(h);
   for (let i = 0; i < len; i++) {
-    if (lane && LEDGER_KINDS[h.rows[i + 1].lk]?.lane !== lane) continue;
+    // A row with no lane (an interrupted turn's Interrupted row) is no bar.
+    if (!laneKeys(h.rows[i + 1]) || (lane && LEDGER_KINDS[h.rows[i + 1].lk]?.lane !== lane)) continue;
     const b = stepBox(h, i, tk?.[i], tx, tw, wall, L.scale, len, upTo);
     if (!b) continue;
     const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
