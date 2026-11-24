@@ -5425,6 +5425,7 @@ export default class Threads extends View {
   }
 
   jumpLatest(select = true) {
+    this.cardAsk = null;
     this.follow = true;
     this.stickStep = null;
     this.unseen = false;
@@ -6761,6 +6762,7 @@ export default class Threads extends View {
     const at = keys.indexOf(this.sel);
     const go = (i) => {
       if (!keys.length) return;
+      this.cardAsk = null;
       this.sel = keys[Math.max(0, Math.min(keys.length - 1, i))];
       this.follow = this.sel === keys[keys.length - 1];
       this.scrollTo = { key: this.sel, how: "center" };
@@ -9623,8 +9625,11 @@ export default class Threads extends View {
         // Asked by key, as the rows can change in between (a card above coming in).
         const ask = (k) => { const at = this.rowsMemo?.findIndex((x) => x.key === k) ?? -1; if (at >= 0) this.askScroll(at, "top"); };
         const last = rows[j].key, head = rows[top].key;
-        cx.timer.after(16, (cx) => { ask(last); cx.notify(); });
-        cx.timer.after(48, (cx) => { ask(head); cx.notify(); });
+        // Neither is made once a newer move has taken over (go, jumpLatest drop cardAsk): the
+        // one at 48 ms took the view back from the end after Latest.
+        const tok = (this.cardAsk = {});
+        cx.timer.after(16, (cx) => { if (this.cardAsk === tok) ask(last); cx.notify(); });
+        cx.timer.after(48, (cx) => { if (this.cardAsk === tok) { this.cardAsk = null; ask(head); } cx.notify(); });
       } else if (i >= 0 && how === "land") {
         // scroll_to_item only brings an item to the nearest edge, so a place below the view
         // would land at the bottom. An item a pane further down first, then the place, which
