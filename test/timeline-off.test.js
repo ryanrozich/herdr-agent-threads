@@ -599,3 +599,59 @@ test("timeline view: the pane's width changing every frame while the working-off
     H.state.terminals[0].status = "idle";
   }
 });
+
+// The bounded build's work counted, not timed: the bars (step rows) a step of it touches. A
+// turn of n step rows: the user's message, then notes and calls as given, listed newest first
+// (so the clock order is reversed), every 7th call failed. len: the turn's length in ms.
+function denseTurn(i, t0, notes, calls, len) {
+  const key = `0:${i}`;
+  const steps = [row(key, 0, "you", 0, null)];
+  const m = notes + calls;
+  for (let j = 0; j < m; j++) {
+    const a = Math.round(((m - j) / (m + 1)) * len);
+    const call = j % 2 === 1 || j >= 2 * notes;
+    const lk = !call ? "text" : j % 7 === 0 ? "failed" : "tool";
+    steps.push(row(key, j + 1, lk, a, call ? Math.min(len, a + 150) : null));
+  }
+  steps.push(row(key, m + 1, "reply", len - 10, len));
+  const failed = steps.filter((r) => r.failed).length;
+  const tools = steps.filter((r) => r.lk === "tool" || r.failed).length;
+  return { kind: "trh", key, n: i + 1, t0, total: len, span: len, going: false, cnt: { steps: steps.length, input: 1, model: notes + 1, tools, failed, user: 1, agent: 0 }, steps };
+}
+// The bars of heads a build touches step by step: each heading's step rows behind a Proxy that
+// notes each row read (by turn and index) into the current step's set.
+function touchedSteps(heads, cw, now) {
+  let cur = null;
+  const wrapped = heads.map((h, ti) => ({
+    ...h,
+    steps: new Proxy(h.steps, { get(a, k) { if (cur && typeof k === "string" && /^\d+$/.test(k)) cur.add(ti * 100000 + Number(k)); return a[k]; } }),
+  }));
+  const J = TL.tlBuildStart(wrapped, cw, "clock", now, null);
+  const per = [];
+  let M = null;
+  // A clock already past the bound: each call takes one step of the build.
+  for (let k = 0; k < 100000 && !M; k++) {
+    cur = new Set();
+    M = TL.tlBuildGo(J, 0, () => 1);
+    per.push(cur.size);
+  }
+  cur = null;
+  return { per, M, W: TL.timelineModel(null, wrapped, cw, "clock", now, null) };
+}
+
+test("timeline build: no step touches more than 1,024 bars, on 20 turns of 3,000 calls, one turn of 20,000 and 5,600 ordinary turns, and it ends as a whole build", () => {
+  const cases = {
+    dense: Array.from({ length: 20 }, (_, i) => denseTurn(i, T0 + i * 700000, 0, 3000, 600000)),
+    one: [denseTurn(0, T0, 0, 20000, 3600000), denseTurn(1, T0 + 3700000, 2, 2, 60000)],
+    ordinary: Array.from({ length: 5600 }, (_, i) => denseTurn(i, T0 + i * 100000, 12, 12, 60000)),
+  };
+  for (const [name, heads] of Object.entries(cases)) {
+    const { per, M, W } = touchedSteps(heads, 1440, T0 + 1e10);
+    expect(M).not.toBe(null);
+    const most = Math.max(...per);
+    expect([name, most <= 1024]).toEqual([name, true]);
+    // Not a build that skips its work: every bar is touched, and it ends as a whole build.
+    expect([name, per.reduce((s, v) => s + v, 0) >= heads.reduce((s, h) => s + h.steps.length - 1, 0)]).toEqual([name, true]);
+    sameStrip(M, W);
+  }
+}, 120000);
