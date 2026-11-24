@@ -871,6 +871,91 @@ test("a draw stopped inside the matches' scan counts each match once", async () 
   expect(runs).toEqual(runs.map((r) => ({ q: r.q, landed: r.landed, stops: 1, counted: true, tally: { n: n[r.q], distinct: n[r.q], at: n[r.q], done: true }, places: true, text: `1 of ${n[r.q]} · newest first` })));
 }, 300000);
 
+// A stop can also land between the writes of one place: its key in by, its place in at, and
+// the edge (bot or top) moved. The place's key is written first and the edge moved last, so a
+// stop leaves no empty place inside the set for a step to land on, and the next slice's cut
+// drops a place left half made just outside it.
+// A stop planted at a write of the set's places, inside the scan in a draw: at the k-th call
+// of set() on its by or at map from now on, before the write or after it.
+function plantWrite(h, which, k, after) {
+  const m = h[which];
+  let n = 0;
+  m.set = function (key, val) {
+    const hit = Boolean(stopV?.renderOpen && stopV.scanning) && ++n === k;
+    if (hit && !after) { delete m.set; landed = `${which} before`; throw new Error("interrupted"); }
+    const r = Map.prototype.set.call(this, key, val);
+    if (hit) { delete m.set; landed = `${which} after`; throw new Error("interrupted"); }
+    return r;
+  };
+}
+// The set's places agree: every place from bot up to top - 1 has its key, at gives each key
+// its place back, and with whole, nothing is written outside the set.
+function unsound(h, whole) {
+  const bad = [];
+  for (let p = h.bot; p < h.top; p++) if (h.by.get(p) === undefined || h.at.get(h.by.get(p)) !== p) bad.push(["place", p]);
+  if (whole) {
+    for (const [p, k] of h.by) if (p < h.bot || p >= h.top) bad.push(["by", p, k]);
+    for (const [k, p] of h.at) if (p < h.bot || p >= h.top || h.by.get(p) !== k) bad.push(["at", k, p]);
+  }
+  return bad;
+}
+
+test("a stop between the writes of one place leaves no empty place to step onto, and the cut leaves nothing outside the set", async () => {
+  const runs = [];
+  // An older place, found by the scan: "ar" at 2,000 turns, the stop in the first draw.
+  for (const which of ["by", "at"]) for (const after of [false, true]) {
+    const { v, cx, s } = await longPane(2000);
+    v.sel = `0:${s.turns.length}`;
+    const r = { side: "older", which, after };
+    priced(v, () => {
+      v.action("search:ar", cx);
+      landed = null;
+      plantWrite(v.hits, which, 3, after);
+      r.stopped = drawOnce(v, cx).stopped;
+      r.landed = landed;
+      const h = v.hits;
+      r.inside = unsound(h, false);
+      // n from the oldest place but one: onto the oldest place.
+      v.sel = h.by.get(h.bot + 1);
+      v.action("olderMatch", cx);
+      r.sel = typeof v.sel === "string" && v.selMatches();
+      v.hitsCut(h);
+      r.cut = unsound(h, true);
+      for (let k = 0; k < 60 && counting(v); k++) drawOnce(v, cx);
+    });
+    r.right = JSON.stringify(places(v)) === JSON.stringify(want(v, "ar"));
+    runs.push(r);
+  }
+  // A newer place, from a tail checked again: 40 turns with "look again" and no reply after
+  // the last with one, a turn coming in, the stop in that draw.
+  for (const which of ["by", "at"]) for (const after of [false, true]) {
+    const { v, cx, s } = await longPane(600);
+    tailMore(s, 40);
+    settleRows(v, cx);
+    v.sel = `0:${s.turns.length}`;
+    v.action("search:look again", cx);
+    settleRows(v, cx);
+    const r = { side: "newer", which, after };
+    priced(v, () => {
+      tailMore(s, 1);
+      landed = null;
+      plantWrite(v.hits, which, 3, after);
+      // The set as it is: the change is seen in the draw, not here.
+      r.stopped = drawOnce(v, cx).stopped;
+      r.landed = landed;
+      const h = v.hits;
+      r.inside = unsound(h, false);
+      r.sel = true;
+      v.hitsCut(h);
+      r.cut = unsound(h, true);
+      for (let k = 0; k < 60 && counting(v); k++) drawOnce(v, cx);
+    });
+    r.right = JSON.stringify(places(v)) === JSON.stringify(want(v, "look again"));
+    runs.push(r);
+  }
+  expect(runs).toEqual(runs.map((r) => ({ side: r.side, which: r.which, after: r.after, stopped: true, landed: `${r.which} ${r.after ? "after" : "before"}`, inside: [], sel: true, cut: [], right: true })));
+}, 300000);
+
 // ---- a long tail with no reply, still changing ----
 // More than HITS_TAIL turns after the newest session's last finished turn with a reply (turns
 // interrupted, queued, or with no reply), and the session changing before every draw, as a
