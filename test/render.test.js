@@ -6709,7 +6709,8 @@ async function openLong(text, shut = false) {
   if (!shut) for (const k of keys) v.toggle(k, cx);
   return { v, cx, key: keys.at(-1), keys };
 }
-// The open card's parts, settled: all of them shown (no mdrest row stands for any), each one
+// The open card's parts, settled: all of them shown (no mdrest row stands for any: the rest,
+// mr:, or one part being laid out, md:), each one
 // linked as the rules link it alone, and sized at the height worked out for its text, not the
 // rough one from its length (a table has its own).
 async function cardDone(v, key) {
@@ -6717,7 +6718,7 @@ async function cardDone(v, key) {
   const want = new Map();
   return () => [].concat(key).every((key) => {
     const i0 = v.baseRows.findIndex((r) => r.key.startsWith(`md:${key}:`));
-    if (i0 < 0 || !v.rowsKey || v.rowJob || v.baseRows.some((r) => r.kind === "mdrest" && r.key.startsWith(`mr:${key}:`))) return false;
+    if (i0 < 0 || !v.rowsKey || v.rowJob || v.baseRows.some((r) => r.kind === "mdrest" && (r.key.startsWith(`mr:${key}:`) || r.key.startsWith(`md:${key}:`)))) return false;
     for (let i = i0; v.baseRows[i]?.kind === "md"; i++) {
       const r = v.baseRows[i];
       if (!want.has(r.src)) want.set(r.src, linkify(r.src, v.links, v.linkCtx()));
@@ -6898,6 +6899,55 @@ test("an open reply's split goes on in the light window after a stopped draw, in
   costLog("capped, the split in light frames", { ...r, seen: seen.slice(0, 4) });
   const i = seen.findIndex(([light]) => light);
   expect([r.frames[0].ok, i, seen[1][1] > seen[0][1], r.frames[1].ok && r.frames[1].ms < 25, r.settled > 0]).toEqual([false, 1, true, true, true]);
+}, 60000);
+
+// A part is shown only at its worked-out height: where there is no time to work it out (a
+// light draw, or one out of time), the placeholder stands for it and the parts after it, so no
+// part is drawn in a slot too short for it and cut off. 40 paragraphs of 1.4 KB and 300 short
+// ones, with the first draw stopped: every frame's shown parts are at least their settled
+// height. (On fcae757c 210 of 212 frames had a part short, by 5 to 25%: a rough height counts
+// the text as one long line.)
+const proseAndShort = () => `${Array.from({ length: 40 }, (_, i) => `Prose ${i + 1}: ${"the route table lists each depot and its orders for the day ".repeat(24).slice(0, 1400)}`).join("\n\n")}\n\n${shortParas(300)}`;
+// The frames' card parts shown (md rows) and their slots, from the open (or, with change,
+// from a change made to the settled card) until it settles: how many frames had a part in a
+// slot shorter than its settled height, and how many showed a part standing in as "Laying out
+// this part…".
+async function shortSlots(text, opts, change) {
+  const { v, cx, key } = await openLong(text);
+  v.probeDue = function () { this.probeLeft = 0; return []; };
+  const seen = [];
+  let waiting = 0;
+  const slots = () => {
+    const m = new Map();
+    v.baseRows.forEach((x, i) => { if (x.kind === "md" && x.key.startsWith(`md:${key}:`)) m.set(x.key, v.baseSizes[i]); });
+    if (v.baseRows.some((x) => x.kind === "mdrest" && x.one)) waiting++;
+    return m;
+  };
+  if (change) {
+    costedFrames(v, cx, 400, await cardDone(v, key));
+    change(v, cx);
+  }
+  const r = costedFrames(v, cx, 400, await cardDone(v, key), { ...opts, onFrame: () => seen.push(slots()) });
+  const settled = slots();
+  const short = seen.filter((m) => [...m].some(([k, h]) => h < settled.get(k))).length;
+  return { v, cx, key, r, short, waiting, frames: seen.length, parts: settled.size };
+}
+test("no part of an open reply is drawn in a slot shorter than its worked-out height, in the light frames after a stopped draw or after", async () => {
+  const text = proseAndShort();
+  const { r, short, frames, parts } = await shortSlots(text, { stopAfter: 1 });
+  costLog("prose and short paragraphs, slots", { ...r, short });
+  expect([r.settled > 0, parts, frames > 1, short]).toEqual([true, (await splitOf(text)).length, true, 0]);
+}, 60000);
+
+// A narrower pane: every part of the settled card is taller there. A part not sized again yet
+// stands in as "Laying out this part…" at a rough height (one dim line, nothing to cut), not as
+// its Markdown in a slot worked out for the old width.
+test("an open reply's parts on a narrower pane stand in as being laid out until each is sized, never drawn in a slot too short", async () => {
+  // A capped reply: its 58 parts take more than one draw to size again.
+  const text = shortParas(4000);
+  const { r, short, waiting, parts } = await shortSlots(text, {}, (v) => { v.width -= 120; v.rowsKey = null; });
+  costLog("58 parts, narrower", { ...r, short, waiting });
+  expect([r.settled > 0, parts, waiting > 0, short]).toEqual([true, 58, true, 0]);
 }, 60000);
 
 // Parts held through the light window after a stopped draw go on in the draw after it: a
