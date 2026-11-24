@@ -5204,6 +5204,8 @@ export default class Threads extends View {
     if (this.anchor || this.anchorDue) this.fitKey = null;
     this.anchor = null;
     this.anchorDue = false;
+    // A landing's hold still to take goes with it (pick, restart, a wheel).
+    this.openLand = false;
   }
   // Why a held place is let go now (letGo), or null:
   // - a jump, which puts the view somewhere new;

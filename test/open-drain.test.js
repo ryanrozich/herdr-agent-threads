@@ -764,3 +764,14 @@ test("the opening: a second jump 60 ms after the first is held only after its ow
   expect([v.landId > at, h >= Math.ceil(130 / 16) - 1]).toEqual([true, true]);
   expect(frames.slice(h).filter((f) => f[4] == null || f[4] < 0 || f[4] >= 600 || Math.abs(f[4] - frames[h][4]) > 1)).toEqual([]);
 }, 60000);
+
+// A landing's hold still to take ends with the place: a pick of another session, a restart of
+// the read, or a wheel (dropAnchor) leaves no hold to be taken on other rows.
+test("the opening: a pick, a restart or a dropped place ends a landing's hold still to take", async () => {
+  const { v, cx } = await plainOpening(60);
+  for (const [name, f] of [["dropAnchor", () => v.dropAnchor()], ["restart", () => v.restart(v.current())], ["pick", () => v.pick({ path: v.current().file }, cx)]]) {
+    v.openLand = "due";
+    f();
+    expect([name, v.openLand]).toEqual([name, false]);
+  }
+}, 30000);
