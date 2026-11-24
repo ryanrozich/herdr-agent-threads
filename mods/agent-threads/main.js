@@ -2821,6 +2821,9 @@ export default class Threads extends View {
   buildStep(status, key, rest, other = null) {
     let job = this.rowJob;
     if (job && job.key !== key) job = job.rest === rest && this.jobGoesOn(job) ? job : null;
+    // A splice of an opened turn's rows that Herdr stopped halfway (spliceRows) left the rows
+    // and their index apart: a splice from there found the turn in no row, and the card never drew.
+    if (this.splicing) { this.splicing = false; this.rowsKey = null; }
     if (!job && other != null && this.spliceRows(status, key, rest, other)) return;
     if (job) {
       job.key = key;
@@ -3221,16 +3224,21 @@ export default class Threads extends View {
       let z = at;
       while (a > 0 && this.baseRows[a - 1].turn === r.turn) a--;
       while (z + 1 < this.baseRows.length && this.baseRows[z + 1].turn === r.turn) z++;
-      runs.push({ k, a, z, r });
+      // Its place in its session, found before any row changes: a turn the session no longer
+      // holds gives the splice up with every row as it was.
+      const ti = r.s.turns[r.turn.n - 1] === r.turn ? r.turn.n - 1 : r.s.turns.indexOf(r.turn);
+      if (ti < 0) return false;
+      runs.push({ k, a, z, r, ti });
     }
     runs.sort((x, y) => y.a - x.a);
     this.shapeStart();
+    // From here to its end the rows, their sizes and their index change together: a draw Herdr
+    // stops in between leaves them apart, and the next build is of every row (buildStep).
+    this.splicing = true;
     const stale = new Set(this.staleRows ?? []);
     let marks = b.marks;
-    for (const { k, a, z, r } of runs) {
+    for (const { k, a, z, r, ti } of runs) {
       const { turn, s, si } = r;
-      const ti = s.turns[turn.n - 1] === turn ? turn.n - 1 : s.turns.indexOf(turn);
-      if (ti < 0) return false;
       const out = [];
       this.buildStale = [];
       this.cachedH = new Map();
@@ -3259,6 +3267,7 @@ export default class Threads extends View {
     this.buildStale = this.staleRows;
     this.rowBuild = { ...b, rest, marks, sets: now.map((x) => new Set(x)), callVer: this.callVer ?? 0 };
     this.rowsKey = key;
+    this.splicing = false;
     this.fitKey = null;
     this.probeList();
     if (this.reselect || this.selHidden()) this.reselectVisible();
