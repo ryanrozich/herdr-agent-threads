@@ -1012,7 +1012,7 @@ test("the key sheet lists every key the panel takes, and a pin key gives way to 
   for (const k of ["up", "k", "down", "j", "home", "g", "end", "enter", "space", "o", "c", "/", "escape", "[", "]", "a", "t", ",", "s", "i", "v", "-", "=", "w", "?", "p", "u", "q", "G", "tab"]) {
     expect(all.has(names[k] ?? k)).toBe(true);
   }
-  expect(all.has("1-5")).toBe(true);
+  expect(all.has("1-7")).toBe(true);
   expect(keySheet("q").map(([g]) => g)).toEqual(["List", "Open turn", "Pins", "Image viewer", "Settings card", "View"]);
   expect(shown("p").has("p")).toBe(true); // as the quote key
   expect(keySheet("p").find(([g]) => g === "Pins")[1].some(([k]) => k[0] === "p")).toBe(false);
