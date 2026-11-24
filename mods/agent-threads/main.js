@@ -6178,8 +6178,12 @@ export default class Threads extends View {
     const spent = this.shapeSpent ?? 0;
     const left = this.shapeLeft ?? 0;
     const t0 = now();
-    // A light draw's time for the row is its height's too (mdHeight reads shapeMax).
-    this.lightRoom = this.light ? SHAPE_MIN_MS : null;
+    // A light draw's time for the row is its height's too (mdHeight reads shapeMax), for a part
+    // of at most MD_MAX characters only. The height checks the time only before it starts, and
+    // costs by the text's length: a longer part (a run with no space or line break) of 200,000
+    // characters, sized in a light draw at twice the price, ran past Herdr's time in every one.
+    // It gets a rough height there instead, and is sized in a full draw.
+    this.lightRoom = this.light && src.length <= MD_MAX ? SHAPE_MIN_MS : null;
     const h = this.height(row);
     this.lightRoom = null;
     this.shapeSpent = spent + (now() - t0);
