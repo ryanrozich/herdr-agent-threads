@@ -4,7 +4,6 @@
 
 import { durText, startText } from "./ledger.js";
 
-
 // ---- the timeline (round 3 and round 7) ----
 // The session as bars on three lanes, Input, Model and Tools, in a strip cw px wide. Two
 // scales: "clock", where a turn is as wide as it took (never under a minimum) and the idle
@@ -17,23 +16,46 @@ import { durText, startText } from "./ledger.js";
 // turn wide enough to draw them (a turn under 2 px is one span per lane it has). Bars that
 // touch are joined, so what is drawn is bounded by the strip's width, not the session's
 // length, at any zoom.
-// A call with no result yet is a bar to the turn's end (to now while the turn runs) with a
-// torn right end. nowMs: the clock, for a running turn.
+// A call with no result is a bar with a torn right end. In a turn that is not running it runs
+// to the turn's last recorded event (the running rule); in the running turn it runs to now.
+// The running turn (only ever the last: the running rule's newest turn) is placed on the clock
+// scale at its room, not at its length so far: the next of TL_ROOM_MIN ms times TL_ROOM_GROW
+// steps past it (liveRoom). So while it runs the strip keeps every turn's place, and only its
+// unfinished bars grow (layout.grow, tlGrow), until it outgrows its room and the strip is
+// placed again: fifteen times in its first hour. nowMs: the clock, for the running turn.
 export const TL_LANES = Object.freeze(["input", "model", "tools"]);
-const wallOf = (h, nowMs) => {
-  const w = h.going && h.t0 != null ? Math.max(h.span ?? 0, nowMs - h.t0) : (h.total ?? h.span ?? 0);
+export const TL_ROOM_MIN = 10000;
+export const TL_ROOM_GROW = 1.5;
+export function liveRoom(ms) {
+  let r = TL_ROOM_MIN;
+  while (r < ms) r *= TL_ROOM_GROW;
+  return r;
+}
+// A turn's length on the clock, ms: from its start to its end, or, not running and with no end,
+// to its last recorded event.
+const wallOf = (h) => {
+  const w = h.total ?? h.span ?? 0;
   return Number.isFinite(w) && w > 0 ? w : 0;
 };
+// The room of the running turn on this scale at nowMs, or 0 when the last turn is not running
+// (or the scale is by steps, where nothing grows).
+function roomOf(heads, scale, nowMs) {
+  const h = heads[heads.length - 1];
+  if (scale === "steps" || !h?.going || h.t0 == null) return 0;
+  return liveRoom(Math.max(h.span ?? 0, nowMs - h.t0));
+}
 export function timelineGeo(heads, cw, scale = "clock", nowMs = Date.now()) {
   const n = heads.length;
-  const geo = { cw, scale, turns: [], index: new Map(), walls: [], gap: 0, total: 0, steps: 0 };
+  const geo = { cw, scale, turns: [], index: new Map(), walls: [], gap: 0, total: 0, steps: 0, live: -1, room: 0 };
   if (!n || !(cw > 0)) return geo;
   const GAP = cw < 700 ? 14 : 30;
   const MIN = cw < 700 ? 30 : 48;
   const gap = n > 1 ? Math.min(GAP, (0.15 * cw) / (n - 1)) : 0;
   const min = Math.min(MIN, (0.3 * cw) / n);
   const target = Math.max(1, cw - gap * (n - 1));
-  const walls = heads.map((h) => wallOf(h, nowMs));
+  const walls = heads.map(wallOf);
+  const room = roomOf(heads, scale, nowMs);
+  if (room > 0) { walls[n - 1] = room; geo.live = n - 1; geo.room = room; }
   for (const h of heads) geo.steps += Math.max(1, h.items?.length ?? 1);
   let widths;
   if (scale === "steps") {
@@ -94,12 +116,10 @@ export function tlBox(L, ti) {
   const t = L.turns[ti];
   return t ? { x: t.x * L.z - L.x0, w: t.w * L.z } : null;
 }
-// range: the focus range as { ia, ib, pos } (the first and last row's place in the ledger's
-// rows, and every row's place): bars outside it get their own spans, with "|o" on the key.
 // The rows a band holds, lo to hi px of the view L: the first and last whose bar starts inside
 // it ({ a, b } keys, in order), or null when no bar starts there. Walks the turns the band
 // covers, found by halving.
-export function bandRows(L, heads, lo, hi, nowMs = Date.now()) {
+export function bandRows(L, heads, lo, hi) {
   const G = L.geo;
   const T = G?.turns ?? [];
   if (!T.length || !(hi >= lo)) return null;
@@ -114,7 +134,7 @@ export function bandRows(L, heads, lo, hi, nowMs = Date.now()) {
   let b = null;
   for (let ti = i; ti < T.length && T[ti].x <= f1; ti++) {
     const h = heads[ti];
-    const wall = G.walls[ti] ?? wallOf(h, nowMs);
+    const wall = G.walls[ti] ?? wallOf(h);
     for (const it of h?.items ?? []) {
       const bx = itemBox(it, T[ti].x * z - x0, T[ti].w * z, wall, L.scale, h.items.length);
       if (!bx || bx.x0 < lo || bx.x0 > hi) continue;
@@ -124,10 +144,14 @@ export function bandRows(L, heads, lo, hi, nowMs = Date.now()) {
   }
   return a == null ? null : { a, b };
 }
+// range: the focus range as { ia, ib, pos } (the first and last row's place in the ledger's
+// rows, and every row's place): bars outside it get their own spans, with "|o" on the key.
+// The running turn's unfinished bars are not spans: each is in out.grow ({ k, x0, tx, w, wall,
+// t0 }), whose right end tlGrow finds at a given time, so a layout holds while the turn runs.
 export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), view = null, geo = null, range = null) {
   const G = geo ?? timelineGeo(heads, cw, scale, nowMs);
   const { z, x0 } = tlClamp(G, view);
-  const out = { cw, scale, z, x0, geo: G, turns: G.turns, index: G.index, total: G.total, zmax: tlMaxZoom(G), gaps: [], spans: new Map(), labels: [], ticks: [], fails: [], from: 0, to: -1 };
+  const out = { cw, scale, z, x0, geo: G, turns: G.turns, index: G.index, total: G.total, zmax: tlMaxZoom(G), gaps: [], spans: new Map(), labels: [], ticks: [], fails: [], grow: [], from: 0, to: -1 };
   const n = G.turns.length;
   if (!n) return out;
   const walls = G.walls;
@@ -177,10 +201,15 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
       if (c.tools) add(`${c.failed ? "tools|failed|0" : "tools|tools|0"}${o}`, x, x1);
       if (c.failed && x >= failEnd) { out.fails.push(x + w / 2); failEnd = x + 6; }
     } else {
+      const live = ti === G.live;
       for (const it of h.items ?? []) {
         const b = itemBox(it, x, w, walls[ti], scale, h.items.length);
         if (!b || !it.sk || b.x1 < -M || b.x0 > cw + M) continue;
         const ip = range ? range.pos.get(it.key) : null;
+        if (live && b.open) {
+          out.grow.push({ k: it.sk[b.track ? 1 : 0], x0: b.x0, tx: x, w, wall: walls[ti], t0: h.t0 });
+          continue;
+        }
         add(range && !(ip != null && ip >= range.ia && ip <= range.ib) ? `${it.sk[b.track ? 1 : 0]}|o` : it.sk[b.track ? 1 : 0], b.x0, b.x1, Boolean(b.open));
         if (it.failed && b.x0 >= failEnd) { out.fails.push((b.x0 + b.x1) / 2); failEnd = b.x0 + 6; }
       }
@@ -248,19 +277,33 @@ export function polyRows(pts, h) {
   }
   return out;
 }
+// The px where the running turn's unfinished bars end at nowMs: a turn tx px in, w px wide,
+// placed at wall ms (its room), started at t0. Within the turn.
+function growEnd(tx, w, wall, t0, nowMs) {
+  return tx + Math.max(0, Math.min(1, (nowMs - t0) / wall)) * w;
+}
+// The running turn's unfinished bars at nowMs, from a layout's grow list: [{ k, x0, x1 }], each
+// at least 6 px wide as itemBox makes them. Only these move while the turn runs.
+export function tlGrow(L, nowMs = Date.now()) {
+  return (L?.grow ?? []).map((g) => ({ k: g.k, x0: g.x0, x1: Math.max(g.x0 + 6, Math.min(g.tx + g.w, growEnd(g.tx, g.w, g.wall, g.t0, nowMs))) }));
+}
 // One step's box on the strip: x0 and x1 in px, and its track. A turn tx px in, w px wide, wall
-// ms long, with len steps. null for a step with no time on the clock scale.
-export function itemBox(it, tx, w, wall, scale, len) {
+// ms long, with len steps. null for a step with no time on the clock scale. upTo: where an
+// unfinished call's bar ends (px), when not at the turn's end (the running turn's, at now).
+export function itemBox(it, tx, w, wall, scale, len, upTo = null) {
   if (scale === "steps") {
     const sw = w / Math.max(1, len);
     const pad = sw > 4 ? 1 : 0;
-    return { x0: tx + it.i * sw + pad, x1: tx + (it.i + 1) * sw - pad, track: 0 };
+    // An unfinished call fills its step, with the torn end as on the clock.
+    const box = { x0: tx + it.i * sw + pad, x1: tx + (it.i + 1) * sw - pad, track: 0 };
+    if (it.open) box.open = true;
+    return box;
   }
   if (it.a == null || !(wall > 0)) return null;
   // An unfinished call (open) is never under 6 px wide, so its torn end keeps its shape.
   const least = it.open ? 6 : 3;
   const x0 = Math.min(tx + (it.a / wall) * w, tx + w - least);
-  const end = it.b != null ? tx + (it.b / wall) * w : it.open ? tx + w : x0 + 3;
+  const end = it.b != null ? tx + (it.b / wall) * w : it.open ? upTo ?? tx + w : x0 + 3;
   const box = { x0, x1: Math.max(x0 + least, Math.min(end, tx + w)), track: it.track };
   if (it.open) box.open = true;
   return box;
@@ -282,17 +325,32 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
   if (!h || h.key !== t.key) return null;
   // Past the turn into its break: the nearer turn.
   if (fx > t.x + t.w && T[lo + 1] && T[lo + 1].x - fx < fx - (t.x + t.w)) return timelineHit(L, heads, T[lo + 1].x * z - x0, lane, nowMs);
-  const wall = wallOf(h, nowMs);
+  const wall = L.geo?.walls[lo] ?? wallOf(h);
   const tx = t.x * z - x0;
   const tw = t.w * z;
+  // The running turn's unfinished bars end at now, not at its room's end.
+  const upTo = lo === L.geo?.live && h.t0 != null ? growEnd(tx, tw, wall, h.t0, nowMs) : null;
   let best = null;
   let bestD = 4;
   for (const it of h.items ?? []) {
     if (lane && it.lane !== lane) continue;
-    const b = itemBox(it, tx, tw, wall, L.scale, h.items.length);
+    const b = itemBox(it, tx, tw, wall, L.scale, h.items.length, upTo);
     if (!b) continue;
     const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
     if (d < bestD || (d === 0 && bestD === 0 && it.track === 1)) { best = it; bestD = d; }
   }
   return { turn: h.key, key: best ? best.key : h.key };
+}
+// The timeline for a draw: the turns placed and the view laid out, each made again only when
+// what it depends on changes, and the running turn's growing bars at nowMs. prev: the last
+// model (or null). The places are kept for the same heads (the ledger's, by identity), width,
+// scale and running room; the layout for the same places and view. So while a turn runs, a
+// draw does only tlGrow, and the rest of the strip stays where it was.
+export function timelineModel(prev, heads, cw, scale = "clock", nowMs = Date.now(), view = null) {
+  const room = roomOf(heads, scale, nowMs);
+  const same = prev && prev.heads === heads && prev.cw === cw && prev.scale === scale && prev.geo.room === room;
+  const geo = same ? prev.geo : timelineGeo(heads, cw, scale, nowMs);
+  const vk = view ? `${view.z}|${view.x0}` : "";
+  const L = same && prev.vk === vk ? prev.L : timelineLayout(heads, cw, scale, nowMs, view, geo);
+  return { heads, cw, scale, geo, vk, L, grow: tlGrow(L, nowMs) };
 }

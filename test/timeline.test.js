@@ -177,22 +177,22 @@ test("timeline running turn: only the last turn moves; the strip keeps its place
   const live = head(turn(3, [[["Read", "a", 2000, 2500], ["Bash", "bun run e2e", 3000, null]]], { done: false, end: null, reply: null }), true);
   expect(live.going).toBe(true);
   const heads = [a, b, live];
-  const at = live.t0 + 20000;
+  const at = live.t0 + 10500;
   const m1 = timelineModel(null, heads, 600, "clock", at);
-  // The running turn is placed at its room (20 s elapsed: 22.5 s), so the strip does not
+  // The running turn is placed at its room (10.5 s elapsed: 15 s), so the strip does not
   // refit each second.
   expect(m1.geo.live).toBe(2);
-  expect(m1.geo.room).toBe(22500);
+  expect(m1.geo.room).toBe(15000);
   expect(m1.grow.length).toBe(1);
   const T = m1.L.turns[2];
   const tx = T.x * m1.L.z - m1.L.x0;
-  expect(m1.grow[0].x1).toBeCloseTo(tx + (20000 / 22500) * T.w, 3);
+  expect(m1.grow[0].x1).toBeCloseTo(tx + (10500 / 15000) * T.w, 3);
   // A second later: the same placing and the same layout; only the growing bar is new.
   const m2 = timelineModel(m1, heads, 600, "clock", at + 1000);
   expect(m2.geo).toBe(m1.geo);
   expect(m2.L).toBe(m1.L);
   expect(m2.grow[0].x0).toBe(m1.grow[0].x0);
-  expect(m2.grow[0].x1).toBeCloseTo(tx + (21000 / 22500) * T.w, 3);
+  expect(m2.grow[0].x1).toBeCloseTo(tx + (11500 / 15000) * T.w, 3);
   expect(m2.grow).toEqual(tlGrow(m1.L, at + 1000));
   // The running call's bar is not also a torn span in the layout.
   expect((m1.L.spans.get("tools|tools|0") ?? []).some((sp) => sp[2] === 1)).toBe(false);
@@ -201,16 +201,18 @@ test("timeline running turn: only the last turn moves; the strip keeps its place
   expect(timelineHit(m2.L, heads, hitX, "tools", at + 1000).key).toBe(live.items.find((it) => it.open).key);
   expect(timelineHit(m2.L, heads, tx + T.w - 1, "tools", at + 1000).key).toBe(live.key);
   // Past its room the turn gets the next one, and the strip is placed again, once.
-  const m3 = timelineModel(m2, heads, 600, "clock", live.t0 + 23000);
+  expect(tx + T.w - 1 - m2.grow[0].x1).toBeGreaterThan(4);
+  const m3 = timelineModel(m2, heads, 600, "clock", live.t0 + 16000);
   expect(m3.geo).not.toBe(m2.geo);
-  expect(m3.geo.room).toBe(33750);
-  expect(timelineModel(m3, heads, 600, "clock", live.t0 + 24000).geo).toBe(m3.geo);
+  expect(m3.geo.room).toBe(22500);
+  expect(timelineModel(m3, heads, 600, "clock", live.t0 + 17000).geo).toBe(m3.geo);
   // A new width, scale or session places it again; a turn that is not running never grows.
-  expect(timelineModel(m3, heads, 601, "clock", live.t0 + 24000).geo).not.toBe(m3.geo);
-  expect(timelineModel(m3, [...heads], 600, "clock", live.t0 + 24000).geo).not.toBe(m3.geo);
-  const still = timelineModel(null, [a, b], 600, "clock", at);
+  expect(timelineModel(m3, heads, 601, "clock", live.t0 + 17000).geo).not.toBe(m3.geo);
+  expect(timelineModel(m3, [...heads], 600, "clock", live.t0 + 17000).geo).not.toBe(m3.geo);
+  const ab = [a, b];
+  const still = timelineModel(null, ab, 600, "clock", at);
   expect([still.geo.live, still.geo.room, still.grow]).toEqual([-1, 0, []]);
-  expect(timelineModel(still, [a, b], 600, "clock", at + 60000).L).toBe(still.L);
+  expect(timelineModel(still, ab, 600, "clock", at + 60000).L).toBe(still.L);
   // By steps nothing grows: an unfinished call fills its step.
   const st = timelineModel(null, heads, 600, "steps", at);
   expect([st.geo.live, st.grow]).toEqual([-1, []]);

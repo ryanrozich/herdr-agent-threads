@@ -246,6 +246,16 @@ export function sessionHasEnds(s) {
   return false;
 }
 
+// A step's span keys on the timeline, track 0 and track 1: "tools|failed|0" and
+// "tools|failed|1". Made once per lane and ink, so a long session's items share them.
+const SPAN_KEYS = new Map();
+function spanKeys(lane, ink) {
+  const k = `${lane}|${ink}`;
+  let v = SPAN_KEYS.get(k);
+  if (!v) { v = Object.freeze([`${k}|0`, `${k}|1`]); SPAN_KEYS.set(k, v); }
+  return v;
+}
+
 // One turn's rows: the heading, then a row per cell. si and the turn make the keys: the
 // heading's key is the turn's own ("<session>:<number>", as in the chat), so the selected
 // turn is the same key in the Chat and the Trajectory; a cell row is "tr:<session>:<number>:<i>".
@@ -418,8 +428,9 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
       if (track === 0) end0 = openBar ? Infinity : b ?? a;
     }
     const ink = k?.ink ?? "context";
-    // The timeline's span keys for this step, made once (timelineLayout joins by them).
-    const sk = k?.lane ? [`${k.lane}|${ink}|0`, `${k.lane}|${ink}|1`] : null;
+    // The timeline's span keys for this step (timelineLayout joins by them): one pair per
+    // lane and ink for the whole pane, not an array per step.
+    const sk = k?.lane ? spanKeys(k.lane, ink) : null;
     items.push({ key: r.key, i, lane: k?.lane ?? null, ink, a, b, open: openBar && a != null, track, failed: r.failed, lk: r.lk, sk });
   });
   const head = {
