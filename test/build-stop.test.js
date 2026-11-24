@@ -211,3 +211,33 @@ test("a full build Herdr stops as it takes the held place of a width change keep
   delete v.takeAnchor;
   expect([armed, stops, held, sim.last().key]).toEqual([false, 1, before, before]);
 }, 60000);
+
+// The running turn's row changes kind when it is selected or left (working, wrow): its kind,
+// then its height, which is a call, where Herdr's stop can fall. Stopped there, the row had its
+// new kind at its old height, and the next draw, finding the kind already new, left the height
+// as it was until the running turn was built again (its next event). The height is worked out
+// on a copy with the new kind, and the kind and the size are stored together.
+test("a draw Herdr stops as the running row works out its height for a new kind leaves the row to change again: it ends at its new height", async () => {
+  const { v, cx } = await pane(fixture("--only", "0", "--agents", "--open"));
+  v.debug = false;
+  v.prefs = { ...v.prefs, agentTurns: false };
+  settleRows(v, cx);
+  dropTimers(v, cx);
+  const li = v.baseRows.findIndex((x) => x.live);
+  const key = v.baseRows[li]?.key;
+  v.sel = key;
+  v.fitKey = null;
+  settleRows(v, cx);
+  const was = v.baseRows[li]?.kind;
+  let armed = true;
+  let stops = 0;
+  const height = v.height;
+  v.height = function (r) { if (armed && r?.key === key && r.kind === "wrow") { armed = false; throw STOP; } return height.call(this, r); };
+  v.sel = null;
+  v.fitKey = null;
+  for (let k = 0; k < 10; k++) { try { draw(v, cx); } catch (e) { if (e !== STOP) throw e; stops++; } cx.flush?.(0); }
+  delete v.height;
+  const r = v.baseRows[li];
+  const slot = v.rows().find((x) => x.key === key);
+  expect([was, armed, stops, r.kind, v.baseSizes[li] === v.height(r), slot?.kind]).toEqual(["working", false, 1, "wrow", true, "wrow"]);
+}, 60000);
