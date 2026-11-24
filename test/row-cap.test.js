@@ -2120,3 +2120,32 @@ test("a landing's late asks are dropped by a newer landing in the same rows, and
   // The card moved every one of them on, so an ask by the landing's index would name others.
   for (const d of opened.moved) expect(d).toBeGreaterThan(0);
 });
+
+test("latest's own ask 16 ms after the end is taken is dropped by a newer jump: #20 from there stays on screen", async () => {
+  const { v, cx } = await capSession(150, SMALL);
+  const sim = simList(v);
+  const turns = (f) => shownIn(v, f).filter((k) => /^0:\d+$/.test(k));
+  v.jumpLatest(true);
+  settleList(v, cx, sim);
+  v.action("first", cx);
+  settleList(v, cx, sim);
+  // Latest from the oldest window, one draw: the end is taken, and its ask 16 ms on waits.
+  v.jumpLatest(true);
+  draw(v, cx);
+  expect(v.toBottom).toBe(false);
+  const late = cx.timers;
+  cx.timers = [];
+  expect(late.length).toBeGreaterThan(0);
+  // Before it runs, #20 lands in the oldest window.
+  v.command("search:#20", cx);
+  v.command("escape", cx);
+  settleList(v, cx, sim);
+  expect(turns(sim.last())).toContain("0:20");
+  const n = endsOf(v);
+  for (const x of late) x.fn(cx);
+  probeFrame(v, cx);
+  expect(n.ends).toBe(0);
+  expect(turns(sim.last())).toContain("0:20");
+  expect(v.sel).toBe("0:20");
+  H.listWindow = null;
+});

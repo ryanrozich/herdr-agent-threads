@@ -9446,7 +9446,7 @@ export default class Threads extends View {
     } else if (this.toBottom && rows.length) {
       this.toBottom = false;
       this.scrollTo = null;
-      this.landN = (this.landN ?? 0) + 1;
+      const landN = (this.landN = (this.landN ?? 0) + 1);
       this.pinningUntil = Date.now() + 1000;
       this.upAt = 0;
       this.downAt = 0;
@@ -9455,6 +9455,8 @@ export default class Threads extends View {
       cx.timer.after(16, (cx) => {
         if ((this.holds ?? 0) !== holds) return; // a highlight started meanwhile (holdForSelect)
         if ((this.wheelN ?? 0) !== wheels) return; // the reader's wheel since (listWheel)
+        // A newer scroll since, waiting or landed (a jump, a pin, latest again): it has its own.
+        if (this.landN !== landN || this.scrollTo) return;
         this.askEnd();
         cx.notify();
       });
