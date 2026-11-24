@@ -96,7 +96,7 @@ import {
   BAR_W, BAR_H, BAR_SLANT, trajLayout, rowsLeft,
 } from "./ledger.js";
 import {
-  timelineModel, timelineHit, tlBox, tornPoints, polyRows, tlStrip, hatchLines, tlNumbers, tlBar, tlRow, tlPathOf, tlBuildStart, tlBuildGo, TL_MADE,
+  timelineHit, tlBox, tornPoints, polyRows, tlStrip, hatchLines, tlNumbers, tlBar, tlRow, tlPathOf, tlDraw, TL_MADE,
   TL_LANES, TL_MIN_W, TL_H, TL_GUT, TL_AX, TL_TK, TL_LT, TL_LANE, TL_PT, TL_ROWS_MIN,
 } from "./timeline.js";
 import { VERSION, versionLine, parseBuild } from "./version.js";
@@ -12224,21 +12224,18 @@ export default class Threads extends View {
     const cw = tlStrip(this.pw());
     const prev = this.tlModel;
     const t0 = now();
-    let M;
-    if (prev) M = timelineModel(prev, L.totals.heads, cw, "clock", Date.now(), null);
-    else {
-      // From nothing (opened, or shown again after a hidden strip dropped its model): placed and
-      // laid out over draws, TL_BUILD_MS a draw (timeline.js tlBuildGo), the waiting line
-      // meanwhile; trajFrame asks for the next draw. A job begun on other heads ends as it is,
-      // and the next draw's timelineModel takes it from there; a new width begins again.
-      if (!this.tlJob || this.tlJob.cw !== cw) this.tlJob = tlBuildStart(L.totals.heads, cw, "clock", Date.now(), null);
-      M = tlBuildGo(this.tlJob, t0 + TL_BUILD_MS, now);
-      if (!M) {
-        this.tlWait = true;
-        return waiting("Laying out the timeline…");
-      }
-      this.tlJob = null;
+    // The model, and a build left for later draws (timeline.js tlDraw), TL_BUILD_MS a draw;
+    // trajFrame asks for the next draw while one is left. From nothing (opened, or shown again
+    // after a hidden strip dropped its model) the waiting line shows meanwhile. Working off (or
+    // on, past the slack), the strip keeps its places but for the last turn's, and is placed
+    // again by the build from the next draw on, drawn as it was meanwhile.
+    const D = tlDraw(prev, this.tlJob, L.totals.heads, cw, Date.now(), t0 + TL_BUILD_MS, now);
+    this.tlJob = D.J;
+    if (D.wait) {
+      this.tlWait = true;
+      return waiting("Laying out the timeline…");
     }
+    const M = D.M;
     this.tlModel = M;
     if (M.L !== prev?.L) this.tlMs = Math.round((now() - t0) * 10) / 10;
     const T = M.L;

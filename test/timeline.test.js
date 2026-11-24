@@ -807,7 +807,7 @@ test("timeline model: with events arriving in the running turn, the finished tur
   }
 });
 
-test("timeline model: working on or off on the last turn alone places nothing again where its end moves 1 px or less: the finished turns keep their places and only the last is laid out", () => {
+test("timeline model: working on or off on the last turn alone places nothing in that frame: the finished turns keep their places and only the last is laid out; working off, or on with its end moved more than 1 px, marks the places the old scale's for the bounded build", () => {
   for (const [n, cw, kept] of [[2000, 1370, true], [5600, 1143, true], [3, 1370, false]]) {
     const done = strip(n - 1);
     const t0 = T0 + (n - 1) * 100000;
@@ -834,9 +834,14 @@ test("timeline model: working on or off on the last turn alone places nothing ag
       expect(m1.geo.turns.slice(0, -1).every((t, ti) => t === m0.geo.turns[ti])).toBe(true);
       expect(m1.geo.turns[n - 1].x).toBe(m0.geo.turns[n - 1].x);
       for (let ti = 0; ti < n; ti++) expect(Math.abs(m1.geo.turns[ti].x - fresh.turns[ti].x)).toBeLessThanOrEqual(1);
+      expect(m1.geo.stale).toBeUndefined();
     } else {
+      // Its end moves more than 1 px: the places are kept all the same, marked the old scale's;
+      // tlDraw places them again over the draws after (test/timeline-off.test.js).
       expect(moved).toBeGreaterThan(1);
-      expect(c1).toEqual({ geo: 1, layout: 1, tail: 0, tracks: wide(m1) });
+      expect(c1).toEqual({ geo: 0, layout: 0, tail: 1, tracks: wide(m1) });
+      expect(m1.geo.stale).toBe(true);
+      expect(m1.geo.turns.slice(0, -1).every((t, ti) => t === m0.geo.turns[ti])).toBe(true);
     }
     // The strip is the one a whole layout of those places makes: the running turn's bars grow.
     expect(drawn(m1.L)).toEqual(drawn(timelineLayout(m1.heads, cw, "clock", at, null, m1.geo)));
@@ -845,8 +850,10 @@ test("timeline model: working on or off on the last turn alone places nothing ag
     before = { ...TL.TL_MADE };
     const m2 = timelineModel(m1, [...done, { ...fin }], cw, "clock", at, null);
     expect([m2.geo.room, m2.geo.live, m2.geo.walls[n - 1]]).toEqual([0, -1, run.span]);
-    expect(count(before)).toEqual(kept ? { geo: 0, layout: 0, tail: 1, tracks: wide(m2) } : { geo: 1, layout: 1, tail: 0, tracks: wide(m2) });
-    if (kept) expect(m2.geo.turns.every((t, ti) => ti === n - 1 ? t.w === m0.geo.turns[ti].w : t === m0.geo.turns[ti])).toBe(true);
+    // Placed nothing, and marked the old scale's either way, so the bounded build makes it exact.
+    expect(count(before)).toEqual({ geo: 0, layout: 0, tail: 1, tracks: wide(m2) });
+    expect(m2.geo.stale).toBe(true);
+    expect(m2.geo.turns.every((t, ti) => ti === n - 1 ? t.w === m0.geo.turns[ti].w : t === m0.geo.turns[ti])).toBe(true);
     expect(drawn(m2.L)).toEqual(drawn(timelineLayout(m2.heads, cw, "clock", at, null, m2.geo)));
   }
 });

@@ -254,14 +254,15 @@ export const TL_SLACK = 1;
 // The places G with only the last turn's length changed to wall (room: the running room, 0
 // when it does not run), at G's px per ms: the other turns keep their places, so the strip
 // may end up to TL_SLACK px short of or past its edge. Null when that turn's end would move
-// more than TL_SLACK px at zoom z, or G has no px per ms (by steps, or no turn has a length).
+// more than TL_SLACK px at zoom z (unless any: then by any amount, the strip ending short of
+// its edge or past it), or G has no px per ms (by steps, or no turn has a length).
 // was: the last heading G was placed for.
-function tlLastLength(G, heads, wall, room, z, was) {
+function tlLastLength(G, heads, wall, room, z, was, any = false) {
   const n = heads.length;
   if (!(G.m > 0) || G.turns.length !== n) return null;
   const t = G.turns[n - 1];
   const w = Math.max(G.min, wall * G.m);
-  if (Math.abs(w - t.w) * z > TL_SLACK) return null;
+  if (!any && Math.abs(w - t.w) * z > TL_SLACK) return null;
   const turns = G.turns.slice();
   turns[n - 1] = { ...t, w };
   const walls = G.walls.slice();
@@ -864,12 +865,55 @@ export function timelineModel(prev, heads, cw, scale = "clock", nowMs = Date.now
   // Working on or off (the room comes or goes) with only the last heading new: only that turn's
   // length changes, so the others keep their places while its end moves TL_SLACK px or less.
   // At Fit that holds from a few hundred turns, where placing them all again costs most.
+  // Working off, or on with that end moving more than TL_SLACK px, the places are kept by any
+  // amount and marked the old scale's (stale): tlDraw places the turns again with the bounded
+  // build over the draws after this one. So working off is exact once that build ends, and
+  // while a turn runs its end may be TL_SLACK px off.
   const vk = view ? `${view.z}|${view.x0}` : "";
   const was = only ? prev.heads[n - 1] : null;
-  const regeo = only && !tail && (prev.geo.room > 0) !== (room > 0) && prev.vk === vk ? tlLastLength(prev.geo, heads, wall, room, prev.L.z ?? 1, was) : null;
+  let regeo = null;
+  if (only && !tail && (prev.geo.room > 0) !== (room > 0) && prev.vk === vk) {
+    const z = prev.L.z ?? 1;
+    regeo = room > 0 ? tlLastLength(prev.geo, heads, wall, room, z, was) : null;
+    if (!regeo) {
+      regeo = tlLastLength(prev.geo, heads, wall, room, z, was, true);
+      if (regeo) regeo.stale = true;
+    }
+  }
   const geo = same || tail ? prev.geo : (regeo ?? timelineGeo(heads, cw, scale, nowMs));
   const L = same && prev.vk === vk ? prev.L : (tail || regeo) && prev.vk === vk ? tlTail(prev.L, heads, was, geo) : timelineLayout(heads, cw, scale, nowMs, view, geo, null, prev?.L?.tracks ?? null);
   return { heads, cw, scale, geo, vk, L, grow: tlGrow(L, nowMs) };
+}
+// One draw's model, and the build it leaves for the next draw: { M, J, wait }. M: the model
+// the last draw showed (null for none); J: a build in progress (tlBuildStart), or null; until
+// and clock: tlBuildGo's bound. From nothing the build goes on until clock() reaches until,
+// and with no model yet the strip waits (wait). A model whose places are the old scale's
+// (geo.stale: timelineModel, working on or off) starts the build, whose first step is the
+// next draw's. While it runs, a draw takes steps of it and shows the model it had, kept to
+// the heads of that draw, so a press or a selection acts on the strip drawn. A width change
+// starts the build again at the new width, the old strip shown meanwhile. Once the build
+// ends its model is the strip, taken up by timelineModel for the heads of that draw.
+export function tlDraw(M, J, heads, cw, nowMs, until, clock) {
+  const start = () => tlBuildStart(heads, cw, "clock", nowMs, null);
+  if (!M) {
+    const j = J && J.cw === cw ? J : start();
+    const done = tlBuildGo(j, until, clock);
+    return done ? { M: done, J: null, wait: false } : { M: null, J: j, wait: true };
+  }
+  if (J) {
+    // The strip shown while the build runs: the last draw's, at its own width, kept to heads.
+    const keep = () => timelineModel(M, heads, M.cw, "clock", nowMs, null);
+    if (J.cw !== cw) return { M: keep(), J: start(), wait: false };
+    const done = tlBuildGo(J, until, clock);
+    if (!done) {
+      const K = keep();
+      // Placed again whole for heads of a new shape (a new turn): the build is not needed.
+      return { M: K, J: K.geo.stale || K.cw !== cw ? J : null, wait: false };
+    }
+    M = done;
+  }
+  const N = timelineModel(M, heads, cw, "clock", nowMs, null);
+  return { M: N, J: N.geo.stale ? start() : null, wait: false };
 }
 // Whether b is a with only its last heading new (the same turn): every other heading the same
 // object, checked from the end, where a change shows first.

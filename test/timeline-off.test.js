@@ -145,15 +145,15 @@ test("timeline working off, while the build runs: the shown model is the old one
     const keep = list.filter((s) => s[1] < lx - 1);
     expect(M.L.spans.get(k).slice(0, keep.length)).toEqual(keep);
   }
+  // A press on a turn's reply, in the Model lane (its only bar there), at the turn as drawn:
+  // that reply. On the old scale these turns are under 2 px; the new one puts all but the first
+  // elsewhere.
   const whole = TL.timelineModel(null, off, CW, "clock", now, null);
   for (const ti of [0, 120, 299]) {
-    const b = TL.tlBar(M.L, off, ti, 1, now);
-    expect(b).toBeTruthy();
-    const hit = TL.timelineHit(M.L, off, (b.x0 + b.x1) / 2, "tools", now, 4);
-    expect(hit).toEqual({ turn: `0:${ti}`, key: `tr:0:${ti}:1` });
-    // The new scale puts it elsewhere: there, on the shown strip, it is not that step.
-    const w = TL.tlBar(whole.L, off, ti, 1, now);
-    expect(Math.abs(w.x0 - b.x0)).toBeGreaterThan(4);
+    const T = TL.tlBox(M.L, ti);
+    const hit = TL.timelineHit(M.L, off, T.x + T.w / 2, "model", now, 4);
+    expect(hit).toEqual({ turn: `0:${ti}`, key: `tr:0:${ti}:3` });
+    if (ti > 0) expect(Math.abs(TL.tlBox(whole.L, ti).x - T.x)).toBeGreaterThan(4);
   }
 });
 
@@ -231,11 +231,11 @@ function offFrame(b, cb) {
   b.ledgerMemo = null;
   return frame(b, cb);
 }
-// Each look at the clock 1 ms later while f runs: a build stops after a few steps a frame.
+// Each look at the clock 3 ms later while f runs: a build stops after a step or two a frame.
 function slowNow(f) {
   const real = performance.now;
   let t = real.call(performance);
-  performance.now = () => (t += 1);
+  performance.now = () => (t += 3);
   try { return f(); } finally { performance.now = real; }
 }
 
@@ -284,15 +284,17 @@ test("timeline view: a press while the build runs selects the step under it on t
     expect(M.geo.stale).toBe(true);
     const ti = 120;
     const h = M.heads[ti];
-    const si = h.steps.findIndex((r) => r.lk === "tool" && r.start != null && r.dur > 0);
-    const box = TL.tlBar(M.L, M.heads, ti, si);
-    const x = (box.x0 + box.x1) / 2;
+    // At the turn as drawn (on the old scale, under 2 px), in the Tools lane.
+    const T = TL.tlBox(M.L, ti);
+    const x = T.x + T.w / 2;
     const y = 2 * TL.TL_LANE + 4;
+    expect(Math.abs(TL.tlBox(TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null).L, ti).x - T.x)).toBeGreaterThan(4);
     slowNow(() => {
       const c = frame(b, cb);
       handlerAfterId(c, "th-tl-lanes", "on_mouse_down")({ local_position: { x, y }, position: { x, y } }, cb);
     });
-    expect(b.tsel).toBe(h.steps[si].key);
+    expect(b.turnOfRow(b.tsel)).toBe(h.key);
+    expect(b.tsel).not.toBe(h.key);
     expect(b.tlJob).toBe(J);
   } finally {
     setSystemTime();

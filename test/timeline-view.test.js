@@ -590,7 +590,7 @@ test("timeline view: a hidden strip keeps no model: b, the four-row rule or a na
   expect(q.b.tlModel ?? null).toBe(null);
 });
 
-test("timeline view: working on and off on the last turn at 2,000 turns places nothing again: the finished turns keep their places and only the last turn is laid out", async () => {
+test("timeline view: working on and off on the last turn at 2,000 turns places nothing in that frame: the finished turns keep their places and only the last turn is laid out; working off, the bounded build makes the strip exact over the frames after", async () => {
   // A session of 2,000 turns cut just after a call: its newest turn is open, with no result yet.
   // Its API error line is left out, since an error ends the turn it is in.
   const file = fixture("--extra", "2000");
@@ -622,7 +622,7 @@ test("timeline view: working on and off on the last turn at 2,000 turns places n
     // Its end moved 1 px or less: the room is a few seconds on a strip of 2,000 turns.
     const end = (g) => g.turns.at(-1).x + g.turns.at(-1).w;
     expect(Math.abs(end(m1.geo) - end(m0.geo))).toBeLessThanOrEqual(1);
-    // Working off: back to the turn's own length, again with nothing placed.
+    // Working off: back to the turn's own length, again with nothing placed in that frame.
     H.state.terminals[0].status = "idle";
     b.ledgerMemo = null;
     frame(b, cb);
@@ -631,11 +631,18 @@ test("timeline view: working on and off on the last turn at 2,000 turns places n
     expect(count()).toEqual([0, 0, 2]);
     expect(m2.geo.turns.slice(0, -1).every((t, ti) => t === m0.geo.turns[ti])).toBe(true);
     expect(b.trajReport().timeline.made).toEqual({ ...TL.TL_MADE });
+    // The bounded build (test/timeline-off.test.js) from the next frame: exact once it ends.
+    expect(m2.geo.stale).toBe(true);
+    expect(b.tlJob).toBeTruthy();
+    for (let k = 0; k < 400 && b.tlJob; k++) frame(b, cb);
+    const m3 = b.tlModel;
+    expect(m3.geo.stale).toBeUndefined();
+    expect(m3.geo).toEqual(TL.timelineModel(null, m3.heads, m3.cw, "clock", Date.now(), null).geo);
   } finally {
     setSystemTime();
     H.state.terminals[0].status = "idle";
   }
-});
+}, 30000);
 
 // The paths one frame paints (window.paint_path, the harness's paintKit), in order.
 function paintedFrame(b, cb) {
