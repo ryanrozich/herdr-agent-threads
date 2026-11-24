@@ -4904,11 +4904,12 @@ export default class Threads extends View {
   //   fit: each runs alone, a draw each, and teaches the rate down (shapeLearn).
   // - Every other turn: within the draw's shaping time, the draw's first whatever its cost and
   //   any other only if its expected cost fits what is left, and in the drain expected to end
-  //   in time (lineCut, fitsHost). A turn never shaped (fresh) goes ahead while any shaping time
-  //   is left, since a blank row is worse than a late one, but after the draw's first unit only
-  //   if it is expected to end in time, in the drain (lineCut) and out of it (fitsHost): in a
-  //   rows build a 35 ms turn after another unit waits, its blank row drawn, for a draw where
-  //   it fits or comes first.
+  //   in time (lineCut, fitsHost). A turn never shaped follows the same rule, so the draw keeps
+  //   its room for the rest of the frame: in a rows build or the drain a 30 ms turn after
+  //   another unit waits, its blank row drawn, for a draw where it comes first (on the rig the
+  //   never-shaped rows a stop's light draws left were drained to 45 to 52 ms a draw, with a
+  //   stop, when only the fit check held them). A row on screen in the drain (lineScreen) is
+  //   the exception: it goes ahead while shaping time is left, held only by the fit check.
   // Outside a draw nothing is stopped, so the mark is not read there. The rate is learned only
   // from turns shaped.
   shapeHeld(turn, text, live, fresh = false) {
@@ -4953,10 +4954,11 @@ export default class Threads extends View {
       return false;
     }
     if (spent > max) return true;
-    if (!fresh) return (spent > 0 && spent + this.shapeCost(turn, text) > max) || this.lineCut(turn, text);
-    // Out of the walk nothing else checks the end: a never-shaped turn after the draw's first
-    // unit that would end past Herdr's stop waits.
-    if (!this.lineOn && this.renderOpen && spent > 0 && est != null && !this.fitsHost(est)) return true;
+    // After the draw's first unit, any turn whose expected cost does not fit what is left of
+    // the draw's shaping time waits (1.2.0's rule), never-shaped ones too, except a row on
+    // screen in the drain (lineScreen): a blank row on screen is worse than a late one, and
+    // lineCut keeps it inside Herdr's stop.
+    if (spent > 0 && !(fresh && this.lineScreen) && spent + this.shapeCost(turn, text) > max) return true;
     return this.lineCut(turn, text);
   }
   // What a mark is for: the turn's text, by its prompt and reply lengths (as shape()'s fast

@@ -1705,16 +1705,16 @@ test("shaping: a turn cut after a neighbour overran in its draw runs alone next,
   } finally { p.end(); }
 }, 300000);
 
-// Outside the walk nothing else checks a draw's end, so a turn never shaped, after the draw's
-// first unit, goes ahead only if it is expected to end in time (fitsHost): in a rows build it
-// otherwise waits for a later draw (its blank row drawn meanwhile). Two turns made never
+// 1.2.0's cost rule holds for a turn never shaped too: after the draw's first unit it starts
+// only if its expected cost fits what is left of the draw's shaping time, and in a rows build
+// it otherwise waits for a later draw (its blank row drawn meanwhile). Two turns made never
 // shaped, of about 8 and 35 ms at the rate learned (1 us a character), then a rebuild: the
-// first is shaped in the build; the second, 9 ms in and expected to end at about 57 ms with
-// the 10 ms after the rows, waits and is shaped as a later draw's first, with no draw stopped.
-// Before, it ran 9 ms into the build's draw and the draw was stopped. Of 5 and 25 ms, the
-// second is expected to end by about 44 ms and is shaped in the build all the same.
-test("shaping: in a rows build, a turn never shaped after another unit is shaped if it is expected to end in time, and else waits for a later draw, and no draw is stopped", async () => {
-  for (const [na, nb, inBuild] of [[8000, 35000, false], [5000, 25000, true]]) {
+// first is shaped in the build; the second, 9 ms into a 12 ms shaping time, waits and is
+// shaped as a later draw's first, with no draw stopped.
+// Before, it ran 9 ms into the build's draw and the draw was stopped. Of 4 and 6 ms, the
+// second fits what is left of the 12 ms and is shaped in the build too.
+test("shaping: in a rows build, a turn never shaped after another unit is shaped if its expected cost fits the draw's shaping time, and else waits for a later draw, and no draw is stopped", async () => {
+  for (const [na, nb, inBuild] of [[8000, 35000, false], [4000, 6000, true]]) {
     const p = await pricedDrain();
     try {
       const [a, b] = [p.turns.at(-8), p.turns.at(-5)];
@@ -1750,8 +1750,10 @@ test("shaping: in a rows build, a turn never shaped after another unit is shaped
 // that check and was held only by the fit check (fitsHost): a 30 ms turn started 10 ms into a
 // draw, expected to end at 48 with the rest, and its miss took the draw past 50 (10 stops, and
 // the drain not done in 3,000 draws). The rig showed the same on big5600b: drain frames of 45
-// to 52 ms, where main's worst is 42, and a stop inside a reshape run in company.
+// to 52 ms, where main's worst is 42, and a stop inside a reshape run in company. The pane
+// draws the last 12 rows, so the rows drained are off screen.
 test("shaping: rows never shaped are drained within the draw's shaping time, so a drain draw keeps room for the rest of the frame and none is stopped", async () => {
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
   const p = await pricedDrain({ n: 400, after: 5 });
   try {
     p.begin();
@@ -1770,7 +1772,7 @@ test("shaping: rows never shaped are drained within the draw's shaping time, so 
     }
     expect(late.slice(0, 5)).toEqual([]);
     expect([frames.filter((f) => f.stopped).length, [...fresh].filter((t) => t.shapeKey == null).length, p.v.staleRows.length]).toEqual([0, 0, 0]);
-  } finally { p.end(); }
+  } finally { H.listWindow = null; p.end(); }
 }, 300000);
 
 // A limit, pinned as it is: the owed row is paid before the draw's rows build (payOwed, then
