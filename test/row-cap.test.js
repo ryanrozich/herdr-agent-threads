@@ -2529,7 +2529,7 @@ test("a filter typed in an older window: each letter keeps the selected match in
     expect(shownIn(v, sim.last())).toContain("0:200");
     // Cleared: every turn again, #200 still selected and the counts right. Like a letter that
     // keeps the selection, clearing asks for no scroll; the window, which a filter of 11
-    // matches dropped, starts again at the oldest turns.
+    // matches dropped, goes around #200 again.
     v.command("search:", cx);
     settleList(v, cx, sim);
     expect(v.sel).toBe("0:200");

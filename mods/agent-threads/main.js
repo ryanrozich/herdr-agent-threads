@@ -2919,7 +2919,17 @@ export default class Threads extends View {
     if (goes != null) this.capKey = list.rows[goes].key;
     else if (this.toBottom) this.capKey = this.view === "pinned" ? (list.rows.at(-1)?.key ?? null) : null;
     if (this.view === "pinned") return this.win.whole(list);
-    const want = st?.win ? null : goes;
+    let want = st?.win ? null : goes;
+    // A filter set, changed or cleared, once its rows are built: the window goes around the
+    // selected turn, or with none (a filter with no match) around what was on screen before
+    // the filter. From the old edges, or the oldest rows when the filtered list had no window,
+    // it could leave either out.
+    const q = this.filterText();
+    if (q !== (this.winQ ?? "") && !this.rowJob) {
+      if (!this.winQ) this.winSeen = this.baseIndex?.has(this.topKey) ? this.topKey : this.viewEndKey;
+      this.winQ = q;
+      if (want == null) want = list.index.get(this.sel ?? (q ? null : this.winSeen)) ?? null;
+    }
     // The row after the last on screen, by its key: a card opened above it moves its place.
     const end = this.viewEndKey != null ? list.index.get(this.viewEndKey) : null;
     const seen = end != null ? end + 1 : (this.viewRange?.[1] ?? 0) - (this.winOff ?? 0);
