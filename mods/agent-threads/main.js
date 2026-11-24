@@ -11851,7 +11851,7 @@ export default class Threads extends View {
       let out = fresh ? kept.out : null;
       if (!out) {
         out = ledgerTurn(x, turn, si, going && job.next === last, { ends, reading });
-        if (turn.done) this.turnLedger.set(turn, { si, out, v: turn.v, ends, sub: out.rows.some((r) => r.sub), agentVer: x.agentVer });
+        if (turn.done) this.turnLedger.set(turn, { si, out, v: turn.v, ends, sub: out.steps.some((r) => r.sub), agentVer: x.agentVer });
       }
       job.outs[job.next--] = out;
       if (job.next >= 0 && now() > until) break;
@@ -11871,7 +11871,10 @@ export default class Threads extends View {
     for (let i = from; i < job.all.length; i++) {
       const { x, si, turn } = job.all[i];
       if (si > 0 && turn === x.turns[0]) rows.push({ kind: "sess", key: `sess:${si}`, si, ts: turn.ts ?? null });
-      for (const r of job.outs[i].rows) rows.push(r);
+      // ledger.js ledgerTurn: the heading, then its steps (kept apart, so they make no cycle).
+      const o = job.outs[i];
+      rows.push(o.head);
+      for (const r of o.steps) rows.push(r);
     }
     return rows;
   }

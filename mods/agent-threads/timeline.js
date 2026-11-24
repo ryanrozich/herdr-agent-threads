@@ -1,15 +1,15 @@
 // agent-threads: the Trajectory's timeline as data (TRD-23). Pure JavaScript with no Herdr
 // imports, tested under bun (test/timeline.test.js); main.js draws what this returns.
-// Carried from draft 107 (ledger.js there). The steps it reads are each heading's turn's rows
-// (h.rows, heading first, made by ledger.js ledgerTurn): a step's times and flags are its
-// row's, and the tracks are worked out here, in the layout pass, only for a turn drawn wide
+// Carried from draft 107 (ledger.js there). The steps it reads are each heading's step rows
+// (h.steps, made by ledger.js ledgerTurn, which holds no way back to the heading): a step's
+// times and flags are its row's, and the tracks are worked out here, in the layout pass, only for a turn drawn wide
 // enough for its bars (tlTracks). The ledger keeps no array and no number per step for it.
 
 import { durText, startText, LEDGER_KINDS, spanKeys, TL_TRACK, TL_OPEN, TL_FAILED } from "./ledger.js";
 
-// A heading's step count, and its i-th step's row: the turn's rows after the heading.
-export const tlLen = (h) => Math.max(0, (h?.rows?.length ?? 1) - 1);
-export const tlRow = (h, i) => (i >= 0 && i < tlLen(h) ? h.rows[i + 1] : undefined);
+// A heading's step count, and its i-th step's row (h.steps, its turn's step rows).
+export const tlLen = (h) => h?.steps?.length ?? 0;
+export const tlRow = (h, i) => (i >= 0 && i < tlLen(h) ? h.steps[i] : undefined);
 const stepN = tlLen;
 // How many times the turns were placed (timelineGeo), laid out (timelineLayout) and a turn's
 // tracks worked out (tlTracks) since the module loaded, for the tests and the debug report.
@@ -29,7 +29,7 @@ export function tlTracks(h) {
   let out = null;
   let end0 = -Infinity;
   for (let i = 0; i < n; i++) {
-    const r = h.rows[i + 1];
+    const r = h.steps[i];
     const a = r.start;
     if (a == null || LEDGER_KINDS[r.lk]?.lane !== "tools") continue;
     if (a < end0) {
@@ -43,7 +43,7 @@ export function tlTracks(h) {
 }
 // Step i's box from its row (itemBox), on track (0 or 1).
 function stepBox(h, i, track, tx, w, wall, scale, len, upTo = null) {
-  const r = h.rows[i + 1];
+  const r = h.steps[i];
   return itemBox(rowA(r), rowB(r), rowF(r, track), i, tx, w, wall, scale, len, upTo);
 }
 // Step i read back as one object: the row's key, kind, lane, ink and span keys, its start and
@@ -77,8 +77,8 @@ export function tlStep(h, i, tracks) {
 // The session as bars on three lanes, Input, Model and Tools, in a strip cw px wide. Two
 // scales: "clock", where a turn is as wide as it took (never under a minimum) and the idle
 // time between turns is folded into a fixed break, hatched; "steps", where every step gets
-// the same width. heads are the ledger's headings in order (each carries its turn's rows,
-// from ledgerTurn).
+// the same width. heads are the ledger's headings in order (each carries its turn's step rows,
+// h.steps, from ledgerTurn).
 // It is made in two parts. timelineGeo places the turns with the whole session fitted to the
 // strip (it walks the turns, not the steps). timelineLayout draws a view of that: zoomed z
 // times and x0 px in (in zoomed px), the steps only of the turns in view, and of those only a
@@ -210,12 +210,12 @@ export function bandRows(L, heads, lo, hi) {
     const len = stepN(h);
     for (let i = 0; i < len; i++) {
       // A row with no lane (an interrupted turn's Interrupted row) is no bar.
-      if (!laneKeys(h.rows[i + 1])) continue;
+      if (!laneKeys(h.steps[i])) continue;
       // Where a bar starts does not depend on its track.
       const bx = stepBox(h, i, 0, T[ti].x * z - x0, T[ti].w * z, wall, L.scale, len);
       if (!bx || bx.x0 < lo || bx.x0 > hi) continue;
-      if (a == null) a = h.rows[i + 1].key;
-      b = h.rows[i + 1].key;
+      if (a == null) a = h.steps[i].key;
+      b = h.steps[i].key;
     }
   }
   return a == null ? null : { a, b };
@@ -302,7 +302,7 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
         out.tracks.set(h, tk);
       }
       for (let i = 0; i < len; i++) {
-        const r = h.rows[i + 1];
+        const r = h.steps[i];
         const sk = laneKeys(r);
         if (!sk) continue;
         const b = stepBox(h, i, tk?.[i], x, w, walls[ti], scale, len);
@@ -445,13 +445,13 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
   const len = stepN(h);
   for (let i = 0; i < len; i++) {
     // A row with no lane (an interrupted turn's Interrupted row) is no bar.
-    if (!laneKeys(h.rows[i + 1]) || (lane && LEDGER_KINDS[h.rows[i + 1].lk]?.lane !== lane)) continue;
+    if (!laneKeys(h.steps[i]) || (lane && LEDGER_KINDS[h.steps[i].lk]?.lane !== lane)) continue;
     const b = stepBox(h, i, tk?.[i], tx, tw, wall, L.scale, len, upTo);
     if (!b) continue;
     const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
     if (d < bestD || (d === 0 && bestD === 0 && b.track === 1)) { best = i; bestD = d; }
   }
-  return { turn: h.key, key: best != null ? h.rows[best + 1].key : h.key };
+  return { turn: h.key, key: best != null ? h.steps[best].key : h.key };
 }
 // The timeline for a draw: the turns placed and the view laid out, each made again only when
 // what it depends on changes, and the running turn's growing bars at nowMs. prev: the last
