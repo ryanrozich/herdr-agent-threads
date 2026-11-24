@@ -1040,6 +1040,19 @@ test("a wheel or a jump to another turn made after an open card asks for its scr
   expect(seen).toEqual([["wheel", true, 0, true], ["jump", true, 0, true]]);
 }, 60000);
 
+// The whole reply's links (linkedSegs) are kept with the texts they were made for, which hold
+// the reply's segments. They are kept while the card is open, as the card's own record is, and
+// go when it closes: kept for the last 200 turns opened, they held a second copy of up to 200
+// replies in the pane's one VM.
+test("a closed card's whole-reply links are not kept: the link memo holds only open turns", async () => {
+  const { v, cx, keys } = await openLong(["See ACME-1 in the first made-up reply.", "See ACME-2 in the second made-up reply."], true);
+  for (const k of keys) { v.toggle(k, cx); settleRows(v, cx); }
+  const open = keys.map((k) => v.linkMemo?.has(k) ?? false);
+  v.toggle(keys[0], cx);
+  settleRows(v, cx);
+  expect([open, v.linkMemo?.has(keys[0]) ?? false, v.linkMemo?.has(keys[1]) ?? false]).toEqual([[true, true], false, true]);
+}, 60000);
+
 test("a stop after the probe's step, with one part left to measure, brings three light draws, not one a frame", async () => {
   const { v, cx } = await openLong(shortParas(4000));
   v.scrollTo = null;
