@@ -275,6 +275,22 @@ test("the light draw after a stopped open shows the parts already split, not onl
   expect([r.frames[0].ok, seen[1][0], seen[1][2] > 0, seen[1][1] > seen[0][1]]).toEqual([false, true, true, true]);
 }, 60000);
 
+// A light draw sizes no part longer than MD_MAX. Such a part is a run with no space or line
+// break to split at, and its height (wrapped) costs by its length: at twice the price one of
+// 200,000 characters alone ran past Herdr's time, so the light draw that sized it was stopped
+// too, and from the fifth frame on every draw was (84 in 30 s). A light draw gives it a rough
+// height at no cost and returns. Herdr's first draw is stopped here, so the light window comes
+// whatever the full draws do.
+test("a light draw sizes no part longer than MD_MAX: with one 200,000-character word at twice the price every light draw returns", async () => {
+  const { v, cx } = await openLong("z".repeat(200000));
+  v.probeDue = function () { this.probeLeft = 0; return []; };
+  const seen = [];
+  const r = costedFrames(v, cx, 3000, () => false, { stopAfter: 1, scale: 2, secs: 30, onFrame: () => seen.push(v.light) });
+  const lit = r.frames.filter((_, i) => seen[i]);
+  costLog("one 200,000-character word, the light draws at 2x", { ...r, lit: lit.length });
+  expect([r.frames[0].ok, lit.length > 0, lit.filter((f) => !f.ok).length, Math.max(...lit.map((f) => f.ms)) < 25, r.stops <= 7]).toEqual([false, true, 0, true, true]);
+}, 60000);
+
 // Stopped inside the rebuild the shape timer asked for (againOpen), as it builds the card: the
 // request stands, and the light draw after it builds the card again and splits on. With the
 // request given up before the build, the shape timer asks again only at the window's end.
