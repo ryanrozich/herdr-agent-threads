@@ -9458,7 +9458,9 @@ export default class Threads extends View {
       for (const t of s.turns) if (t.sender?.kind === "you" && !t.cmd) prompts++;
       let model = null;
       for (let i = s.turns.length - 1; i >= 0 && !model; i--) model = s.turns[i].model ?? null;
-      o.stats = { tools: st.tools, tokens: st.tokens, prompts, model, pins: this.pinStore.sessions[this.sessionKey(s)]?.pins?.length ?? 0 };
+      // The newest prompt once read, found here once for each version: it collapses the whole
+      // prompt's white space, and a pasted prompt can be 950 KB.
+      o.stats = { tools: st.tools, tokens: st.tokens, prompts, model, pins: this.pinStore.sessions[this.sessionKey(s)]?.pins?.length ?? 0, newest: s.loaded ? newestPrompt(s.turns) : null };
     }
     const h = harnessOfFile(s.file);
     const read = s.offset > 0 || s.loaded;
@@ -9468,7 +9470,7 @@ export default class Threads extends View {
       agent: h === "claude" ? "Claude Code" : this.agent().name, model: o.stats.model, start: s.turns[0]?.ts ?? null, active: o.mtime,
       working: Boolean(s.loaded && s.turns.length && this.isLive(s, si, s.turns.length - 1)),
       prompts: read ? o.stats.prompts : null, tools: read ? o.stats.tools : null, tokens: read ? o.stats.tokens : null, pins: o.stats.pins,
-      newest: (s.loaded ? newestPrompt(s.turns) : null) ?? o.newest, now: Date.now(),
+      newest: o.stats.newest ?? o.newest, now: Date.now(),
     };
     // Every figure holds its peak, as the bar does: a read started over part way (a stall,
     // a replaced file) counts up from the top again under what was already shown.
