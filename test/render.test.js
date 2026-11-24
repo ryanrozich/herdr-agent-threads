@@ -20331,8 +20331,10 @@ test("TRD-24: along the bottom a 1 px size change across any layout threshold co
     ["bottom", 339, 340, undefined, true], ["bottom", 419, 420, undefined, true], ["bottom", 499, 500, undefined, true],
     // The filter bar goes by the pane's width.
     ["bottom", 539, 540, undefined, true], ["bottom", 540, 539, undefined, true],
-    // The detail closed: the list is the pane, and 780 crosses nothing more than 779.
+    // The detail closed: the list is the pane, and 780 crosses nothing more than 779; at 700 only
+    // the side changes, which brings the detail's hint (and Enter) or takes it away.
     ["bottom", 779, 780, false, false], ["bottom", 419, 420, false, true],
+    ["bottom", 699, 700, false, true], ["bottom", 700, 699, false, true],
     ["bottom", 800, 801, undefined, false], ["bottom", 1459, 1460, undefined, false],
     // On the right only the compact widths (200 px with the 2 px frame) and the heading's icon
     // count, as before this change: its own thresholds (900, 420, 500) wait like any 1 px change,
@@ -20348,5 +20350,6 @@ test("TRD-24: along the bottom a 1 px size change across any layout threshold co
     expect([dock, from, to, open, b.paneW]).toEqual([dock, from, to, open, counts ? to : from]);
     if (counts && dock === "bottom") expect(b.trajReport().layout).toEqual(trajLayoutOf(to, b.detailOpen()));
     else if (dock === "bottom") expect(b.trajReport().layout).toEqual(before);
+    if (dock === "bottom") expect(b.footerHints().some(([k]) => k === "↵")).toBe(b.paneW >= 700);
   }
 });
