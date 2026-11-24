@@ -1193,6 +1193,13 @@ async function pricedDrain({ n = 120, rate = 0.001, after = 10 } = {}) {
     if (on && this.renderOpen) { clock += after; if (clock - this.renderAt > 50) throw STOP; }
     return o;
   };
+  // Fixed work in every draw ahead of the owed row (setAhead: in react, before payOwed).
+  let ahead = 0;
+  const react = v.react;
+  v.react = function (...a) {
+    if (on && this.renderOpen) clock += ahead;
+    return react.apply(this, a);
+  };
   go(() => false);
   await settle(v);
   v.scroll = { scroll_to_bottom() {}, scroll_to_item() {} };
@@ -1222,7 +1229,7 @@ async function pricedDrain({ n = 120, rate = 0.001, after = 10 } = {}) {
   const end = () => { performance.now = realPerf; };
   // A new chunk of the session read (its version), as an agent writing its reply makes.
   const grow = () => { v.sessions[0].version++; };
-  return { v, cx, step, turns: v.sessions[0].turns, restale, begin, end, grow, setBuild: (x) => { build = x; }, charge: (turn, ms) => extra.set(turn, ms) };
+  return { v, cx, step, turns: v.sessions[0].turns, restale, begin, end, grow, setBuild: (x) => { build = x; }, setAhead: (x) => { ahead = x; }, charge: (turn, ms) => extra.set(turn, ms) };
 }
 // Frames until nothing is left to reshape and the light frames after a stop are over.
 function untilDone(v, step, max = 900) {
@@ -1396,6 +1403,39 @@ test("shaping: a turn that costs more than its estimate is cut once with others,
     p.v.report();
     const d = state.shared["threads.debug"][p.v.terminal];
     expect([d.sharedCut, d.aloneCut, d.cutHeld > 0]).toEqual([1, 1, true]);
+  } finally { p.end(); }
+}, 300000);
+
+// The two-stop bound through the wait and the release: a text cut in company, then held by the
+// time spent until its release, cut alone, then held. The turn of the cost test (30,000
+// characters, 60 ms its estimate does not see) is cut in a run with others. From then on every
+// draw has 25 ms of fixed work ahead of it, so its run alone, expected at about 30 ms, would end
+// past the limit less the margin (cutWhereNow) and waits, owed and counted on screen. After a
+// second 64 draws refused it runs alone all the same, is cut (the 60 ms), and is held for its
+// text: two runs, two stops, and none after.
+test("shaping: a text cut in company waits through the time spent to its release, is cut alone, and is then held: two stops for the text", async () => {
+  const p = await pricedDrain();
+  try {
+    const big = p.turns.at(-3);
+    p.begin();
+    p.restale(big, 30000);
+    p.charge(big, 60);
+    const runs = [];
+    const reshape = p.v.reshape;
+    let k = 0;
+    p.v.reshape = function (...a) { if (a[0] === big && this.renderOpen) runs.push([k, Boolean(this.unitAlone)]); return reshape.apply(this, a); };
+    const frames = [];
+    for (; k < 1200; k++) {
+      const f = p.step();
+      frames.push(f);
+      if (f.stopped && runs.length === 1) p.setAhead(25);
+    }
+    const stops = frames.flatMap((f, i) => (f.stopped ? [i] : []));
+    expect(runs.map(([, a]) => a)).toEqual([false, true]);
+    expect(stops).toEqual(runs.map(([i]) => i));
+    // The run alone waited out the 5 s of plain draws and then a second 64 draws refused.
+    expect(runs[1][0] - runs[0][0]).toBeGreaterThanOrEqual(312 + 2 * 64 - 2);
+    expect([big.shapeMark?.alone, big.shapeMark?.cut, big.shapeKey ?? null, p.v.sharedCut, p.v.aloneCut, p.v.cutHeld > 0]).toEqual([true, true, null, 1, 1, true]);
   } finally { p.end(); }
 }, 300000);
 
