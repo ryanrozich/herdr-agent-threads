@@ -184,8 +184,11 @@ const FRAME_AIM_MS = 30;
 // it is expected to end in time (lineCut). The first one refused is reshaped first in the next
 // frame (lineOwed).
 const NEAR_CUT_MS = 35;
-// Herdr stops a draw at about 50 ms. No reshape of the drain starts that is expected to end
-// past it, less the rest of the draw after the walk (afterWalk) and HOST_MARGIN_MS.
+// Herdr stops a draw at about 50 ms (50 to 53 measured on the rig, so 50 is its low end). No
+// reshape of the drain starts whose expected end, with the rest of the draw after it (frameBase
+// less what of it has run), passes it less HOST_MARGIN_MS (fitsHost). The margin is for the
+// estimate, not measured: a rate a character averaged over turns of every size is off on a
+// turn unlike the rest, and frameBase is the last draw's.
 const HOST_MS = 50;
 const HOST_MARGIN_MS = 3;
 const SHAPE_MIN_MS = 2;
@@ -2946,7 +2949,8 @@ export default class Threads extends View {
   // are. False when one changes what the row is made of (pasted images), for a full rebuild.
   reshapeStale(status) {
     this.lineOn = true;
-    this.lineFirst = true;
+    // A row owed from the last frame and reshaped in this one (payOwed) was the draw's first.
+    this.lineFirst = this.owedAt !== this.renders;
     this.lineScreen = false;
     // Walks that began past the line, and the most frames in a row they did (debug report).
     if (this.renderOpen && this.lateFrame !== this.renders) {
@@ -2957,7 +2961,7 @@ export default class Threads extends View {
         this.lateRunMax = Math.max(this.lateRunMax ?? 0, this.lateRun);
       } else this.lateRun = 0;
     }
-    try { return this.reshapeLeft(status); } finally { this.lineOn = false; this.lineScreen = false; this.walkEnd = now(); }
+    try { return this.reshapeLeft(status); } finally { this.lineOn = false; this.lineScreen = false; }
   }
   reshapeLeft(status) {
     this.shapeStart();
@@ -3000,8 +3004,10 @@ export default class Threads extends View {
       done.add(i);
       if (r?.kind !== "turn" || !r.turn) continue;
       this.lineScreen = onScreen;
+      this.lineKey = r.key;
       const sh = this.shape(r.turn);
       this.lineScreen = false;
+      this.lineKey = null;
       if (this.shapeStale) {
         done.delete(i);
         if (k < nearN && this.pastLine()) this.nearCut = (this.nearCut ?? 0) + 1;
@@ -4755,7 +4761,7 @@ export default class Threads extends View {
       && f.int === Boolean(turn.interrupted) && f.by === turn.answeredBy && f.inn === turn.answeredIn && f.img === (turn.images?.length ?? 0) && f.ag === Boolean(turn.agent) && f.sv === this.sendersVer) return turn.shapeMemo;
     // Out of time and never shaped: no key to build (3 µs a turn, 30 ms a draw with 6,000 rows
     // waiting after renders were stopped through a whole load).
-    if (turn.shapeKey == null && ((this.shapeSpent ?? 0) > this.shapeMax() || this.lineCut(turn, text, live))) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return this.blankShape(); }
+    if (turn.shapeKey == null && ((this.shapeSpent ?? 0) > this.shapeMax() || this.lineCut(turn, text))) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return this.blankShape(); }
     const q = this.filterText();
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
@@ -4765,7 +4771,7 @@ export default class Threads extends View {
     // Out of time for this draw, or in the drain not expected to end in time (lineCut): the
     // shape it had (a row never shaped yet, as when agent messages are turned on, a blank
     // one-line row), and the next frame reshapes it.
-    if ((this.shapeSpent ?? 0) > this.shapeMax() || this.lineCut(turn, text, live)) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return turn.shapeMemo ?? this.blankShape(); }
+    if ((this.shapeSpent ?? 0) > this.shapeMax() || this.lineCut(turn, text)) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return turn.shapeMemo ?? this.blankShape(); }
     if (this.lineOn) this.lineFirst = false;
     const t0 = now();
     const sh = this.reshape(turn, live, q, P, why, text);
@@ -4774,11 +4780,10 @@ export default class Threads extends View {
     turn.shapeFast = fast;
     this.keepShape(turn);
     const dt = now() - t0;
-    // What it cost, for the next reshape's estimate (shapeCost): the turn's own, and in the
-    // drain (an owed row too), the time a character.
-    turn.shapeMs = dt;
+    // The time a character, for the next reshape's estimate (shapeCost): a fading average over
+    // every reshape.
     const chars = turn.prompt.length + text.length;
-    if ((this.lineOn || this.owedOn) && chars > 0) this.shapeRate = this.shapeRate == null ? dt / chars : this.shapeRate * 0.7 + (dt / chars) * 0.3;
+    if (chars > 0) this.shapeRate = this.shapeRate == null ? dt / chars : this.shapeRate * 0.7 + (dt / chars) * 0.3;
     this.shapeSpent = (this.shapeSpent ?? 0) + dt;
     return sh;
   }
@@ -4863,47 +4868,52 @@ export default class Threads extends View {
   // The render that is drawing began more than NEAR_CUT_MS ago, in the drain (reshapeStale,
   // lineOn). A rows build has its own time (buildMax).
   pastLine() { return Boolean(this.lineOn && this.renderOpen) && now() - (this.renderAt ?? 0) > NEAR_CUT_MS; }
-  // A reshape's expected cost: the turn's own last one (shapeMs), which the same text costs
-  // again at about the same, and its characters at the drain's recent time a character
-  // (shapeRate), the larger when both are known (a turn that grew since). Null when neither is.
-  shapeCost(turn, text) {
-    const byRate = this.shapeRate != null ? (turn.prompt.length + text.length) * this.shapeRate : null;
-    if (turn.shapeMs == null) return byRate;
-    return byRate == null ? turn.shapeMs : Math.max(turn.shapeMs, byRate);
+  // A reshape's expected cost: its characters at the time a character the reshapes so far took
+  // (shapeRate). Null before any reshape was timed.
+  shapeCost(turn, text) { return this.shapeRate != null ? (turn.prompt.length + text.length) * this.shapeRate : null; }
+  // Whether a reshape expected to cost est, started now, ends in time: the time so far, est and
+  // the rest of the draw (the last draw's cost apart from shaping and building, frameBase, less
+  // what of it this draw has run) within Herdr's stop less the margin. An unknown cost does not.
+  fitsHost(est) {
+    if (est == null) return false;
+    const t = now() - (this.renderAt ?? 0);
+    const ran = t - Math.max(0, (this.shapeSpent ?? 0) - (this.shapeAtRender ?? 0)) - (this.buildSpent ?? 0);
+    return t + est + Math.max(0, (this.frameBase ?? 0) - ran) + HOST_MARGIN_MS <= HOST_MS;
   }
-  // Whether a reshape expected to cost est, started now, ends in time: before Herdr's stop,
-  // less the rest of the draw after the walk and a margin.
-  fitsHost(est) { return est != null && now() - (this.renderAt ?? 0) + est + (this.afterWalk ?? 0) + HOST_MARGIN_MS <= HOST_MS; }
   // In the drain: true when a reshape of turn may not start now. One expected to end past
-  // Herdr's stop never starts. Past NEAR_CUT_MS only the draw's first may, of a row on screen
-  // (lineScreen: the walk's rows in view, not shapeInView's turns, so not a running turn off
-  // screen), if its cost is known and fits. The first row on screen refused, in the walk's
-  // order (the rows drawn, nearest first), is owed: the next frame reshapes it before its
-  // other work (payOwed). Not one that could fit in no draw.
-  lineCut(turn, text, live) {
+  // Herdr's stop never starts (fitsHost); before any reshape was timed, one may, before the
+  // line, as before. Past NEAR_CUT_MS only the draw's first of a row on screen may (lineScreen:
+  // the walk's rows in view, not shapeInView's turns, so not a running turn off screen), if it
+  // fits. The draw's first row on screen refused, in the walk's order (the rows drawn, nearest
+  // first), is owed by its key (lineKey): the next frame tries it before the rows key and the
+  // running turn, behind the same check, while the view has not moved (payOwed).
+  lineCut(turn, text) {
     if (!this.lineOn || !this.renderOpen) return false;
     const est = this.shapeCost(turn, text);
     const fits = this.fitsHost(est);
     const late = this.pastLine();
     if (late ? this.lineFirst && this.lineScreen && fits : est == null || fits) return false;
     if (!this.lineScreen) return true;
-    if (this.lineFirst && !this.lineOwed && !(est != null && est + (this.afterWalk ?? 0) + HOST_MARGIN_MS > HOST_MS)) this.lineOwed = { turn, live };
+    if (!this.lineOwed && this.lineKey != null) this.lineOwed = { key: this.lineKey, view: this.viewRange?.[0], wheel: this.wheelN ?? 0 };
     // Past the line the draw's first is spent once a row on screen is refused: the walk goes on
     // with the rows drawn (memo hits) and stops at the first row off screen.
     if (late) this.lineFirst = false;
     return true;
   }
-  // The row the drain owed from the last frame: reshaped at the start of this one, before the
-  // work ahead of the walk, if it fits there. It costs what a draw's first reshape may on main.
+  // The row on screen the drain's line refused last frame: reshaped now, ahead of the rows key
+  // and the running turn, if the view has not moved since (no wheel, no jump waiting, the same
+  // top row) and its cost with the rest of the draw fits (fitsHost: Herdr stops on the draw's
+  // total, in either order).
   payOwed() {
     const o = this.lineOwed;
     this.lineOwed = null;
-    if (!o || !this.renderOpen) return;
-    const est = this.shapeCost(o.turn, this.replyText(o.turn));
-    if (est != null && !this.fitsHost(est)) return;
+    if (!o || !this.renderOpen || o.view !== this.viewRange?.[0] || o.wheel !== (this.wheelN ?? 0) || this.scrollTo) return;
+    const i = this.baseIndex?.get(o.key);
+    const turn = i == null ? null : this.baseRows[i]?.turn;
+    if (!turn || !this.fitsHost(this.shapeCost(turn, this.replyText(turn)))) return;
     this.owedPaid = (this.owedPaid ?? 0) + 1;
-    this.owedOn = true;
-    try { this.shape(o.turn, o.live); } finally { this.owedOn = false; }
+    this.owedAt = this.renders;
+    this.shape(turn);
   }
   reshape(turn, live, q, P, why, text) {
     const cmd = commandParts(turn);
@@ -7313,6 +7323,7 @@ export default class Threads extends View {
     // as before.
     if (!this.rowJob) this.shapeSpent = 0;
     const spent = this.shapeSpent ?? 0;
+    this.shapeAtRender = spent;
     this.buildSpent = 0;
     this.shapeFrame = (this.renders ?? 0) + 1;
     this.renderOpen = true;
@@ -7327,8 +7338,6 @@ export default class Threads extends View {
         this.rewrap = null;
       }
     }
-    // What the draw cost after the drain's walk, for the next walk's fit (fitsHost).
-    if ((this.walkEnd ?? -1) >= this.renderAt) this.afterWalk = Math.max(0, now() - this.walkEnd);
     // The draw's cost apart from reshaping and building rows sets the next draw's time for them.
     this.frameBase = Math.max(0, now() - this.renderAt - Math.max(0, (this.shapeSpent ?? 0) - spent) - (this.buildSpent ?? 0));
     return out;
@@ -7359,15 +7368,15 @@ export default class Threads extends View {
     this.monoFont = null;
     if (this.stickStep) this.applyStick();
     this.fitColumn();
-    // A row the drain's line refused last frame, while the draw is young (the column's width
-    // first, which its shape needs).
-    if (!light) this.payOwed();
     // A column held through a drag (fitColumn): a draw once the pane has been still.
     if (this.widthHeld && !this.holdNext) {
       this.holdNext = true;
       cx.timer.after(Math.max(0, REWRAP_PAUSE_MS - (Date.now() - (this.sizeAt ?? 0))) + 5, (cx) => { this.holdNext = false; cx.notify(); });
     }
     this.react(cx);
+    // A row on screen the drain's line refused last frame, while the draw is young: after the
+    // column's width and the settings (react), which its shape keys on.
+    if (!light) this.payOwed();
     // Here and not in rows(): the timing report changes the selection for a moment.
     if (this.pinVisit && this.sel !== this.pinVisit) this.pinVisit = null;
     if (this.pinResume && this.sel !== this.pinResume.key) this.pinResume = null;
