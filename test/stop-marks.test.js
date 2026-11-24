@@ -115,3 +115,38 @@ test("a render Herdr stops after the probe asked for its next draw, with that ti
   cx.notifyHook = null;
   expect([stopped, Boolean(v.probeNext), v.probeLeft ?? 0]).toEqual([true, false, 0]);
 }, 120000);
+
+// Rows left with their old shape are reshaped in a later draw, asked for by a timer (shapeNext).
+// A render asks for it and Herdr stops that render, losing the timer. The render after a stopped
+// one clears the mark and asks again, so the rows are reshaped once the light draws are over;
+// with the mark left set, no draw asked again and the rows kept their old shape.
+test("a render Herdr stops after the shaping asked for its next draw, with that timer lost, leaves no mark: the rows are reshaped", async () => {
+  const { v, cx } = await scripted(events(40));
+  v.debug = false;
+  v.width = 560; v.rootH = 1100; v.listH = 1000;
+  for (let k = 0; k < 400; k++) { v.render(cx); cx.flush(0); if (!v.rowJob && !v.staleRows?.length && !(v.shapeLeft > 0)) break; }
+  cx.timers = [];
+  // A row left with its old shape, as a build out of time leaves it, and the render that asks.
+  const i = v.baseRows.findIndex((x) => x.kind === "turn" && !x.live);
+  v.staleRows = [i];
+  v.render(cx);
+  const asked = [v.shapeNext, cx.timers.length];
+  // Herdr stopped that render after it asked: its timer is lost and the render left open.
+  cx.timers = [];
+  v.renderOpen = true;
+  v.render(cx);
+  // Its own timer again, besides the light window's.
+  const again = [v.shapeNext, cx.timers.length > 1];
+  // The light window passes; then a draw only when the pane asks for one.
+  v.cutUntil = 0;
+  let notified = 0;
+  cx.notifyHook = () => { notified++; };
+  for (let k = 0; k < 50; k++) {
+    const n0 = notified;
+    cx.flush(5000);
+    if (notified === n0) break;
+    v.render(cx);
+  }
+  cx.notifyHook = null;
+  expect([i >= 0, ...asked, ...again, v.staleRows?.length ?? 0, Boolean(v.shapeNext)]).toEqual([true, true, 1, true, true, 0, false]);
+}, 60000);
