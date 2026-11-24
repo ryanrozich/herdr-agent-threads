@@ -671,6 +671,20 @@ test("an open reply's links follow a change of the repository or its owner", asy
   }
 }, 60000);
 
+// A prose segment over MD_MAX takes none of the reply's 25 links (linkedSegs): it is shown in
+// parts, each linked on its own (partLinks), and the pass over it whole was never drawn. On the
+// main branch that pass still counted its links, so the segments after it lost theirs: here a
+// 7 KB run of sentences with an id each, a code fence, then three ids, whose row had 0 links.
+test("a prose segment over MD_MAX takes none of the reply's 25 links: the segment after it is linked", async () => {
+  const run = Array.from({ length: 120 }, (_, i) => `Sentence ${i + 1} of the route notes names the depot order ACME-${i + 1}.`).join(" ");
+  const { v, cx, key } = await openLong(`${run}\n\n\`\`\`\nroute check\n\`\`\`\n\nACME-901, ACME-902 and ACME-903 are next.`);
+  v.probeDue = function () { this.probeLeft = 0; return []; };
+  const r = costedFrames(v, cx, 400, await cardDone(v, key));
+  const parts = v.baseRows.filter((x) => x.kind === "md" && x.key.startsWith(`md:${key}:0.`));
+  const last = v.baseRows.find((x) => x.key === `md:${key}:2`);
+  expect([run.length > 6800, r.settled > 0, parts.length > 1, parts.every((x) => x.links > 0), last?.links]).toEqual([true, true, true, true, 3]);
+}, 60000);
+
 test("an open reply whose text changes keeps the links of the parts it still has and links only the new one", async () => {
   const base = shortParas(980);
   const { v, cx, key } = await openLong(base);
