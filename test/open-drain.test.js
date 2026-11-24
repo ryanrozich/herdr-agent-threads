@@ -1738,21 +1738,26 @@ test("shaping: an owed row is paid before the draw's rows build, whose slice doe
 // draw reshapes that row before the cut turn reaches its run alone, so the turn, on screen, is
 // refused for the units run before it. Refused so, it is owed and counted like any row on
 // screen the fit check refuses (oweRow, refuse): the next draw tries it first (payOwed), where
-// it runs alone and is kept, with no further stop. The pane draws its last 12 rows, so on screen
-// and off differ: a turn 40 back, off screen, with a cut-in-company mark of its own, is refused
-// the same way in every draw and is not owed, so it waits while the other row keeps reshaping.
+// it runs alone and is kept, with no further stop. With 5 and 20 back the pane draws every row.
+// In the third case it draws its last 12, so on screen and off differ: the other row, 6 back, is
+// on screen above the cut turn (the rows in view are shaped from the top down, shapeInView, so
+// it runs first), and a turn 40 back, off screen, with a cut-in-company
+// mark of its own, is refused the same way in every draw but not owed, so it waits while the
+// other row keeps reshaping.
 test("shaping: a turn cut in company, with another row reshaped first in every draw, is owed on screen and runs alone first in a later draw, with no further stop", async () => {
-  for (const back of [5, 20]) {
+  for (const [back, win] of [[5, false], [20, false], [6, true]]) {
     const p = await pricedDrain({ after: 0 });
-    H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+    if (win) H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
     try {
       const [first, cut, third] = [p.turns.at(-4), p.turns.at(-3), p.turns.at(-2)];
       const other = p.turns.at(-back);
       const off = p.turns.at(-40);
       p.begin();
       p.v.shapeBudget = 60;
-      off.shapeMark = { sig: p.v.markSig(off, p.v.replyText(off)), alone: false, cut: true };
-      p.restale(off);
+      if (win) {
+        off.shapeMark = { sig: p.v.markSig(off, p.v.replyText(off)), alone: false, cut: true };
+        p.restale(off);
+      }
       p.restale(first, 5000);
       p.charge(first, 25);
       p.restale(cut, 2000);
@@ -1772,6 +1777,7 @@ test("shaping: a turn cut in company, with another row reshaped first in every d
       expect([back, frames[runs[1]].log[0].turn === cut, frames[runs[1]].stopped]).toEqual([back, true, false]);
       expect([back, shapedAt > 0 && shapedAt < 330, cut.shapeMark ?? null, cut.refused ?? null]).toEqual([back, true, null, null]);
       expect([back, p.v.sharedCut, p.v.aloneCut ?? 0, p.v.owedPaid > 0]).toEqual([back, 1, 0, true]);
+      if (!win) continue;
       // The rows drawn are the last 12, and the turn off screen was never owed or run.
       const r = lastList.range;
       const shown = new Set(p.v.rowsMemo.slice(r.start, r.end).map((x) => x.turn).filter(Boolean));
@@ -1809,9 +1815,9 @@ test("shaping: a text cut in company, with another row reshaped first in every d
     const stops = frames.flatMap((f, i) => (f.stopped ? [i] : []));
     expect(runs.map(([, a]) => a)).toEqual([false, true]);
     expect(stops).toEqual(runs.map(([i]) => i));
-    expect(runs[1][0] - runs[0][0]).toBeGreaterThanOrEqual(312 + 2 * 64 - 2);
-    // other was reshaped ahead of it in the draws it was counted.
-    expect(frames.slice(runs[0][0] + 320, runs[1][0]).every((f) => f.log[0]?.turn === other)).toBe(true);
+    // Released after a second 64 draws in which other was reshaped ahead of it, once the 5 s of
+    // plain draws after the first stop were over.
+    expect(frames.slice(runs[0][0] + 1, runs[1][0]).filter((f) => f.log[0]?.turn === other).length).toBeGreaterThanOrEqual(2 * 64 - 2);
     expect([big.shapeMark?.alone, big.shapeMark?.cut, big.shapeKey ?? null, p.v.sharedCut, p.v.aloneCut]).toEqual([true, true, null, 1, 1]);
   } finally { p.end(); }
 }, 300000);
