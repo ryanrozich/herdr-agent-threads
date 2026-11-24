@@ -1,5 +1,6 @@
 // bun test: the Trajectory's timeline as data (timeline.js, TRD-23 part 1): each heading's steps
-// as one plain number array, three a step (ledger.js ledgerTurn), the turns placed on a strip (timelineGeo), a view of them
+// read from its turn's own rows (ledger.js ledgerTurn keeps no array a step), their tracks
+// worked out in the layout pass, the turns placed on a strip (timelineGeo), a view of them
 // (timelineLayout), the zoom and pan kept inside the session, a press found on a bar
 // (timelineHit), the torn end, and a running turn whose bars grow without the rest moving
 // (timelineModel, tlGrow). Nothing here draws. The turns are made up in the reader's shape
@@ -11,7 +12,7 @@ import * as TL from "../mods/agent-threads/timeline.js";
 
 const {
   TL_LANES, TL_ROOM_MIN, TL_ROOM_GROW, liveRoom, timelineGeo, timelineLayout, timelineHit, itemBox, tlMaxZoom, tlClamp, tlZoomAt, tlBox, bandRows,
-  tornPoints, polyRows, timelineModel, tlGrow, tlStep,
+  tornPoints, polyRows, timelineModel, tlGrow, tlStep, tlLen, tlRow, TL_MADE,
 } = TL;
 
 const T0 = Date.parse("2026-11-01T09:00:00Z");
@@ -35,28 +36,31 @@ function turn(n, steps, o = {}) {
 const S = { agents: new Map(), agentIds: new Map() };
 const head = (t, live = false, s = S) => ledgerTurn(s, t, 0, live).rows[0];
 // A heading's steps read back, one object each, for the tests only (the pane keeps none).
-const stepsOf = (h) => h.stepRows.map((_, i) => tlStep(h, i));
+const stepsOf = (h) => Array.from({ length: tlLen(h) }, (_, i) => tlStep(h, i));
+// A heading's step rows: its turn's rows after the heading.
+const rowsOf = (h) => h.rows.slice(1);
 
-test("timeline steps: a heading keeps its steps' times as one plain number array, three a step, made in the turn's own pass", () => {
+test("timeline steps: a heading keeps no array of its own for its steps: they are its turn's rows, read back with their times and flags", () => {
   const { rows } = ledgerTurn(S, turn(3, ["Looking first.", [["Read", "src/a.ts", 2000, 2300], ["Bash", "bun test", 2100, 45000, true]]]), 0);
   const [h, ...steps] = rows;
   expect(TL_LANES).toEqual(["input", "model", "tools"]);
-  // No object per step: the heading holds its step rows (the same rows, in order) and tl, a
-  // plain array of [a, b, flags] a step: ms from the turn's start, NaN for none; flags 1 for
-  // the second track, 2 for an unfinished call, 4 for a failed one.
+  // No object and no number array per step: the heading holds the turn's own rows, the array
+  // ledgerTurn returns, heading first; a step's times and flags are read from its row.
   expect(h.items).toBe(undefined);
-  expect(h.stepRows.length).toBe(steps.length);
-  expect(h.stepRows.every((r, i) => r === steps[i])).toBe(true);
-  expect(Array.isArray(h.tl)).toBe(true);
-  expect(h.tl.length).toBe(3 * steps.length);
-  expect(h.tl.every((x) => typeof x === "number")).toBe(true);
+  expect(h.tl).toBe(undefined);
+  expect(h.stepRows).toBe(undefined);
+  expect(h.rows).toBe(rows);
+  expect(tlLen(h)).toBe(steps.length);
+  expect(steps.every((r, i) => tlRow(h, i) === r)).toBe(true);
   const at = (lk) => steps.findIndex((r) => r.lk === lk);
-  const three = (i) => h.tl.slice(3 * i, 3 * i + 3);
-  expect(three(at("you"))).toEqual([0, Number.NaN, 0]);
-  expect(three(at("text"))).toEqual([1000, Number.NaN, 0]);
-  expect(three(at("tool"))).toEqual([2000, 2300, 0]);
+  // [a, b, flags]: ms from the turn's start, null for none; flags 1 for the second track, 2
+  // for an unfinished call, 4 for a failed one.
+  const three = (h, i) => { const st = tlStep(h, i); return [st.a, st.b, (st.track ? 1 : 0) | (st.open ? 2 : 0) | (st.failed ? 4 : 0)]; };
+  expect(three(h, at("you"))).toEqual([0, null, 0]);
+  expect(three(h, at("text"))).toEqual([1000, null, 0]);
+  expect(three(h, at("tool"))).toEqual([2000, 2300, 0]);
   // Bash starts while Read runs: the second track, drawn half height; and it failed.
-  expect(three(at("failed"))).toEqual([2100, 45000, 1 | 4]);
+  expect(three(h, at("failed"))).toEqual([2100, 45000, 1 | 4]);
   // Read back with the row's key, kind, lane and ink.
   expect(tlStep(h, at("failed"))).toMatchObject({ i: at("failed"), key: steps[at("failed")].key, lk: "failed", lane: "tools", ink: "failed", a: 2100, b: 45000, track: 1, open: false, failed: true });
   expect(tlStep(h, at("you"))).toMatchObject({ lane: "input", a: 0, b: null, track: 0 });
@@ -66,11 +70,11 @@ test("timeline steps: a heading keeps its steps' times as one plain number array
   expect(tlStep(h, at("tool")).sk).toEqual(["tools|tools|0", "tools|tools|1"]);
   // An interrupted turn's Interrupted row is no bar.
   const sh = head(turn(5, [[["Read", "a", 2000, 2500]]], { interrupted: true, reply: null, end: T0 + 40000 }));
-  expect(tlStep(sh, sh.stepRows.findIndex((r) => r.lk === "stop"))).toMatchObject({ lane: null, sk: null });
+  expect(tlStep(sh, rowsOf(sh).findIndex((r) => r.lk === "stop"))).toMatchObject({ lane: null, sk: null });
   // A call with no result yet: flag 2.
   const oh = head(turn(6, [[["Bash", "sleep", 6000, null]]], { done: false, end: null, reply: null }), true);
-  const oi = oh.stepRows.findIndex((r) => r.open);
-  expect(oh.tl.slice(3 * oi, 3 * oi + 3)).toEqual([6000, Number.NaN, 2]);
+  const oi = rowsOf(oh).findIndex((r) => r.open);
+  expect(three(oh, oi)).toEqual([6000, null, 2]);
   expect(tlStep(oh, oi).open).toBe(true);
 });
 
@@ -98,7 +102,7 @@ test("timeline: a turn as wide as it took, a break between turns, bars on Input,
   expect(timelineHit(L, [a, b], L.turns[1].x + L.turns[1].w - 1, "input").key).toBe(b.key);
   // Steps: every step the same width.
   const St = timelineLayout([a, b], 600, "steps");
-  expect(St.turns[0].w / a.stepRows.length).toBeCloseTo(St.turns[1].w / b.stepRows.length, 6);
+  expect(St.turns[0].w / tlLen(a)).toBeCloseTo(St.turns[1].w / tlLen(b), 6);
   expect(St.ticks.every((t) => t.step)).toBe(true);
 });
 
@@ -163,10 +167,10 @@ test("torn end on the timeline: an unfinished call's span is torn and never unde
   expect(torn.length).toBe(1);
   expect(torn[0][1]).toBeCloseTo(L.turns[0].w, 3);
   // A call started at the turn's very end: 6 px, not 3.
-  const box = itemBox([99990, Number.NaN, 2], 0, 0, 400, 100000, "clock", 4);
+  const box = itemBox(99990, Number.NaN, 2, 0, 0, 400, 100000, "clock", 4);
   expect(box.x1 - box.x0).toBe(6);
   expect(box.open).toBe(true);
-  expect(itemBox([99990, Number.NaN, 0], 0, 0, 400, 100000, "clock", 4).x1 - 394).toBeLessThanOrEqual(6);
+  expect(itemBox(99990, Number.NaN, 0, 0, 0, 400, 100000, "clock", 4).x1 - 394).toBeLessThanOrEqual(6);
   const done = head(turn(6, [[["Read", "a", 2000, 2500]]]));
   expect([...timelineLayout([done], 400, "clock").spans.values()].flat().some((sp) => sp[2])).toBe(false);
 });
@@ -237,7 +241,7 @@ test("timeline running turn: only the last turn moves; the strip keeps its place
 
 test("timeline view: zoom from 1 to four steps across, the pan kept inside the session, a zoom about a point, a turn's box", () => {
   const heads = Array.from({ length: 10 }, (_, i) => head(turn(i + 1, ["a", [["Read", "x", 2000, 3000], ["Bash", "y", 4000, 9000]]])));
-  const steps = heads.reduce((n, h) => n + h.stepRows.length, 0);
+  const steps = heads.reduce((n, h) => n + tlLen(h), 0);
   const geo = timelineGeo(heads, 500, "clock");
   expect(geo.steps).toBe(steps);
   expect(tlMaxZoom(geo)).toBe(steps / 4);
@@ -263,14 +267,14 @@ test("timeline view: zoom from 1 to four steps across, the pan kept inside the s
 test("timeline band: the first and last steps whose bars start inside a band, in order; none when no bar starts there", () => {
   const heads = [1, 2, 3].map((n) => head(turn(n, ["a", [["Read", "x", 2000, 3000], ["Bash", "y", 30000, 40000]]])));
   const L = timelineLayout(heads, 600, "clock");
-  const box = (ti, it) => itemBox(heads[ti].tl, it.i, L.turns[ti].x, L.turns[ti].w, L.geo.walls[ti], "clock", heads[ti].stepRows.length);
+  const box = (ti, it) => itemBox(it.a ?? Number.NaN, it.b ?? Number.NaN, 0, it.i, L.turns[ti].x, L.turns[ti].w, L.geo.walls[ti], "clock", tlLen(heads[ti]));
   const read2 = stepsOf(heads[1]).find((it) => it.lk === "tool");
   const bash2 = stepsOf(heads[1]).filter((it) => it.lk === "tool")[1];
   const b = bandRows(L, heads, box(1, read2).x0 - 0.5, box(1, bash2).x0 + 0.5);
   expect(b).toEqual({ a: read2.key, b: bash2.key });
   const across = bandRows(L, heads, L.turns[0].x, L.turns[2].x + L.turns[2].w);
-  expect(across.a).toBe(heads[0].stepRows[0].key);
-  expect(across.b).toBe(heads[2].stepRows.at(-1).key);
+  expect(across.a).toBe(tlRow(heads[0], 0).key);
+  expect(across.b).toBe(heads[2].rows.at(-1).key);
   // A band inside the break between turns holds nothing.
   expect(bandRows(L, heads, L.gaps[0][0] + 1, L.gaps[0][1] - 1)).toBe(null);
   expect(bandRows(L, heads, 10, 5)).toBe(null);
@@ -334,11 +338,11 @@ test("timeline bar starts: a step that starts before its turn does is drawn from
   const read = L.spans.get("tools|tools|0").at(-1);
   expect(read[0]).toBe(L.turns[1].x);
   expect(read[1]).toBeCloseTo(L.turns[1].x + (1000 / 60000) * L.turns[1].w, 6);
-  // Straight from tl: a turn 100 px in, 100 px wide, 10 s long.
-  expect(itemBox([-5000, 1000, 0], 0, 100, 100, 10000, "clock", 1)).toEqual({ x0: 100, x1: 110, track: 0 });
-  expect(itemBox([-5000, -4000, 0], 0, 100, 100, 10000, "clock", 1)).toEqual({ x0: 100, x1: 103, track: 0 });
+  // Straight from a step's numbers: a turn 100 px in, 100 px wide, 10 s long.
+  expect(itemBox(-5000, 1000, 0, 0, 100, 100, 10000, "clock", 1)).toEqual({ x0: 100, x1: 110, track: 0 });
+  expect(itemBox(-5000, -4000, 0, 0, 100, 100, 10000, "clock", 1)).toEqual({ x0: 100, x1: 103, track: 0 });
   // A turn narrower than a bar's least width: the bar still ends at the turn's end.
-  expect(itemBox([0, Number.NaN, 2], 0, 100, 4, 10000, "clock", 1)).toEqual({ x0: 98, x1: 104, track: 0, open: true });
+  expect(itemBox(0, Number.NaN, 2, 0, 100, 4, 10000, "clock", 1)).toEqual({ x0: 98, x1: 104, track: 0, open: true });
 });
 
 test("timeline running turn: a room for a time with no bound is the least room, and the strip stays placed", () => {
@@ -353,13 +357,65 @@ test("timeline running turn: a room for a time with no bound is the least room, 
 test("torn end by steps: an unfinished call in a turn with no times is torn too; on the clock it is no bar", () => {
   // No step has a time, so the turn is not timed; its last call, in the running turn, has no result yet.
   const h = head(turn(9, ["Looking.", [["Bash", "sleep", null, null]]], { untimed: true, done: false, end: null, reply: null }), true);
-  const i = h.stepRows.findIndex((r) => r.open);
+  const i = rowsOf(h).findIndex((r) => r.open);
   expect(i).toBeGreaterThan(-1);
-  expect(Array.from(h.tl.slice(3 * i, 3 * i + 3))).toEqual([Number.NaN, Number.NaN, 2]);
-  expect(tlStep(h, i)).toMatchObject({ a: null, b: null, open: true });
+  expect(tlStep(h, i)).toMatchObject({ a: null, b: null, track: 0, open: true, failed: false });
   const St = timelineLayout([h], 400, "steps");
   expect(St.spans.get("tools|tools|0").filter((sp) => sp[2] === 1).length).toBe(1);
   const Cl = timelineLayout([h], 400, "clock", Date.now());
   expect(Cl.spans.has("tools|tools|0")).toBe(false);
   expect(Cl.grow).toEqual([]);
+});
+
+test("timeline tracks: worked out in the layout pass, only for a turn drawn wide enough for its bars, once for a finished turn, kept only for the turns drawn", () => {
+  // Turn 1: Grep starts while Read runs (the second track). Turn 2: one call.
+  const a = head(turn(1, [[["Read", "y", 6000, 60000], ["Grep", "z", 10000, 20000]]]));
+  const b = head(turn(2, [[["Bash", "x", 2000, 3000]]]));
+  let p = TL_MADE.tracks;
+  const L = timelineLayout([a, b], 600, "clock");
+  expect(TL_MADE.tracks - p).toBe(2);
+  // Kept with the layout, by heading: a turn with a call on the second track keeps one number a
+  // step, one with none keeps nothing.
+  const kept = [...L.tracks.keys()];
+  expect(kept.length).toBe(2);
+  expect(kept[0]).toBe(a);
+  expect(kept[1]).toBe(b);
+  expect(L.tracks.get(a)).toEqual([0, 0, 1, 0]);
+  expect(L.tracks.get(b)).toBe(null);
+  // A press reads them from the layout: no pass.
+  p = TL_MADE.tracks;
+  const [grep] = L.spans.get("tools|tools|1");
+  expect(timelineHit(L, [a, b], (grep[0] + grep[1]) / 2, "tools").key).toBe(stepsOf(a).find((it) => it.track === 1).key);
+  expect(TL_MADE.tracks - p).toBe(0);
+  // The ledger built again (a new heads array): the finished turns keep their headings, so only
+  // the running turn, whose heading is new, is worked out again; a draw with nothing new, none.
+  const t3 = (calls) => head(turn(3, [calls], { done: false, end: null, reply: null }), true);
+  const live = t3([["Bash", "bun run e2e", 3000, null]]);
+  p = TL_MADE.tracks;
+  const m1 = timelineModel(null, [a, b, live], 600, "clock", live.t0 + 5000);
+  expect(TL_MADE.tracks - p).toBe(3);
+  const live2 = t3([["Bash", "bun run e2e", 3000, null], ["Read", "log", 4000, 4500]]);
+  p = TL_MADE.tracks;
+  const m2 = timelineModel(m1, [a, b, live2], 600, "clock", live.t0 + 6000);
+  expect(m2.L).not.toBe(m1.L);
+  expect(TL_MADE.tracks - p).toBe(1);
+  expect(m2.L.tracks.get(live2)).toEqual([0, 0, 1]);
+  p = TL_MADE.tracks;
+  timelineModel(m2, m2.heads, 600, "clock", live.t0 + 6500);
+  expect(TL_MADE.tracks - p).toBe(0);
+  // 6,000 turns at Fit, each under 2 px: drawn as one span a lane, so no pass and none kept.
+  const one = head(turn(4, ["a", [["Bash", "x", 1000, 2000, true]]]));
+  const many = Array.from({ length: 6000 }, (_, i) => ({ ...one, key: `0:${i + 1}`, n: i + 1, t0: T0 + i * 120000 }));
+  p = TL_MADE.tracks;
+  const big = timelineLayout(many, 500, "clock");
+  expect(TL_MADE.tracks - p).toBe(0);
+  expect(big.tracks.size).toBe(0);
+  // Zoomed in: only the turns laid out are worked out and kept.
+  const ten = Array.from({ length: 10 }, (_, i) => head(turn(i + 1, ["a", [["Read", "x", 2000, 3000], ["Bash", "y", 2500, 9000]]])));
+  const g = timelineGeo(ten, 500, "clock");
+  p = TL_MADE.tracks;
+  const Z = timelineLayout(ten, 500, "clock", Date.now(), { z: 4, x0: 800 }, g);
+  expect(Z.tracks.size).toBe(Z.to - Z.from + 1);
+  expect(Z.tracks.size).toBeLessThan(10);
+  expect(TL_MADE.tracks - p).toBe(Z.tracks.size);
 });
