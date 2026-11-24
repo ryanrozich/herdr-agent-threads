@@ -177,6 +177,10 @@ const CUT_WATCH_MS = 250;
 // left of it, each down to its floor, so a machine where the rest of a draw is slow does
 // less of both per frame and stays clear of Herdr's 50 ms stop.
 const FRAME_AIM_MS = 30;
+// Past this long since a render began no reshape starts in it (pastLine), not even for a row
+// on screen: a draw that started late, with time left of its shaping budget, ran into Herdr's
+// 50 ms stop with one more pasted prompt (9 ms at 45 KB, 40 ms at 200 KB).
+const NEAR_CUT_MS = 35;
 const SHAPE_MIN_MS = 2;
 const BUILD_MIN_MS = 3;
 const SCROLL_WAIT_MS = 2000;
@@ -1124,6 +1128,8 @@ export default class Threads extends View {
       traj: this.trajReport(),
       // Each fall back to px of the row with the Trajectory open (rowFell), and its reason.
       rowFalls: { n: this.rowFallN ?? 0, last: this.rowFalls ?? [] },
+      // Rows on screen left as they were because the draw was past NEAR_CUT_MS (pastLine).
+      nearCut: this.nearCut ?? 0,
       landed: this.landed ? { key: this.landed.key, j: this.landed.j, y: this.landed.y, lift: this.landed.lift ?? 0 } : null,
       outline: this.outlined(), outlineBack: this.outlineBack ? { sel: this.outlineBack.sel ?? null, top: this.outlineBack.top ?? null } : null,
       header: this.headerText(), state: this.agentStateNow()?.word ?? null, unseen: this.unseen, bottomShown: this.bottomShown, pill: this.pillShown(), follow: Boolean(this.follow), range: this.lastRange ?? null, keysOpen: this.keysOpen,
@@ -2929,6 +2935,10 @@ export default class Threads extends View {
   // Closed rows built with an old or blank shape (out of SHAPE_MS) get their shape where they
   // are. False when one changes what the row is made of (pasted images), for a full rebuild.
   reshapeStale(status) {
+    this.lineOn = true;
+    try { return this.reshapeLeft(status); } finally { this.lineOn = false; }
+  }
+  reshapeLeft(status) {
     this.shapeStart();
     this.shapeLeft = 0;
     this.otherLeft = 0;
@@ -2944,21 +2954,28 @@ export default class Threads extends View {
     const near = this.follow ? null : this.nearStale(stale);
     const order = this.follow ? stale.slice().reverse() : near ? [...near.rows, ...stale.slice(0, near.lo), ...stale.slice(near.hi)] : stale;
     const cg = order.length ? this.closedLookNow() : null;
-    // The rows near the view are looked at past the draw's time too: the turns shapeInView just
-    // shaped are memo hits, and shape() leaves the others as they are at once.
-    const nearN = near?.rows.length ?? 0;
+    // The rows drawn are looked at past the draw's time too: the turns shapeInView just shaped
+    // are memo hits, and shape() leaves the others as they are at once. The rest of the rows
+    // near the view come first, within the time. Past NEAR_CUT_MS since the render began
+    // (pastLine) shape() starts no reshape, for a drawn row neither: one left draws as it was
+    // and is first again in the next frame's walk (nearCut counts them).
+    const nearN = near?.drawn ?? 0;
     // While a jump lands (openLand), the rows above the view wait until its place is held.
     const span = this.openLand ? this.nearSpan() : null;
     const top = span ? this.viewRange[0] - span[2] : -1;
     for (let k = 0; k < order.length; k++) {
       const i = order[k];
       if (i < top) continue;
-      if (k >= nearN && (this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft += order.length - k; break; }
+      if (k >= nearN && ((this.shapeSpent ?? 0) > this.shapeMax() || this.pastLine())) { this.shapeLeft += order.length - k; break; }
       const r = this.baseRows[i];
       done.add(i);
       if (r?.kind !== "turn" || !r.turn) continue;
       const sh = this.shape(r.turn);
-      if (this.shapeStale) { done.delete(i); continue; }
+      if (this.shapeStale) {
+        done.delete(i);
+        if (k < nearN && this.pastLine()) this.nearCut = (this.nearCut ?? 0) + 1;
+        continue;
+      }
       if (sh === r.shape) continue;
       if (Boolean(sh.thumbs) !== Boolean(r.shape?.thumbs)) return false;
       const nr = { ...r, shape: sh };
@@ -2977,8 +2994,9 @@ export default class Threads extends View {
     this.fitKey = null;
     return true;
   }
-  // The rows left to reshape near the view (nearSpan), the ones drawn first and then outward
-  // from them, and where they sit in stale ([lo, hi)), which is in index order. Null if none.
+  // The rows left to reshape near the view (nearSpan), the ones drawn first (drawn of them) and
+  // then outward from them, and where they sit in stale ([lo, hi)), which is in index order.
+  // Null if none.
   nearStale(stale) {
     const span = this.nearSpan();
     if (!span || !stale.length) return null;
@@ -2990,7 +3008,10 @@ export default class Threads extends View {
     const v0 = this.viewRange[0] - off;
     const v1 = this.viewRange[1] - off;
     const d = (i) => (i < v0 ? v0 - i : i >= v1 ? i - v1 + 1 : 0);
-    return { lo, hi, rows: stale.slice(lo, hi).sort((x, y) => d(x) - d(y) || x - y) };
+    const rows = stale.slice(lo, hi).sort((x, y) => d(x) - d(y) || x - y);
+    let drawn = 0;
+    while (drawn < rows.length && d(rows[drawn]) === 0) drawn++;
+    return { lo, hi, rows, drawn };
   }
 
   // The index of a list item in rowsMemo, from baseIndex (the list adds a spacer or a gap
@@ -4701,16 +4722,17 @@ export default class Threads extends View {
       && f.int === Boolean(turn.interrupted) && f.by === turn.answeredBy && f.inn === turn.answeredIn && f.img === (turn.images?.length ?? 0) && f.ag === Boolean(turn.agent) && f.sv === this.sendersVer) return turn.shapeMemo;
     // Out of time and never shaped: no key to build (3 µs a turn, 30 ms a draw with 6,000 rows
     // waiting after renders were stopped through a whole load).
-    if (turn.shapeKey == null && (this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return this.blankShape(); }
+    if (turn.shapeKey == null && ((this.shapeSpent ?? 0) > this.shapeMax() || this.pastLine())) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return this.blankShape(); }
     const q = this.filterText();
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
     const key = `${Math.round(this.width)}|${P.textSize}|${this.chars()}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}|${turn.agent ? 1 : 0}|${this.sendersVer}`;
     const fast = { key, look, p: turn.prompt.length, t: text.length, live, tools: turn.tools, int: Boolean(turn.interrupted), by: turn.answeredBy, inn: turn.answeredIn, img: turn.images?.length ?? 0, ag: Boolean(turn.agent), sv: this.sendersVer };
     if (turn.shapeKey === key) { turn.shapeFast = fast; this.keepShape(turn); return turn.shapeMemo; }
-    // Out of time for this draw: the shape it had (a row never shaped yet, as when agent
-    // messages are turned on, a blank one-line row), and the next frame reshapes it.
-    if ((this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return turn.shapeMemo ?? this.blankShape(); }
+    // Out of time for this draw, or in the drain past NEAR_CUT_MS since its render began
+    // (pastLine): the shape it had (a row never shaped yet, as when agent messages are turned
+    // on, a blank one-line row), and the next frame reshapes it.
+    if ((this.shapeSpent ?? 0) > this.shapeMax() || this.pastLine()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return turn.shapeMemo ?? this.blankShape(); }
     const t0 = now();
     const sh = this.reshape(turn, live, q, P, why, text);
     turn.shapeKey = key;
@@ -4798,6 +4820,9 @@ export default class Threads extends View {
       this.shape(s.turns[ti]);
     }
   }
+  // The render that is drawing began more than NEAR_CUT_MS ago: no reshape of the drain
+  // (reshapeStale, lineOn) starts. A rows build has its own time (buildMax).
+  pastLine() { return Boolean(this.lineOn && this.renderOpen) && now() - (this.renderAt ?? 0) > NEAR_CUT_MS; }
   reshape(turn, live, q, P, why, text) {
     const cmd = commandParts(turn);
     // Long messages shortened (truncate) or, by default, shown whole. A search still shows the
