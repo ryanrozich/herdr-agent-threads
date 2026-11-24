@@ -114,7 +114,9 @@ case $harness in
     ;;
   pi)
     # Pi: an assistant message's toolCall parts (id, name, arguments) and the toolResult
-    # message for each (toolCallId, isError, durationMs, text parts).
+    # message for each (toolCallId, isError, durationMs, text parts). isError is Pi's own
+    # outcome: true when a tool threw, and when the bash tool's command exited with a code
+    # other than 0. A result with no isError leaves err null: unknown, not false.
     if [ -n "$tail" ]; then tail -c 4194304 -- "$file"; else cat -- "$file"; fi |
       IDS=$ids perl -ne 'BEGIN { $re = join "|", map { quotemeta } split " ", $ENV{IDS}; $re = qr/$re/ } print if /$re/ && length($_) <= ($ENV{THREADS_LINE_MAX} || 9e18)' | lines | jq -c --arg ids "$ids" "$outcap"'
       def text: if type == "string" then . elif type == "array" then (map(select(type == "object" and .type == "text") | .text) | join("\n")) else "" end;
@@ -130,16 +132,22 @@ case $harness in
                  | if . == "\u0000unread" then {unread: true} elif type == "object" then {args: .} else {args: {value: .}} end))
         elif $m.role == "toolResult" and (($m.toolCallId // "") as $i | $want | index($i)) != null then
           ($m.content | text) as $o
-          | {id: $m.toolCallId, k: "out", ts: $l.timestamp, err: ($m.isError == true), out: ($o | outcap), lines: ($o | split("\n") | length)}
+          | {id: $m.toolCallId, k: "out", ts: $l.timestamp, err: (if ($m.isError | type) == "boolean" then $m.isError else null end), out: ($o | outcap), lines: ($o | split("\n") | length)}
             + (if ($m.durationMs | type) == "number" then {ms: $m.durationMs} else {} end)
         else empty end'
     ;;
   antigravity)
     # Antigravity: calls have no ids. "s<step>.<i>" is the planner step's i-th tool call, and
     # its result is the GENERIC step at <step> + 1 + i, whose text starts with "Created At:" and
-    # "Completed At:" lines (the times; left out of the output).
+    # "Completed At:" lines (the times; left out of the output). A status is read in any case.
+    # A step still RUNNING or PENDING is no result yet: it prints no out line. A step with
+    # status ERROR or FAILED failed (err true), and keeps its error when it has no text. Any
+    # other status leaves err null: a DONE step does not say whether its command exited 0, so
+    # unknown, not false. A step rewritten under its step_index prints a line each time; the
+    # last one is the result (atif.js and the pane read the last whole).
     lines < "$file" | jq -c --arg ids "$ids" "$outcap"'
       def head($k): [.[] | select(startswith($k + " At: ")) | .[($k | length) + 5:]];
+      def st: .status // "" | tostring | ascii_upcase;
       ($ids | split(" ") | map(select(. != "") | match("^s([0-9]+)\\.([0-9]+)$") | .captures | {id: "s\(.[0].string).\(.[1].string)", s: (.[0].string | tonumber), i: (.[1].string | tonumber)})) as $want
       | (reduce $want[] as $w ({}; .[$w.s | tostring] += [$w])) as $calls
       | (reduce $want[] as $w ({}; .[$w.s + 1 + $w.i | tostring] += [$w])) as $results
@@ -149,13 +157,14 @@ case $harness in
           | {id: $w.id, k: "in", ts: $l.created_at,
              in: ((.args // {}) | if type == "object" then (.CommandLine // .Path // .query // .Query // .Url // .Message // .TaskId // tojson) else . end | tostring | .[0:400])},
             (select($ENV.THREADS_ARGS == "1") | {id: $w.id, k: "args", args: ((.args // {}) | if type == "object" then . else {value: .} end)})
-        elif $l.type == "GENERIC" then
+        elif $l.type == "GENERIC" and ($l | st | . != "RUNNING" and . != "PENDING") then
           ($results[$l.step_index | tostring] // [])[] | . as $w
+          | ($l | st | . == "ERROR" or . == "FAILED") as $failed
           | (($l.content // "") | tostring | split("\n")) as $lines
           | ([$lines | to_entries[] | select(.value | test("^(Created|Completed) At: ") | not) | .key] | first // ($lines | length)) as $body
-          | ($lines[$body:] | join("\n")) as $o
+          | ($lines[$body:] | join("\n") | if . == "" and $failed then ($l.error // "" | tostring) else . end) as $o
           | {id: $w.id, k: "out", ts: (($lines[:$body] | head("Completed") | last) // $l.created_at),
-             err: ($l.status == "ERROR"), out: ($o | outcap), lines: ($o | split("\n") | length)}
+             err: (if $failed then true else null end), out: ($o | outcap), lines: ($o | split("\n") | length)}
         else empty end' -n
     ;;
   *) echo "not read for $harness yet" >&2; exit 4 ;;
