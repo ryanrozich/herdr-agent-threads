@@ -423,6 +423,33 @@ test("a part of 3,900 or 4,050 characters with dollar signs, past one view only 
   expect(seen).toEqual([[3900, "mdlong", 3900, true, false], [4050, "mdlong", 4050, true, false]]);
 }, 60000);
 
+// Such a part's counted height (the mdlong row's, before the probe measures it) holds what is
+// drawn: its gap, main's line at the line's 11.5 px (18 px a line, as wide as the reading
+// line), 4 px, then the text shown. On a narrow pane main's line wraps to more than one line,
+// and a height that left it out, or counted it as one line, gave the part a slot too short.
+test("a part shown whole as plain text under main's line is counted at the height of what is drawn, main's line wrapped on a narrow pane", async () => {
+  const text = `${"a$".repeat(1800)}${"b".repeat(300)}`;
+  const seen = [];
+  for (const w of [640, 300]) {
+    const { v, cx, key } = await openLong(text);
+    v.probeDue = function () { this.probeLeft = 0; return []; };
+    v.forcedWidth = w;
+    v.width = w;
+    v.rowsKey = null;
+    const row = () => v.baseRows.find((x) => x.key.startsWith(`md:${key}:`) && x.kind === "mdlong");
+    const waiting = () => !row() || v.baseRows.some((x) => x.kind === "mdrest" && x.key.includes(`:${key}:`));
+    for (let i = 0; i < 200 && (i < 2 || waiting()); i++) draw(v, cx);
+    const r = row();
+    const drawn = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+    const note = drawn.find((x) => x.startsWith("Herdr could not draw this part as Markdown"));
+    // MD_CHAR in main.js (6.1 px, a character of 13 px prose) at the line's 11.5 px.
+    const noteLines = v.wrapped(note, v.prose(), (v.charW(6.1) * 11.5) / 13);
+    const held = (r.gap ?? 6) + 18 * noteLines + 4 + v.restHeight(r.shown.length, 1);
+    seen.push([w, drawn.includes(r.shown), noteLines > 1, v.height(r) === held]);
+  }
+  expect(seen).toEqual([[640, true, false, true], [300, true, true, true]]);
+}, 60000);
+
 // A paragraph of Japanese or Chinese prose that one view holds is one Markdown part, as main
 // hands it to Herdr; one longer splits after its marks into parts a paragraph gap apart.
 test("a paragraph of Japanese or Chinese prose of 1,200 or 4,096 characters is one Markdown part, as on main; one of 4,097 splits after its marks", async () => {
