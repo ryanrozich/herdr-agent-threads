@@ -59,7 +59,7 @@ test("a card save that meets a file changed meanwhile merges it, and every setti
 // writes on top of it; save B, made while A waited, then writes on its own path. When the queue
 // drains, the pane shows what the file holds.
 // The card's quote key field does this when a free letter is typed (quoteTyped).
-const typeQuote = (v, k, cx, patch = {}) => { v.quoteKey = k; v.changePrefs(patch, cx, { quoteKey: k }); };
+const typeQuote = (v, k, cx, patch = {}) => { v.quoteKey = k; return v.changePrefs(patch, cx, { quoteKey: k }); };
 // A pane with the card open over a file of { textSize: 15 }, then an editor's write of
 // { textSize: 16 } that the next save meets as stale.
 async function staleCard() {
@@ -107,14 +107,50 @@ test("a chat save queued behind a stale chat save: when the queue drains the pan
   } finally { undo(v); }
 });
 
-test("a save queued behind a stale one keeps the editor's change that the stale save merged, in the file and the pane", async () => {
+test("between the stale save's retry and the drain, the pane shows what was set last, never the stale save's older values", async () => {
   const { v, cx } = await staleCard();
   try {
     const rail = v.prefs.agentRail === true;
-    v.changePrefs({ agentRail: !rail }, cx); // A: merges the editor's textSize 16
-    v.changePrefs({ keyHints: !(v.prefs.keyHints === true) }, cx); // B: made while A waits
+    const a = typeQuote(v, "u", cx); // A: meets the editor's write
+    typeQuote(v, "x", cx, { agentRail: !rail }); // B: made while A waits
+    await a; // A has ended and written on top; B has not, so the queue has not drained
+    expect(v.prefsSaving).toBe(1);
+    expect([v.quoteKey, v.prefs.agentRail === true]).toEqual(["x", !rail]);
     await settleAll(cx);
-    expect(fileOf(v).textSize).toBe(16);
-    expect(v.prefs.textSize).toBe(16);
+  } finally { undo(v); }
+});
+
+test("a save queued behind a stale one that then cannot write shows its error, keeps its change in the pane, applies nothing, and leaves no mark", async () => {
+  const { v, cx } = await staleCard();
+  const push = settingsWrites.push;
+  try {
+    const rail = v.prefs.agentRail === true;
+    // An editor breaks the file as soon as A has written it, so B finds a file that does not parse.
+    settingsWrites.push = function (t) { const n = push.call(this, t); queueMicrotask(() => { recordFiles[v.prefsPath()] = "{ oops"; }); return n; };
+    typeQuote(v, "u", cx); // A: meets the editor's write, writes on top
+    typeQuote(v, "x", cx, { agentRail: !rail }); // B: made while A waits
+    await settleAll(cx);
+    expect(settingsWrites.length).toBe(1);
+    expect(v.prefsRaw).toBe("{ oops");
+    expect(v.prefsError).toContain("not valid JSON");
+    // B's change stays in the pane; nothing from A's text is applied over it.
+    expect([v.quoteKey, v.prefs.agentRail === true]).toEqual(["x", !rail]);
+    expect(Boolean(v.prefsMerged)).toBe(false);
+  } finally { settingsWrites.push = push; undo(v); }
+});
+
+test("a save queued behind a stale one that is refused shows the file and why, and leaves no mark", async () => {
+  const { v, cx } = await staleCard();
+  try {
+    typeQuote(v, "u", cx); // A: meets the editor's write, writes on top
+    v.quoteKey = "x";
+    v.changePrefs({}, cx, { quoteKey: "x" }, () => "the file changed"); // B: refused
+    await settleAll(cx);
+    expect(settingsWrites.length).toBe(1);
+    expect(v.prefsError).toBe("the file changed");
+    // The pane shows the file as it is: A's write.
+    expect(v.prefsRaw).toBe(recordFiles[v.prefsPath()]);
+    expect(v.quoteKey).toBe("u");
+    expect(Boolean(v.prefsMerged)).toBe(false);
   } finally { undo(v); }
 });
