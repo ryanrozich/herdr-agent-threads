@@ -6440,17 +6440,24 @@ export default class Threads extends View {
       case "first": go(0); return true;
       case "latest": this.jumpLatest(true); return true;
       // A search: the next match back in time (older) or forward (newer). With no match
-      // selected, either goes to the newest. At either end the selection stays: the search
-      // field already says it is the first mention or the newest, and nothing wraps.
+      // selected, either goes to the newest. A selected match with no place yet (the scan has
+      // not reached it, or a tail is being checked again, hitsTail): the nearest match older
+      // or newer than it, by turn order. At either end the selection stays: the search field
+      // already says it is the first mention or the newest, and nothing wraps.
       case "olderMatch":
       case "newerMatch": {
         const h = this.hitsNow();
         if (h) {
-          const p = h.at.get(this.sel);
+          const older = name === "olderMatch";
+          const next = () => {
+            const p = h.at.get(this.sel);
+            if (p != null) return p + (older ? -1 : 1);
+            return this.selMatches() ? this.hitNear(h, this.sel, older) : h.top - 1;
+          };
+          let j = next();
           // Past the oldest match found so far, while more can come: one slice, here.
-          if (name === "olderMatch" && (p == null ? h.top === h.bot : p - 1 < h.bot) && !h.done) this.scanStep();
+          if (older && j < h.bot && !h.done) { this.scanStep(); j = next(); }
           if (h.top === h.bot) return !h.done;
-          const j = p == null ? h.top - 1 : p + (name === "olderMatch" ? -1 : 1);
           if (j < h.bot || j >= h.top) return true;
           this.sel = h.by.get(j);
           this.follow = false;
@@ -9234,6 +9241,24 @@ export default class Threads extends View {
     h.done = false;
     if (turns.length - safe <= HITS_TAIL) this.scanHits(h, Infinity, true);
     return true;
+  }
+
+  // The place of the nearest match older (or newer) than turn key, by turn order: the places
+  // run in turn order from bot (the oldest) up. bot - 1, or top, when there is none that way.
+  hitNear(h, key, older) {
+    const turn = (k) => { const c = k.indexOf(":"); return [Number(k.slice(0, c)), Number(k.slice(c + 1))]; };
+    const [si, n] = turn(key);
+    const before = (k) => { const [a, b] = turn(k); return a < si || (a === si && b < n); };
+    // The first place not before key.
+    let lo = h.bot;
+    let hi = h.top;
+    while (lo < hi) {
+      const m = (lo + hi) >> 1;
+      if (before(h.by.get(m))) lo = m + 1;
+      else hi = m;
+    }
+    if (older) return lo - 1;
+    return lo < h.top && h.by.get(lo) === key ? lo + 1 : lo;
   }
 
   // Whether the selected turn is shown and the search matches it.
