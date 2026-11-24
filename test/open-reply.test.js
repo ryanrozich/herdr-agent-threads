@@ -67,8 +67,10 @@ async function cardDone(v, key) {
   return () => [].concat(key).every((key) => {
     const i0 = v.baseRows.findIndex((r) => r.key.startsWith(`md:${key}:`));
     if (i0 < 0 || !v.rowsKey || v.rowJob || v.baseRows.some((r) => r.kind === "mdrest" && (r.key.startsWith(`mr:${key}:`) || r.key.startsWith(`md:${key}:`)))) return false;
-    for (let i = i0; v.baseRows[i]?.kind === "md"; i++) {
+    // Every Markdown part of the turn, those after a code block too.
+    for (let i = i0; i < v.baseRows.length; i++) {
       const r = v.baseRows[i];
+      if (r.kind !== "md" || !r.key.startsWith(`md:${key}:`)) continue;
       if (!want.has(r.src)) want.set(r.src, linkify(r.src, v.links, v.linkCtx()));
       const h = v.mdHeights?.map.get(r.src);
       if (r.md !== want.get(r.src).md || r.links !== want.get(r.src).links || (!r.table && (h == null || v.baseSizes[i] !== (r.gap ?? 6) + h))) return false;
