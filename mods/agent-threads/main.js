@@ -199,6 +199,9 @@ const NEAR_CUT_MS = 35;
 // a turn unlike them, and frameBase is the last draw's.
 const HOST_MS = 50;
 const HOST_MARGIN_MS = 3;
+// The draws the lightest base is taken over (lightBase): the least frameBase of the last 64,
+// about a second of frames while the pane is busy.
+const LIGHT_DRAWS = 64;
 const SHAPE_MIN_MS = 2;
 const BUILD_MIN_MS = 3;
 const SCROLL_WAIT_MS = 2000;
@@ -1157,6 +1160,9 @@ export default class Threads extends View {
       // Walks that began past NEAR_CUT_MS, the most draws in a row, and rows owed and reshaped
       // first in the next draw (payOwed).
       lateWalks: this.lateWalks ?? 0, lateRun: this.lateRunMax ?? 0, owed: this.owedPaid ?? 0,
+      // Rows owed that this draw could not fit either (payOwed), turns run alone (shapeHeld),
+      // runs found cut (aloneMark), and refusals of a cut turn since.
+      owedHeld: this.owedHeld ?? 0, alone: this.aloneRun ?? 0, aloneCut: this.aloneCut ?? 0, cutHeld: this.cutHeld ?? 0,
       landed: this.landed ? { key: this.landed.key, j: this.landed.j, y: this.landed.y, lift: this.landed.lift ?? 0 } : null,
       outline: this.outlined(), outlineBack: this.outlineBack ? { sel: this.outlineBack.sel ?? null, top: this.outlineBack.top ?? null } : null,
       header: this.headerText(), state: this.agentStateNow()?.word ?? null, unseen: this.unseen, bottomShown: this.bottomShown, pill: this.pillShown(), follow: Boolean(this.follow), range: this.lastRange ?? null, keysOpen: this.keysOpen,
@@ -4813,6 +4819,7 @@ export default class Threads extends View {
     if (this.lineOn) this.lineFirst = false;
     const t0 = now();
     const sh = this.reshape(turn, live, q, P, why, text);
+    turn.aloneMark = null;
     this.shapeLearn(turn, text, now() - t0);
     turn.shapeKey = key;
     turn.shapeMemo = sh;
@@ -4823,8 +4830,8 @@ export default class Threads extends View {
     return sh;
   }
   // shape()'s one check: whether turn may not be shaped now.
-  // - A turn that can never fit (its expected cost with the draw's fixed cost, frameBase, and
-  //   the margin over Herdr's limit) runs only as its draw's first shaping unit, alone: nothing
+  // - A turn that can never fit (neverFits: its expected cost with the margin and the lightest
+  //   base this pane draws over Herdr's limit) runs only as its draw's first shaping unit, alone: nothing
   //   else is shaped in that draw (unitAlone, counted in aloneRun). It may pass the limit
   //   once, as one turn that size does on main; what it shaped is kept if the stop comes
   //   after it, and no later draw shapes it again. Not in the frames after
@@ -4832,7 +4839,10 @@ export default class Threads extends View {
   //   reshaped at each update, and each would pass the limit, so it keeps the shape it had
   //   until it ends. With a rate far too high every turn is one: each runs alone, a draw each,
   //   and teaches the rate down (shapeLearn). In the drain the line holds as for any turn:
-  //   past it only a row on screen starts.
+  //   past it only a row on screen starts. A run cut by Herdr's stop leaves the turn's mark
+  //   (aloneMark): it is not run alone again until its text changes or it fits a light draw,
+  //   and keeps its last shape (or the blank row of one never shaped) meanwhile. A width
+  //   change alone does not clear the mark, or each step of a divider drag would cost a stop.
   // - Every other turn: within the draw's shaping time (the draw's first whatever its cost; a
   //   turn never shaped, fresh, while any is left), and in the drain expected to end in time
   //   (lineCut, fitsHost).
@@ -4842,10 +4852,20 @@ export default class Threads extends View {
     const max = this.shapeMax();
     const spent = this.shapeSpent ?? 0;
     const est = this.hostCost(turn, text);
-    if (this.renderOpen && est != null && est + (this.frameBase ?? 0) + HOST_MARGIN_MS > HOST_MS) {
+    if (this.renderOpen && this.neverFits(est)) {
+      // A mark left from an alone run means the run was cut (a run that ends takes it off):
+      // not run alone again for the same text, so no turn costs more than one stop for it.
+      const sig = `${turn.prompt.length}|${text.length}`;
+      const m = turn.aloneMark;
+      if (m && m.sig === sig) {
+        if (!m.cut) { m.cut = true; this.aloneCut = (this.aloneCut ?? 0) + 1; }
+        this.cutHeld = (this.cutHeld ?? 0) + 1;
+        return true;
+      }
       if ((this.unitsRun ?? 0) > 0 || spent > 0 || max < 0 || live || (!this.lineScreen && this.pastLine())) return true;
       this.unitAlone = true;
       this.aloneRun = (this.aloneRun ?? 0) + 1;
+      turn.aloneMark = { sig, cut: false };
       return false;
     }
     return spent > max || (!fresh && spent > 0 && spent + this.shapeCost(turn, text) > max) || this.lineCut(turn, text);
@@ -4949,6 +4969,16 @@ export default class Threads extends View {
   // A reshape's expected cost for Herdr's stop (fitsHost): shapeCost, or null before a rate has
   // been learned (shapeLearn).
   hostCost(turn, text) { return this.shapeRate == null ? null : this.shapeCost(turn, text); }
+  // Whether a reshape of est ms can fit no draw: est with the margin and the lightest base
+  // this pane draws (lightBase) over Herdr's limit. A turn that would fit a light draw but not
+  // this one is refused (fitsHost) and owed instead, with no stop.
+  neverFits(est) { return est != null && est + this.lightBase() + HOST_MARGIN_MS > HOST_MS; }
+  // The least frameBase of the last LIGHT_DRAWS draws: a draw that shapes and builds nothing
+  // costs about its frameBase, so this is the lightest draw the pane has made of late. The
+  // least, not the last: a heavy draw does not make a turn look as if it could never fit.
+  // Over a window, not for ever: a pane that has grown heavier for good stops counting on a
+  // light draw that no longer comes. 0 before any draw is measured.
+  lightBase() { const b = this.baseLog; return b?.length ? Math.min(...b) : 0; }
   // Whether a reshape expected to cost est, started now, ends in time: the time so far, est and
   // the rest of the draw (the last draw's cost apart from shaping and building, frameBase, less
   // what of it this draw has run) within Herdr's stop less the margin. An unknown cost does not.
@@ -4991,9 +5021,10 @@ export default class Threads extends View {
     if (!turn) return;
     // The same check as in the walk, from the draw's start: one that fits, or one that can
     // never fit (shapeHeld runs it alone, the draw's first unit). An unknown cost goes ahead, as
-    // a draw's first does.
+    // a draw's first does. One that fits a light draw but not this one waits for the walk to
+    // owe it again (owedHeld counts these).
     const est = this.hostCost(turn, this.replyText(turn));
-    if (est != null && est + (this.frameBase ?? 0) + HOST_MARGIN_MS <= HOST_MS && !this.fitsHost(est)) return;
+    if (est != null && !this.neverFits(est) && !this.fitsHost(est)) { this.owedHeld = (this.owedHeld ?? 0) + 1; return; }
     this.owedPaid = (this.owedPaid ?? 0) + 1;
     this.owedAt = this.renders;
     this.shape(turn);
@@ -7428,6 +7459,8 @@ export default class Threads extends View {
     }
     // The draw's cost apart from reshaping and building rows sets the next draw's time for them.
     this.frameBase = Math.max(0, now() - this.renderAt - Math.max(0, (this.shapeSpent ?? 0) - spent) - (this.buildSpent ?? 0));
+    (this.baseLog ??= []).push(this.frameBase);
+    if (this.baseLog.length > LIGHT_DRAWS) this.baseLog.shift();
     return out;
   }
 

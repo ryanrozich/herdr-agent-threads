@@ -858,26 +858,37 @@ test("the opening: a draw that reaches its walk late starts no reshape expected 
 }, 300000);
 
 // The same with the work before the walk fixed (30, 38 or 44 ms that the draw does whatever
-// else it does, in its fixed cost, frameBase) and 2 ms after it: a reshape of c ms fits in no
-// order where c + 32, 40 or 46 and the margin pass 50 ms. There the row the line refused is
-// not reshaped first next frame either (a row of c ms ahead of the rest stops the draw as
-// surely), and the rows stay to reshape with no draw stopped: the work is what to cut. Where
-// it fits, the rows fill as above. Per cell: draws stopped, reshapes that end past 50 ms,
-// starts past 35 ms for a row off screen, and where it fits frames from the sixth with a blank
-// row on screen, else frames with a row on screen reshaped.
-test("the opening: with fixed work around the walk, a row that fits in no order of the draw is not reshaped, and no draw is stopped", async () => {
+// else it does, in its fixed cost, frameBase) and 2 ms after it: a reshape of c ms fits no draw
+// like these where c + 32, 40 or 46 and the margin pass 50 ms. Each such row alone fits a light
+// draw (the draws before the wheel, with no fixed work: lightBase), so it is refused and owed,
+// not run alone: no draw stopped, and the rows stay to reshape until a lighter draw comes (the
+// work is what to cut), counted as owed rows held (owedHeld): the reader sees them blank (five
+// rows on screen in every frame at 44 ms with rows of 8). Where it fits, the rows fill as
+// above. (At 44 with rows of 2 the drain had shaped the rows at the wheel's place before it:
+// none on screen is blank, so none is owed.) Per cell: draws stopped, reshapes that end past 50 ms, starts past 35 ms for a row off
+// screen, and where it fits frames from the sixth with a blank row on screen, else frames with
+// a row on screen reshaped and whether owed rows were held.
+// The last cell has rows of 80 ms, each over the limit alone: one runs alone, its run is cut
+// at 50 ms (one stop), its mark stays, and it is not run again (this clock does not reach the
+// end of the 5 s after a stop; the same with time going on is the test after the next).
+test("the opening: with fixed work around the walk, a row that fits only a light draw is owed and not reshaped, and no draw is stopped", async () => {
   const got = [];
   const want = [];
   for (const base of [30, 38, 44]) {
     for (const ms of [2, 8, 20]) {
-      const { frames } = await costlyWheel(ms, base, 30, wheelUp, { stop: true, after: 2 });
+      const { v, frames } = await costlyWheel(ms, base, 30, wheelUp, { stop: true, after: 2 });
       const fits = base + 2 + ms * 1.1 + 3 <= 50;
-      got.push([base, ms, fits, frames.filter((f) => f.stopped).length, frames.reduce((n, f) => n + f.over, 0), frames.reduce((n, f) => n + f.offLate, 0), fits ? frames.slice(5).filter((f) => f.blank > 0).length : frames.filter((f) => f.seen).length]);
-      want.push([base, ms, fits, 0, 0, 0, 0]);
+      got.push([base, ms, fits, frames.filter((f) => f.stopped).length, frames.reduce((n, f) => n + f.over, 0), frames.reduce((n, f) => n + f.offLate, 0), fits ? frames.slice(5).filter((f) => f.blank > 0).length : frames.filter((f) => f.seen).length, fits || !frames.some((f) => f.blank > 0) || (v.owedHeld ?? 0) > 0, v.aloneRun ?? 0]);
+      want.push([base, ms, fits, 0, 0, 0, 0, true, 0]);
     }
   }
   expect(got.map((g) => g[2])).toEqual([true, true, false, true, false, false, false, false, false]);
   expect(got).toEqual(want);
+  const { v, frames } = await costlyWheel(80, 30, 30, wheelUp, { stop: true, after: 2 });
+  // (Before the wheel, with no stop modelled, the drain ran such rows alone too: alone counts
+  // those; the frames after it are what is checked.)
+  const marked = v.sessions.flatMap((s) => s.turns).filter((x) => x.aloneMark);
+  expect([frames.filter((f) => f.stopped).length, frames.reduce((n, f) => n + f.starts.length, 0), frames.reduce((n, f) => n + f.over, 0), marked.length]).toEqual([1, 1, 1, 1]);
 }, 300000);
 
 // Two jumps 60 ms apart, in different frames, during the drain: each one's 130 ms timer is for
@@ -1037,9 +1048,9 @@ async function pricedDrain({ n = 120, rate = 0.001, after = 10 } = {}) {
     // As a rebuild that leaves rows to reshape asks for the walk.
     v.reshapeDue = true;
   };
-  // Priced from here, with one draw on the priced clock first so the draw's fixed cost
-  // (frameBase, the last draw's) is known.
-  const begin = () => { on = true; v.shapeRate = rate; step(); };
+  // Priced from here, with 65 draws on the priced clock first, so the draw's fixed cost
+  // (frameBase, the last draw's) and the lightest of the last 64 (lightBase) are this clock's.
+  const begin = () => { on = true; v.shapeRate = rate; for (let k = 0; k <= 64; k++) step(); };
   const end = () => { performance.now = realPerf; };
   // A new chunk of the session read (its version), as an agent writing its reply makes.
   const grow = () => { v.sessions[0].version++; };
@@ -1150,3 +1161,55 @@ test("shaping: a running turn whose reply can never fit is not reshaped at each 
     expect(frames.filter((f) => f.stopped).length).toBeLessThanOrEqual(1);
   } finally { p.end(); }
 }, 120000);
+
+// A turn of 60 ms, over Herdr's limit alone, on a clock that goes on past the 5 s after a
+// stop: one alone run, cut at 50 ms (one stop), its mark left on the turn. In the 2,000 frames
+// after (32 s, six times the 5 s) it is not run again: no retry, no further stop, and the
+// reader keeps its last shape. A width change does not clear the mark (each step of a divider
+// drag would cost a stop). New text does: one more alone run. The debug report counts the run,
+// the cut found and the refusals since.
+test("shaping: a turn whose run alone was cut by Herdr's stop is not run again for the same text, keeps its last shape, and is counted", async () => {
+  const p = await pricedDrain();
+  try {
+    const big = p.turns.at(-3);
+    p.begin();
+    const before = big.shapeMemo;
+    expect(before).toBeTruthy();
+    p.restale(big, 60000);
+    const row = () => p.v.baseRows.find((r) => r.turn === big);
+    let frames = untilDone(p.v, p.step, 2000);
+    const runs = (fs) => fs.filter((f) => f.log.some((x) => x.turn === big)).length;
+    expect([runs(frames), frames.filter((f) => f.stopped).length, big.aloneMark?.cut]).toEqual([1, 1, true]);
+    expect([row().shape === before, big.shapeMemo === before]).toEqual([true, true]);
+    p.v.report();
+    const d = () => state.shared["threads.debug"][p.v.terminal];
+    expect([d().alone, d().aloneCut, d().cutHeld > 0]).toEqual([1, 1, true]);
+    // A new width: every row reshaped, the cut turn still not run.
+    p.v.width -= 40;
+    frames = untilDone(p.v, p.step, 2000);
+    expect([runs(frames), frames.filter((f) => f.stopped).length, big.aloneMark?.cut]).toEqual([0, 0, true]);
+    // New text: run alone once more (and cut once more).
+    p.restale(big, 20);
+    frames = untilDone(p.v, p.step, 2000);
+    expect([runs(frames), frames.filter((f) => f.stopped).length]).toEqual([1, 1]);
+    p.v.report();
+    expect([d().alone, d().aloneCut]).toEqual([2, 2]);
+  } finally { p.end(); }
+}, 300000);
+
+// A turn never shaped whose run alone was cut: the reader sees the blank one-line row the pane
+// draws for a row not yet shaped, with no throw and no further stop.
+test("shaping: a turn never shaped whose run alone was cut shows the pane's unshaped row, with no throw and no further stop", async () => {
+  const p = await pricedDrain();
+  try {
+    const big = p.turns.at(-3);
+    p.begin();
+    p.restale(big, 60000);
+    // As a row the rows build made before it was ever shaped.
+    big.shapeMemo = null;
+    p.v.baseRows.find((r) => r.turn === big).shape = p.v.blankShape();
+    const frames = untilDone(p.v, p.step, 2000);
+    expect([frames.filter((f) => f.log.some((x) => x.turn === big)).length, frames.filter((f) => f.stopped).length, big.shapeKey ?? null]).toEqual([1, 1, null]);
+    expect(p.v.baseRows.find((r) => r.turn === big).shape).toEqual(p.v.blankShape());
+  } finally { p.end(); }
+}, 300000);
