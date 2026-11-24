@@ -335,6 +335,10 @@ test("timeline tracks: in clock order, not the ledger's: a call listed after ano
   expect(tracksOf(c)).toEqual([[10000, 0], [10000, 1]]);
   const d = head(turn(1, [[["Grep", "b", 10000, 12000], ["Read", "a", 10000, 20000]]]));
   expect(tracksOf(d)).toEqual([[10000, 0], [10000, 1]]);
+  // In a turn taken out of the ledger's order, equal starts keep it too: Grep (listed before
+  // Bash) holds the first track, Bash goes on the second, and Read, after both, the first.
+  const e = head(turn(1, [[["Read", "a", 30000, 40000]], [["Grep", "b", 10000, 12000]], [["Bash", "c", 10000, 20000]]]));
+  expect(tracksOf(e)).toEqual([[30000, 0], [10000, 0], [10000, 1]]);
 });
 
 test("timeline tracks: a call with no result holds the first track to the turn's end, so a later call goes on the second", () => {
@@ -418,6 +422,26 @@ test("timeline press: a bar of the turn the press is in and one reaching back fr
   // The Grep failed: its red bar is drawn over the half-height Bash.
   const c = mk(["Grep", "g", 58000, 59000, true], [[["Read", "b", 500, 2000]], [["Bash", "sleep", 1000, null]]]);
   expect(press(c)).toEqual({ turn: c[10].key, key: grepOf(c) });
+});
+
+test("timeline press: in one turn too, of the bars under the press the one drawn on top: failed over the rest, then half height over full, then the narrowest", () => {
+  const hit = (h, ms) => {
+    const L = timelineLayout([h], 1200, "clock", T0 + 1e7);
+    return timelineHit(L, [h], (ms / 60000) * 1200, "tools").key;
+  };
+  const keyOf = (h, name) => stepsOf(h).find((it) => it.lane === "tools" && rowsOf(h)[it.i].tool === name).key;
+  // A failed Read from 2 to 40 s, full height, and a Grep from 10 to 20 s on the half track
+  // over it: at 15 s the red Read is drawn on top.
+  const a = head(turn(1, [[["Read", "a", 2000, 40000, true]], [["Grep", "b", 10000, 20000]]]));
+  expect(stepsOf(a).filter((it) => it.lane === "tools").map((it) => it.track)).toEqual([0, 1]);
+  expect(hit(a, 15000)).toBe(keyOf(a, "Read"));
+  // Read from 2 to 40 s; Glob (12 to 14 s) listed before Grep (10 to 20 s), both on the half
+  // track: at 13 s the narrower, Glob.
+  const b = head(turn(2, [[["Read", "a", 2000, 40000]], [["Glob", "c", 12000, 14000]], [["Grep", "b", 10000, 20000]]]));
+  expect(stepsOf(b).filter((it) => it.lane === "tools").map((it) => it.track)).toEqual([0, 1, 1]);
+  expect(hit(b, 13000)).toBe(keyOf(b, "Glob"));
+  // Only the full Read under the press, at 30 s: the Read.
+  expect(hit(b, 30000)).toBe(keyOf(b, "Read"));
 });
 
 test("timeline press: looks at the turns that start within 4 px right of the press and no further, so at 5,600 turns it reads as many turns at turn 10 as at turn 5,000", () => {
