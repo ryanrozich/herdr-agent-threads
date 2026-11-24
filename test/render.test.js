@@ -18799,6 +18799,12 @@ async function pairPanes(chat = 722, opts = {}) {
   const { v, cx } = await pinPane("--extra", "6");
   v.debug = false;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  // opts.bottom: a Trajectory pane (p5) along the bottom of the tab, in a split of its own
+  // under the row (TRD-24), so not in pairRow's widths.
+  if (opts.bottom) {
+    state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+    state.shared["threads.trajByTerminal"] = { t4: { pane: "p5", dock: "bottom" } };
+  }
   let now = 1_000_000;
   const real = Date.now;
   Date.now = () => now;
@@ -21736,4 +21742,229 @@ test("the agent message counts follow a session's read ending: a running agent t
   const fresh = v.counts();
   expect(after).toEqual(fresh);
   expect(fresh).not.toEqual(before);
+});
+
+// ---- the Trajectory's docks (TRD-24, part 1: a pane knows its dock) ----
+// A Trajectory pane along the bottom of the tab (props().dock "bottom") sits in a split of its
+// own under the Chat's row. Nothing opens one yet; these check that the row's code leaves it out.
+const bottomMapped = () => {
+  state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+  state.shared["threads.trajByTerminal"] = { t4: { pane: "p5", dock: "bottom" } };
+};
+// The layout asks in order, a split's props less its transcript (each run has its own file).
+const runAsks = () => log.filter(([k, n]) => k === "run" && (n === "layout.resize" || n === "pane.split"))
+  .map(([, n, a]) => [n, a.props ? { ...a, props: { ...a.props, transcript: "f.jsonl" } } : a]);
+
+test("TRD-24: with a Trajectory along the bottom, the Pinned column opens off the Chat, its pair lands on weights and steps with - and = exactly as with none, and the bottom pane is never asked", async () => {
+  const runs = {};
+  for (const bottom of [false, true]) {
+    // A weighed Chat in a row where the terminal has 200 px to spare for its keep, not 400: the
+    // column's opening (pinKeep) counts the terminal and nothing below the row.
+    const t = await pairPanes(722, { bottom, weighed: true, total: 1462 });
+    try {
+      t.run(4000);
+      t.v.key(keyEv("="), t.cx);
+      t.run(2000);
+      t.w.key(keyEv("-"), t.cxw);
+      t.run(2000);
+      const asks = runAsks();
+      expect(asks.find(([n]) => n === "pane.split")[1]).toMatchObject({ pane: "p2", direction: "right", props: { view: "pinned" } });
+      expect(asks.some(([, a]) => a.id === "p5" || a.pane === "p5")).toBe(false);
+      runs[bottom] = { asks, widths: t.row.widths(), pair: state.shared["threads.pinPair"]?.t4 ?? null, row: state.shared["threads.row"]?.t4 ?? null };
+    } finally { t.restore(); }
+  }
+  expect(runs[true].pair.k).toBeGreaterThan(0);
+  expect(runs[true].asks.filter(([, a]) => a.weight != null).length).toBeGreaterThan(0);
+  expect(runs[true]).toEqual(runs[false]);
+});
+
+test("TRD-24: the Pinned pair with no terminal beside it and a Trajectory along the bottom shares the row by its widths, one weight each", async () => {
+  const t = await pairPanes();
+  try {
+    state.panes = state.panes.filter((p) => p.pane !== "p1");
+    bottomMapped();
+    log = [];
+    t.w.pairBegin(t.w.me(), t.w.mainPane(), 722, 380, null, t.cxw);
+    expect(resizes()).toEqual([{ id: "p2", weight: 722 }, { id: "p3", weight: 380 }]);
+  } finally { t.restore(); }
+});
+
+test("TRD-24: with a Trajectory along the bottom the Chat makes no row of it, weighs itself as with none, takes the terminal as its one sibling, and its close sends the Chat nothing", async () => {
+  const real = Date.now;
+  let now = real();
+  Date.now = () => now;
+  try {
+    const { v, cx } = await weightPane({}, 700);
+    bottomMapped();
+    v.poll(cx);
+    expect(v.trajRightOpen()).toBe(null);
+    expect(v.trajPaneOpen().pane).toBe("p5");
+    expect(v.rowPanes()).toBe(null);
+    expect(v.rowSibling(v.me())).toBe("p1");
+    // y goes to it, as to one on the right, and the Trajectory button says so.
+    log = [];
+    v.key(keyEv("y"), cx);
+    expect(log).toEqual([["run", "pane.focus", { pane: "p5" }]]);
+    expect(v.floatButtons()[1].slice(2, 5)).toEqual(["Go to the Trajectory (y)", "trajectory", true]);
+    // The Chat's own weight, as with nothing beside it.
+    log = [];
+    v.toWeight();
+    expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
+    // Its probe goes on past the next poll: a bottom pane does not stop it.
+    v.poll(cx);
+    expect(v.weighing).not.toBe(null);
+    v.weighing = null;
+    v.weightNow = 1;
+    // The bottom pane closes: it took no width, so none comes back, and no weight follows.
+    log = [];
+    state.panes = state.panes.filter((p) => p.pane !== "p5");
+    v.poll(cx);
+    now += 1000;
+    v.poll(cx);
+    expect(resized()).toEqual([]);
+    expect(state.shared["threads.row"]?.t4?.ids ?? null).toBe(null);
+    // settings.json's trajectory object is read and shown in the report; nothing acts on it yet.
+    v.applyExtras(JSON.stringify({ trajectory: { dock: "bottom", height: 412 } }));
+    v.report();
+    expect(state.shared["threads.debug"].t4.trajPrefs).toEqual({ dock: "bottom", height: 412 });
+    expect(v.prefsNotes).toEqual([]);
+  } finally { Date.now = real; }
+});
+
+test("TRD-24: a Trajectory pane opened along the bottom says so in its map entry and its report; - and = pass on there, its key sheet leaves them out, and its width is kept as no owner's", async () => {
+  const { v } = await pane(fixture("--extra", "3"));
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+  const props = state.props;
+  state.props = { ...props, view: "trajectory", dock: "bottom" };
+  const b = new Threads();
+  const cb = makeCx();
+  b.init(state.props, cb);
+  await settle(b);
+  state.props = props;
+  expect([b.trajPane, b.traj, b.trajDock]).toEqual([true, true, "bottom"]);
+  b.poll(cb);
+  cb.flush(0);
+  expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p5", dock: "bottom" } });
+  expect(v.trajBottomId()).toBe("p5");
+  b.width = 1400;
+  b.paneW = 1400;
+  b.report();
+  expect(state.shared["threads.debug"]["t4:trajectory"].traj).toMatchObject({ pane: true, dock: "bottom" });
+  // - and = do nothing here and pass on to Herdr.
+  log = [];
+  let stopped = 0;
+  cb.stop_propagation = () => { stopped++; };
+  b.key(keyEv("="), cb);
+  b.key(keyEv("-"), cb);
+  b.command("wider", cb);
+  expect([resizes(), stopped]).toEqual([[], 0]);
+  // The key sheet has no - and = line; a right pane's has.
+  b.keysOpen = true;
+  expect(wordsOf(frame(b, cb))).not.toContain("Make the Trajectory pane narrower or wider");
+  b.trajDock = "right";
+  expect(wordsOf(frame(b, cb))).toContain("Make the Trajectory pane narrower or wider");
+  b.trajDock = "bottom";
+  b.keysOpen = false;
+  // Its width, long settled, is shared for its neighbours but never kept as the right dock's.
+  b.firstSizeAt = Date.now() - 5000;
+  b.shareWidth();
+  expect(state.shared["threads.width"].p5).toBe(1400);
+  expect(state.shared["threads.trajWidth"]?.px ?? null).toBe(null);
+  b.trajDock = "right";
+  b.shareWidth();
+  expect(state.shared["threads.trajWidth"]).toEqual({ px: 1402 });
+});
+
+test("TRD-24: a Trajectory settings note stays when a link or sender rule changes, and the report keeps it", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  const note = 'trajectory.dock "top" is not "right" or "bottom"; using "right"';
+  v.applyExtras(JSON.stringify({ trajectory: { dock: "top", height: 120 } }));
+  const both = [note, "trajectory.height 120 is under 270 px; using 270"];
+  expect(v.prefsNotes).toEqual(both);
+  // A link rule list and a sender rule list applied from the card rebuild the notes.
+  v.useRules("links", [{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://example.com/$1" }], cx);
+  expect(v.prefsNotes).toEqual(both);
+  v.useRules("senders", [], cx);
+  expect(v.prefsNotes).toEqual(both);
+  v.report();
+  expect(state.shared["threads.debug"].t4.settingsNotes).toEqual(both);
+  // Fixed in the file: gone.
+  v.applyExtras(JSON.stringify({ trajectory: { dock: "bottom" } }));
+  v.useRules("links", [], cx);
+  expect(v.prefsNotes).toEqual([]);
+});
+
+test("TRD-24: a bottom Trajectory pane's dock holds in its map entry whichever writes first, the pane finding itself or the Chat settling its split", async () => {
+  delete recordFiles[PINS];
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  const props = state.props;
+  // The Chat splits; the new pane comes up with a bottom dock in its props (part 3's split).
+  const open = () => {
+    delete state.shared["threads.trajByTerminal"];
+    state.panes = state.panes.filter((p) => p.pane !== "p5");
+    v.splitAsk = null;
+    v.key(keyEv("y"), cx);
+    expect(v.splitAsk?.map).toBe("threads.trajByTerminal");
+    state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+    state.props = { ...props, view: "trajectory", dock: "bottom" };
+    const b = new Threads();
+    const cb = makeCx();
+    b.init(state.props, cb);
+    state.props = props;
+    return { b, cb };
+  };
+  const bottom = { t4: { pane: "p5", dock: "bottom" } };
+  // The Chat first: its entry names the pane with no dock, and the pane's first look adds it.
+  {
+    const { b, cb } = open();
+    await settle(b);
+    v.settleSplit(cx);
+    expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p5" } });
+    b.poll(cb);
+    cb.flush(0);
+    expect(state.shared["threads.trajByTerminal"]).toEqual(bottom);
+    expect(v.trajBottomId()).toBe("p5");
+  }
+  // The pane first: the Chat's write after its split keeps the dock the pane gave.
+  {
+    const { b, cb } = open();
+    await settle(b);
+    b.poll(cb);
+    cb.flush(0);
+    expect(state.shared["threads.trajByTerminal"]).toEqual(bottom);
+    v.settleSplit(cx);
+    expect(state.shared["threads.trajByTerminal"]).toEqual(bottom);
+    b.poll(cb);
+    cb.flush(0);
+    expect(state.shared["threads.trajByTerminal"]).toEqual(bottom);
+    expect(v.trajBottomId()).toBe("p5");
+  }
+  // An entry for another pane, still open, is not this pane's: the Chat's write replaces it whole.
+  open();
+  state.shared["threads.trajByTerminal"] = { t4: { pane: "p1", dock: "bottom" } };
+  v.settleSplit(cx);
+  expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p5" } });
+});
+
+test("TRD-24: a right Trajectory pane finding itself under a stale bottom entry for its own id writes its entry whole, with no dock", async () => {
+  const { v } = await pane(fixture("--extra", "3"));
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+  state.shared["threads.trajByTerminal"] = { t4: { pane: "p5", dock: "bottom" } };
+  const props = state.props;
+  state.props = { ...props, view: "trajectory" };
+  const b = new Threads();
+  const cb = makeCx();
+  b.init(state.props, cb);
+  await settle(b);
+  state.props = props;
+  expect([b.trajPane, b.trajDock]).toEqual([true, "right"]);
+  b.poll(cb);
+  cb.flush(0);
+  expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p5" } });
+  expect(v.trajBottomId()).toBe(null);
+  expect(v.trajRightOpen()?.pane).toBe("p5");
 });
