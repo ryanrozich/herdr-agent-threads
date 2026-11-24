@@ -254,6 +254,21 @@ test("timeline working off, the width changing every draw while the build runs: 
   sameStrip(st.M, TL.timelineModel(null, off, cw, "clock", now, null));
 });
 
+test("timeline from nothing, a width change while the build runs: the build starts again at the new width and ends as a whole build there", () => {
+  const { off, now } = session("open");
+  const c = slowClock();
+  const a = TL.tlDraw(null, null, off, CW, now, c.until(), c.clock);
+  expect([a.M, a.wait, a.J.cw]).toEqual([null, true, CW]);
+  expect(a.J.total).toBeGreaterThan(0);
+  const b = TL.tlDraw(null, a.J, off, 1143, now, c.until(), c.clock);
+  expect(b.J).not.toBe(a.J);
+  expect(b.J.cw).toBe(1143);
+  let s = b;
+  for (let k = 0; k < 500 && s.wait; k++) s = TL.tlDraw(s.M, s.J, off, 1143, now, c.until(), c.clock);
+  expect([s.wait, s.J]).toEqual([false, null]);
+  sameStrip(s.M, TL.timelineModel(null, off, 1143, "clock", now, null));
+});
+
 // ---- on the pane ----
 // A Trajectory pane docked along the bottom, w px wide, its rows built whole.
 async function dockPane(file, w) {
