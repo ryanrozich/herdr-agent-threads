@@ -650,10 +650,10 @@ export function noteSkip(s, bytes) {
   s.version++;
 }
 
-// The note for skipped lines: "A line of 300 MB was left out here, too long to read". From
-// 1 GB up the size is in GB with one decimal.
+// The note for skipped lines: "A line of 300 MB was left out here, too long to read". In
+// decimal MB, as every size in the pane (fmtBytes); from 1 GB up in GB with one decimal.
 export function skipNote(k) {
-  const size = k.bytes >= 1073741824 ? `${(k.bytes / 1073741824).toFixed(1)} GB` : `${Math.max(1, Math.round(k.bytes / 1048576))} MB`;
+  const size = k.bytes >= 999.5e6 ? `${(k.bytes / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(k.bytes / 1e6))} MB`;
   return k.lines === 1 ? `A line of ${size} was left out here, too long to read` : `${k.lines} lines, ${size} in all, were left out here, too long to read`;
 }
 
@@ -679,7 +679,7 @@ export function parseLine(out, line) {
   if (!line) return;
   const e = JSON.parse(line);
   if (e.k === "file") { out.size = e.size; out.head = e.head ?? null; if ("anchor" in e) out.anchor = e.anchor; }
-  else if (e.k === "chunk") { out.used = e.used; out.rewind = Boolean(e.rewind); if (e.noperl) out.noPerl = true; if (e.skipped > 0) out.skipped = e.skipped; }
+  else if (e.k === "chunk") { out.used = e.used; out.rewind = Boolean(e.rewind); if (e.noperl) out.noPerl = true; if (e.skipped > 0) out.skipped = e.skipped; if (e.cut) out.cut = true; }
   else if (e.k === "missing") out.missing = true;
   else out.events.push(e);
 }
@@ -892,6 +892,16 @@ export function threadMatches(turns, turn, q) {
   for (let i = turn.n - 2; i >= 0 && (turns[i].answeredIn === turn.n || turns[i].answeredBy === turn.n); i--)
     if (turns[i].prompt.toLowerCase().includes(needle)) return true;
   return false;
+}
+
+// The largest call left for this read, after a call that asked for chunk. A call the
+// extractor cut (its output came to more than 6 MiB, so it read the call again at half size,
+// and its chunk line says so) means text dense enough to be cut again: the rest of the read
+// asks for half, down to floor, the read's first call's size, rather than pay that every
+// call. A call that read little for another reason (the next line is longer than the rest of
+// the call) was not cut, and the cap stays.
+export function readCap(cap, cut, chunk, floor) {
+  return cut ? Math.max(floor, Math.min(cap, chunk / 2)) : cap;
 }
 
 // After one extractor call: the chunk size for the next call, or 0 when caught up.

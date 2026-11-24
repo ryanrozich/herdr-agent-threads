@@ -105,7 +105,8 @@ export function keyInstaller(bindings) {
 // Every key, grouped, for the ? sheet: [group, [[keys, what it does]]]. A pin key gives way
 // to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then. The Pinned
 // column has no outline (outline false), so its sheet leaves o out.
-export function keySheet(quoteKey = "q", { outline = true, ledger = false, inPane = false } = {}) {
+// bottom: the Trajectory pane along the bottom of the tab, where - and = do nothing.
+export function keySheet(quoteKey = "q", { outline = true, ledger = false, inPane = false, bottom = false } = {}) {
   const pin = (k) => quoteKey !== k;
   if (ledger) return [
     ["Trajectory", [
@@ -114,7 +115,7 @@ export function keySheet(quoteKey = "q", { outline = true, ledger = false, inPan
       [["y"], inPane ? "Back to the Chat" : "Go to the Chat"], [["Esc"], inPane ? "Close the detail, then back to the Chat" : "Close the detail"],
     ]],
     ["Pane", [
-      ...(inPane ? [] : [[["-", "="], "Make the Trajectory pane narrower or wider"]]),
+      ...(inPane || bottom ? [] : [[["-", "="], "Make the Trajectory pane narrower or wider"]]),
       [["t"], "Focus the terminal"], [[","], "Settings"], [["?"], "Show or hide this sheet"],
     ]],
   ];
@@ -3018,7 +3019,9 @@ export const keepingWeight = (p1, p2, n0) => weightFor(weightLine(p1, p2), n0);
 // (src/window.rs; move_divider, if Herdr PR 1365 is in it) changes only the two panes beside
 // the divider and leaves every other weight in the row as it was: 1365 sets each other
 // visible weight pane's weight to its width in px, which puts a stored k out by hundreds.
-export const WEIGHT_HERDR = ["0.1.16", "0.1.17"];
+// 0.1.18 (tag v0.1.18) has drag_to, layout.resize, the splits and the close's weight move
+// as 0.1.17 has them, and no move_divider: 1365 is not in it.
+export const WEIGHT_HERDR = ["0.1.16", "0.1.17", "0.1.18"];
 // Whether this Herdr's version (updates().app.version) is one WEIGHT_HERDR lists, exactly.
 export function weightHerdr(version) {
   return typeof version === "string" && WEIGHT_HERDR.includes(version);
