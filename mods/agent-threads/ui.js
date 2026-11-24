@@ -2499,6 +2499,175 @@ export function landExact(slots, i, want) {
   }
   return { j: 0, how: "top", y, lift: 0 };
 }
+// Herdr's v_virtual_list takes at most LIST_MAX item sizes: one more throws ("item_sizes may
+// contain at most 10000 entries") on every draw, and the pane shows that it could not be
+// drawn. The Chat gives the list a window of its rows (main.js windowed), well under it.
+// capList is the last guard on what the list is given, for what the window cannot cut: one
+// turn's rows past the window on their own (an open card with thousands of parts). Past max
+// it keeps the newest max - 1 items, where the running turn and the end are, under a note of
+// noteH px that says how many earlier items it left out (cut).
+export const LIST_MAX = 10000;
+export function capList(rows, sizes, max, noteH) {
+  if (rows.length <= max) return { rows, sizes, cut: 0 };
+  const keep = max - 1;
+  const cut = rows.length - keep;
+  const note = { kind: "note", key: "capped", text: `${cut.toLocaleString()} earlier list items are not shown` };
+  return { rows: [note, ...rows.slice(-keep)], sizes: [noteH, ...sizes.slice(-keep)], cut };
+}
+// The kinds of row that stand for a turn: a closed row, an open card's head, the running row,
+// an outline line.
+export const TURN_KINDS = new Set(["turn", "head", "working", "wrow", "line"]);
+const turnKeyOf = (r) => (r?.turn && r.si != null ? `${r.si}:${r.turn.n}` : null);
+
+// The Chat list's window over its rows (main.js winPlace): which of them Herdr's list is
+// given, so it stays well under LIST_MAX. Every row is still built; only the list is given
+// fewer. Its range is kept as the first and the last turn it holds, by key (null for the
+// rows' start or end), since a splice or a rebuild moves the rows' places, and every call
+// resolves it against the rows as they are: list is { rows, index }, the rows in order (each
+// with its turn and si) and a Map from a row's key to its place. at is the range last
+// resolved, [a, z) in the rows, starting and ending at a turn's first row. cap: slide, block,
+// stop (main.js ROW_CAP).
+export class RowWindow {
+  constructor(cap) { this.cap = cap; this.from = null; this.to = null; this.at = null; }
+  // The sessions start over: row keys are a session's index and a turn's number, so the old
+  // range could match turns in the new rows.
+  reset() { this.from = null; this.to = null; this.at = null; }
+  // Every row, keeping the range for later (the Pinned view, which shows five pins at most).
+  whole(list) { this.at = { a: 0, z: list.rows.length }; return this.at; }
+  // Resolves the range, and moves it as these say:
+  // - want, the place of a row a scroll goes to: outside the range (#n, a search step, the
+  //   outline, the rail, a pin, up and down, Home), or with the range grown past stop (a card
+  //   opened in it), the range goes around it. The scroll moves the view anyway.
+  // - tail (following, or on the way to the end): it ends at the rows' end, and past slide
+  //   rows its start moves on to hold slide - block. So a running session drops its oldest
+  //   rows from the window a block at a time, never from the session, and only while the view
+  //   is at the end: the list keeps its offset in px, so rows dropped above a reader would
+  //   move what they read. slid says it moved, so the caller puts the view at the end again.
+  // - Otherwise (a reader up in the session) its start stays, so nothing above the view
+  //   moves: new rows join at its end until stop, after which they wait below it. seen, the
+  //   place of the row after the last on screen: the end is never cut above it.
+  // While all the rows fit under stop there is no window.
+  place(list, { want = null, tail = false, seen = 0 } = {}) {
+    const n = list.rows.length;
+    const C = this.cap;
+    if (n <= C.stop) { this.from = null; this.to = null; return this.whole(list); }
+    const was = this.at;
+    let a = this.from ? this.turnRow(list, this.from) : 0;
+    let z = this.to ? this.turnEnd(list, this.to) : n;
+    let slid = false;
+    if (want != null && (want < a || want >= z || z - a > C.stop)) [a, z] = this.around(list, want);
+    else if (tail) {
+      z = n;
+      if (!this.from || n - a > C.slide) a = this.start(list, n - (C.slide - C.block), 1);
+      slid = Boolean(was) && a !== was.a;
+    } else if (z - a > C.stop) {
+      // At a turn's start before stop, so an open card there goes below with the rest; never
+      // above the last row on screen (a card opened there keeps its rows in the window).
+      z = Math.max(this.start(list, a + C.stop, -1), this.start(list, Math.min(n, seen), 1), this.start(list, a + 1, 1));
+    }
+    return this.keep(list, a, z, slid);
+  }
+  // Whether a row, by key, is inside the range last resolved.
+  has(list, key) {
+    const i = list.index.get(key);
+    const at = this.at ?? { a: 0, z: list.rows.length };
+    return i != null && i >= at.a && i < at.z;
+  }
+  // Show earlier and Show later: the range moves a block that way, its other end following to
+  // keep slide rows at most. Returns the key of the turn at its old edge, for the pane to land
+  // at its top: the first turn it held, or the first one after it; null when there is none.
+  earlier(list) { return this.more(list, false); }
+  later(list) { return this.more(list, true); }
+  more(list, later) {
+    const n = list.rows.length;
+    const C = this.cap;
+    const { a, z } = this.at ?? { a: 0, z: n };
+    if (later ? z >= n : a <= 0) return null;
+    let na = a;
+    let nz = z;
+    if (later) {
+      nz = this.start(list, Math.min(n, z + C.block), 1);
+      if (nz - na > C.slide) na = this.start(list, nz - C.slide, 1);
+    } else {
+      na = this.start(list, Math.max(0, a - C.block), -1);
+      if (nz - na > C.slide) nz = this.start(list, na + C.slide, -1);
+    }
+    this.keep(list, na, nz, false);
+    return turnKeyOf(list.rows[later ? z : a]);
+  }
+  // The turns the range leaves out above and below it.
+  outside(list) {
+    const { rows } = list;
+    const { a, z } = this.at ?? { a: 0, z: rows.length };
+    let earlier = 0;
+    let later = 0;
+    for (let i = 0; i < a; i++) if (TURN_KINDS.has(rows[i].kind)) earlier++;
+    for (let i = z; i < rows.length; i++) if (TURN_KINDS.has(rows[i].kind)) later++;
+    return { earlier, later };
+  }
+  // The keys up and down step through (keys: every turn's, in order), with "older" (the Show
+  // earlier item) before the range's first turn and "newer" (Show later) after its last.
+  stepKeys(list, keys) {
+    const n = list.rows.length;
+    const { a, z } = this.at ?? { a: 0, z: n };
+    if (a === 0 && z === n) return keys;
+    const out = keys.slice();
+    if (z < n) { const i = out.indexOf(this.lastTurnBefore(list, z)); if (i >= 0) out.splice(i + 1, 0, "newer"); }
+    if (a > 0) { const i = out.indexOf(turnKeyOf(list.rows[a])); if (i >= 0) out.splice(i, 0, "older"); }
+    return out;
+  }
+  keep(list, a, z, slid) {
+    const n = list.rows.length;
+    this.from = a > 0 ? turnKeyOf(list.rows[a]) : null;
+    this.to = z < n ? this.lastTurnBefore(list, z) : null;
+    this.at = { a, z, slid };
+    return this.at;
+  }
+  // slide rows around row i, its turn whole, or the newest slide rows when that reaches within
+  // a block of the end.
+  around(list, i) {
+    const n = list.rows.length;
+    const C = this.cap;
+    const t0 = this.start(list, i, -1);
+    const t1 = this.start(list, i + 1, 1);
+    const a = Math.min(t0, this.start(list, Math.max(0, i - Math.floor(C.slide / 2)), 1));
+    const z = Math.max(t1, this.start(list, Math.min(n, a + C.slide), -1));
+    if (z >= n - C.block) return [Math.min(t0, this.start(list, Math.max(0, n - C.slide), 1)), n];
+    return [a, z];
+  }
+  // The nearest place at or after i (dir 1) or at or before it (dir -1) where a turn's rows
+  // start, or the start or the end of the rows.
+  start(list, i, dir) {
+    const { rows } = list;
+    const n = rows.length;
+    const starts = (j) => j <= 0 || j >= n || (rows[j].turn != null && rows[j].turn !== rows[j - 1].turn);
+    let j = Math.max(0, Math.min(n, i));
+    while (!starts(j)) j += dir;
+    return j;
+  }
+  // The first row of a turn, by key; for a turn with no rows now (hidden, or gone), the first
+  // row of the next turn that has some.
+  turnRow(list, key) {
+    const i = list.index.get(key);
+    if (i != null) return this.start(list, i, -1);
+    const [si, n] = key.split(":").map(Number);
+    const { rows } = list;
+    for (let j = 0; j < rows.length; j++) {
+      const r = rows[j];
+      if (r.turn && r.si != null && (r.si > si || (r.si === si && r.turn.n >= n))) return this.start(list, j, -1);
+    }
+    return rows.length;
+  }
+  // Where a turn's rows end, by key: the place after its last row.
+  turnEnd(list, key) {
+    const i = list.index.get(key);
+    return i != null ? this.start(list, i + 1, 1) : this.turnRow(list, key);
+  }
+  lastTurnBefore(list, z) {
+    for (let j = z - 1; j >= 0; j--) { const k = turnKeyOf(list.rows[j]); if (k) return k; }
+    return null;
+  }
+}
 // The line on screen is kept across a re-wrap (main.js takeAnchor and holdPlace) from the
 // list's scroll offset, which Herdr's v_virtual_list keeps in px and gives no read of. pre
 // is the rows' tops (pre[i]) and the list's end (pre[n]), in the layout's heights.
