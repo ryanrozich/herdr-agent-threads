@@ -617,6 +617,41 @@ test("a turn that comes in while an open card waits on a placeholder leaves the 
   expect(seen).toEqual([[false, true, false, true, false], [true, true, true, true, false]]);
 }, 60000);
 
+// The same, for an open card whose rows are all in but whose work is not done: a part shown
+// with no links yet, as when the links ran out of time (partLinks), counts as work left too.
+// The kept card had no placeholder to count, so no rebuild of the open turns was asked for, and
+// the part was never linked. Any open card in the kept rows is built again, whatever it waits on.
+test("a turn that comes in while an open card has a part still to link leaves that part to be linked: the card settles", async () => {
+  const seen = [];
+  for (const append of [false, true]) {
+    const { v, cx, keys } = await openLong([shortParas(4000), "Short reply."], true);
+    const s = v.sessions.at(-1);
+    const T = s.turns;
+    T.forEach((t, i) => { t.day = i < T.length - 1 ? "2026-11-01" : "2026-11-02"; });
+    v.rowsKey = null;
+    settleRows(v, cx);
+    dropTimers(v, cx);
+    // The card's first part is linked out of time, as partLinks does when the time is spent.
+    let hold = true;
+    const pl = v.partLinks;
+    v.partLinks = function (m, src) {
+      if (hold && src.startsWith("Paragraph 1:")) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.otherLeft = (this.otherLeft ?? 0) + 1; return { md: src, links: 0 }; }
+      return pl.call(this, m, src);
+    };
+    v.toggle(keys[0], cx);
+    costedFrames(v, cx, 200, () => !v.rowJob && !v.baseRows.some((x) => x.kind === "mdrest" && x.key.includes(`:${keys[0]}:`)), { secs: 20 });
+    dropTimers(v, cx);
+    const held = v.baseRows.find((x) => x.kind === "md" && x.key.startsWith(`md:${keys[0]}:`))?.links === 0;
+    hold = false;
+    if (append) { T.push({ ...T.at(-1), n: T.length + 1, after: ["A new made-up reply."], shapeKey: null }); s.version = (s.version ?? 0) + 1; }
+    else v.rowsKey = v.rowsKey == null ? null : "again";
+    const r = costedFrames(v, cx, 200, await cardDone(v, keys[0]), { secs: 20 });
+    delete v.partLinks;
+    seen.push([append, held, r.settled > 0]);
+  }
+  expect(seen).toEqual([[false, true, true], [true, true, true]]);
+}, 60000);
+
 // Stopped inside the rebuild the shape timer asked for (againOpen), as it builds the card: the
 // request stands, and the light draw after it builds the card again and splits on. With the
 // request given up before the build, the shape timer asks again only at the window's end.
