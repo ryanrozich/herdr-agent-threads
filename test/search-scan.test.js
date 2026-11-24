@@ -1427,7 +1427,7 @@ const LEAVES = {
   "a rail card's pin button": {
     // The last turn's rail card open, as a hover opens it; the draw records its handlers.
     before: (v, cx, last) => { v.debug = true; v.action(`debugRailCard:${last.split(":")[1]}`, cx); v.debug = false; H.rec = []; },
-    go: (v, cx, pin) => pin(null, cx),
+    go: (_v, cx, pin) => pin(null, cx),
   },
 };
 // The handler the recorded draw gave the element with this id.
