@@ -1738,15 +1738,21 @@ test("shaping: an owed row is paid before the draw's rows build, whose slice doe
 // draw reshapes that row before the cut turn reaches its run alone, so the turn, on screen, is
 // refused for the units run before it. Refused so, it is owed and counted like any row on
 // screen the fit check refuses (oweRow, refuse): the next draw tries it first (payOwed), where
-// it runs alone and is kept, with no further stop.
+// it runs alone and is kept, with no further stop. The pane draws its last 12 rows, so on screen
+// and off differ: a turn 40 back, off screen, with a cut-in-company mark of its own, is refused
+// the same way in every draw and is not owed, so it waits while the other row keeps reshaping.
 test("shaping: a turn cut in company, with another row reshaped first in every draw, is owed on screen and runs alone first in a later draw, with no further stop", async () => {
   for (const back of [5, 20]) {
     const p = await pricedDrain({ after: 0 });
+    H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
     try {
       const [first, cut, third] = [p.turns.at(-4), p.turns.at(-3), p.turns.at(-2)];
       const other = p.turns.at(-back);
+      const off = p.turns.at(-40);
       p.begin();
       p.v.shapeBudget = 60;
+      off.shapeMark = { sig: p.v.markSig(off, p.v.replyText(off)), alone: false, cut: true };
+      p.restale(off);
       p.restale(first, 5000);
       p.charge(first, 25);
       p.restale(cut, 2000);
@@ -1766,8 +1772,48 @@ test("shaping: a turn cut in company, with another row reshaped first in every d
       expect([back, frames[runs[1]].log[0].turn === cut, frames[runs[1]].stopped]).toEqual([back, true, false]);
       expect([back, shapedAt > 0 && shapedAt < 330, cut.shapeMark ?? null, cut.refused ?? null]).toEqual([back, true, null, null]);
       expect([back, p.v.sharedCut, p.v.aloneCut ?? 0, p.v.owedPaid > 0]).toEqual([back, 1, 0, true]);
-    } finally { p.end(); }
+      // The rows drawn are the last 12, and the turn off screen was never owed or run.
+      const r = lastList.range;
+      const shown = new Set(p.v.rowsMemo.slice(r.start, r.end).map((x) => x.turn).filter(Boolean));
+      expect([back, shown.has(cut), shown.has(off)]).toEqual([back, true, false]);
+      expect([back, frames.some((f) => f.log.some((x) => x.turn === off)), off.shapeKey ?? null]).toEqual([back, false, null]);
+    } finally { H.listWindow = null; p.end(); }
   }
+}, 300000);
+
+// The release on that path: a text cut in company, then with 25 ms of fixed work ahead of every
+// draw and another row reshaped first in each. The owed run alone is held by the time spent
+// (cutWhereNow) where it is paid, before the walk, which counts nothing there (no row is on
+// screen outside the walk); in the walk it is refused for the units run before it and counted
+// on screen. So the count reaches its second 64 draws, and the turn runs alone, is cut and is
+// held: two runs and two stops for the text. Uncounted, it would wait for good.
+test("shaping: a text cut in company, with another row reshaped first in every draw and the time spent holding its run alone, is counted on screen and released after a second 64 draws", async () => {
+  const p = await pricedDrain();
+  try {
+    const big = p.turns.at(-3);
+    const other = p.turns.at(-2);
+    p.begin();
+    p.restale(big, 30000);
+    p.charge(big, 60);
+    const runs = [];
+    const reshape = p.v.reshape;
+    let k = 0;
+    p.v.reshape = function (...a) { if (a[0] === big && this.renderOpen) runs.push([k, Boolean(this.unitAlone)]); return reshape.apply(this, a); };
+    const frames = [];
+    for (; k < 1200; k++) {
+      if (runs.length) p.restale(other);
+      const f = p.step();
+      frames.push(f);
+      if (f.stopped && runs.length === 1) p.setAhead(25);
+    }
+    const stops = frames.flatMap((f, i) => (f.stopped ? [i] : []));
+    expect(runs.map(([, a]) => a)).toEqual([false, true]);
+    expect(stops).toEqual(runs.map(([i]) => i));
+    expect(runs[1][0] - runs[0][0]).toBeGreaterThanOrEqual(312 + 2 * 64 - 2);
+    // other was reshaped ahead of it in the draws it was counted.
+    expect(frames.slice(runs[0][0] + 320, runs[1][0]).every((f) => f.log[0]?.turn === other)).toBe(true);
+    expect([big.shapeMark?.alone, big.shapeMark?.cut, big.shapeKey ?? null, p.v.sharedCut, p.v.aloneCut]).toEqual([true, true, null, 1, 1]);
+  } finally { p.end(); }
 }, 300000);
 
 // Herdr's stop landing after a turn's reshape has ended but before its shape is stored (here
