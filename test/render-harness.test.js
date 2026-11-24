@@ -194,3 +194,23 @@ test("pinsIdle stops its loop when the cap wins: a pane that is saving but whose
     });
   } finally { v.pinSaving = 0; }
 });
+
+// The hook that runs before every test. A pane whose save never ends fails the call once, at
+// the cap; the call after that finds no pane to wait on and returns.
+test("the hook before each test: a pane whose save never ends fails one call, and the next call returns with nothing to wait on", async () => {
+  const hook = globalThis.__threadsHarnessEachTest;
+  const { v, cx, keys } = await pinPane("--extra", "3");
+  let release;
+  v.pinChain = new Promise((r) => { release = r; });
+  v.sel = keys()[0];
+  v.action("pin", cx);
+  const chain = v.pinChain;
+  try {
+    await expect(hook(40)).rejects.toThrow("a pin save never ended");
+    await expect(hook(40)).resolves.toBeUndefined();
+  } finally {
+    release();
+    await chain; // the late write lands now, and the call after clears it
+    await hook();
+  }
+});

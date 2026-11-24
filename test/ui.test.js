@@ -132,11 +132,10 @@ test("alpha: every colour form", () => {
   expect(alpha("transparent", 0.5)).toBe("transparent");
 });
 
-test("alpha: every colour of a synthetic theme, and of every installed theme, parses", () => {
+test("alpha: every colour of a synthetic theme parses", () => {
   // The synthetic set always runs, so the test does not depend on the machine (A7). The
   // installed themes are checked by the host-theme test below, when it is switched on.
   const colours = new Set(["#1e1e1e", "#FFF", "#e6e6e6cc", "rgb(30, 30, 30)", "rgba(255,255,255,0.4)", "rgb(10 20 30 / 25%)"]);
-  for (const c of colours) expect(alpha(c, 0.5)).toMatch(/^#[0-9a-f]{8}$/);
   for (const c of colours) expect(alpha(c, 0.5)).toMatch(/^#[0-9a-f]{8}$/);
 });
 

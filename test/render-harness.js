@@ -285,12 +285,12 @@ export async function pinsIdle(capMs = 2000) {
   try { await Promise.race([idle, give]); } finally { over = true; clearTimeout(timer); }
 }
 // Before every test: the last test's panes finish their saves and drop their queued ones,
-// then everything goes back to its start.
-globalThis.__threadsHarnessEachTest = async () => {
+// then everything goes back to its start. A save that never ends fails this call once (after
+// capMs); the panes are forgotten and the state reset either way, so the tests after it start
+// clean and are not made to wait on the same stuck pane.
+globalThis.__threadsHarnessEachTest = async (capMs) => {
   for (const v of pinPanes) v.pinDueAt = null;
-  await pinsIdle();
-  pinPanes.clear();
-  reset();
+  try { await pinsIdle(capMs); } finally { pinPanes.clear(); reset(); }
 };
 export const { thumbSize, tileRow, bubbleMax, ROW, columnWidth, railLook, rowHeight, MD_MAX, alpha: alphaForTest, dayKey } = await import("../mods/agent-threads/ui.js");
 
