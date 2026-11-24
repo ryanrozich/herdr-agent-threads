@@ -4,11 +4,11 @@ Newest first. Each release's full list of pull requests is in [CHANGELOG.md](../
 
 ## 1.2.0
 
-Open a large session at its end in seconds, see the Trajectory in a pane of its own, step through search matches, and add sender rules. It needs the same Herdr and tools as 1.1.0. The panes that drag by the edge you grab (the Threads pane, and the Chat with the Trajectory and the Pinned column) need Herdr 0.1.16 or 0.1.17; on another version they keep the sizes and drags they had in 1.1.0.
+Open a large session at its end in seconds, see the Trajectory in a pane of its own, step through search matches, and add sender rules. It needs the same Herdr and tools as 1.1.0. The Chat, the Trajectory and the Pinned column dragging and resizing together need Herdr 0.1.16 or 0.1.17; on Herdr 0.1.18, and any other version, they keep the sizes and drags they had in 1.1.0.
 
 ### What you will notice first
 
-- A large session opens at its end in a few seconds. A 499 MB session opens in about 7 seconds where it took about 18, on the test machine with Herdr 0.1.18. A loading state shows how far the read has got, and the list no longer drops into Herdr's slow state when many long pasted prompts are on screen together.
+- A large session opens at its end in a few seconds. A 499 MB session opens in about 7 seconds where it took about 18, on the test machine with Herdr 0.1.18. A loading state shows how far the read has got, and shaping keeps to each draw's time, so a screen of long pasted prompts does not stall the list while it opens.
 - The Trajectory has a pane of its own, to the right of the chat, with the session as a ledger of its turns and steps.
 - Search steps through its matches newest first: `n` goes to the next older one and `Shift n` to the newer one.
 - Sender rules have a page in Settings, a mark on the messages they match, and a count of the prompts a rule would take before you keep it.
@@ -48,9 +48,10 @@ Open a large session at its end in seconds, see the Trajectory in a pane of its 
 
 ### Panes and widths
 
+The second item below needs Herdr 0.1.16 or 0.1.17. On Herdr 0.1.18, and any other version, those panes keep the sizes and drags they had in 1.1.0.
+
 - Drag the edge of the Threads pane you want to move. Before, a drag of one edge moved the other as well and resized the terminals on the far side.
 - With the Trajectory or the Pinned column open, each divider between the Chat, the Trajectory, the Pinned column and the terminal moves only the two panes beside it, and a window resize scales them all. `-` and `=` make the pane to the right of the Chat narrower or wider: the Trajectory if it is open, else the Pinned column.
-- These panes work this way on Herdr 0.1.16 and 0.1.17. On other versions, Herdr 0.1.18 among them, the panes keep the sizes and drags they had in 1.1.0.
 
 ### The Trajectory
 
@@ -75,6 +76,7 @@ Open a large session at its end in seconds, see the Trajectory in a pane of its 
 ### Known limits
 
 - A search on a very long session can be slow. A fix is in review.
+- On Herdr 0.1.18 the Chat, the Trajectory and the Pinned column do not yet size and drag together by weights. A fix is in review.
 
 ## 1.1.0
 
