@@ -62,9 +62,11 @@ const cardKeys = keyInstaller(CARD_BINDINGS);
 import * as gpuiKit from "gpui-kit";
 // window() (the platform) is read from the namespace, so a Herdr without it still loads the mod.
 import * as herdrNs from "herdr";
-const PAINT = gpuiKit.PathBuilder?.fill && gpuiKit.Background?.linear_gradient ? gpuiKit : null;
+// Read at each use, not once at load, so the render tests can stand in a Herdr that paints
+// (test/render-harness.js paintKit).
+const paintKit = () => (gpuiKit.PathBuilder?.fill && gpuiKit.Background?.linear_gradient ? gpuiKit : null);
 // A stroked path (the timeline's hatched breaks, TRD-23), where Herdr has one.
-const STROKE = gpuiKit.PathBuilder?.stroke ? gpuiKit : null;
+const strokeKit = () => (gpuiKit.PathBuilder?.stroke ? gpuiKit : null);
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
@@ -94,7 +96,7 @@ import {
   BAR_W, BAR_H, BAR_SLANT, trajLayout, rowsLeft,
 } from "./ledger.js";
 import {
-  timelineModel, timelineHit, tlBox, tornPoints, polyRows, tlStrip, hatchLines, tlNumbers, tlBar, tlRow, TL_MADE,
+  timelineModel, timelineHit, tlBox, tornPoints, polyRows, tlStrip, hatchLines, tlNumbers, tlBar, tlRow, tlPathOf, TL_MADE,
   TL_LANES, TL_MIN_W, TL_H, TL_GUT, TL_AX, TL_TK, TL_LT, TL_LANE, TL_PT, TL_ROWS_MIN,
 } from "./timeline.js";
 import { VERSION, versionLine, parseBuild } from "./version.js";
@@ -333,6 +335,25 @@ const CARD_SECTIONS = [
 // Functions that each build a part of the card's rows, returned by one kid of a column
 // (cardCol), so each is a part of its own.
 class CardParts { constructor(kids) { this.kids = kids; } }
+// A timeline layer's filled path from its spans (Threads.rectLayer), in % of a layer cw by h px.
+function fillPath(kit, spans, cw, h) {
+  const p = (v) => `${((Math.max(0, Math.min(cw, v)) / cw) * 100).toFixed(3)}%`;
+  const q = (v) => `${((v / h) * 100).toFixed(3)}%`;
+  let b = kit.PathBuilder.fill();
+  for (const sp of spans) {
+    const [a, z] = sp;
+    if (!(z > 0 && a < cw)) continue;
+    if (sp[2] && z <= cw) {
+      const pts = tornPoints(a, z, h);
+      b = b.move_to(p(pts[0][0]), q(pts[0][1]));
+      for (let k = 1; k < pts.length; k++) b = b.line_to(p(pts[k][0]), q(pts[k][1]));
+      b = b.close();
+    } else b = b.move_to(p(a), "0%").line_to(p(z), "0%").line_to(p(z), "100%").line_to(p(a), "100%").close();
+  }
+  return b.build();
+}
+// A colour as a key for a kept path: a string as it is, else its JSON.
+const colorKey = (c) => (typeof c === "string" ? c : JSON.stringify(c));
 // Its bands' side inset: 16 px, or 12 under a 320 px card.
 const cardPad = (w) => (w < 320 ? 12 : 16);
 // A color dot on the card, across (settings-spacing 2).
@@ -7901,6 +7922,7 @@ export default class Threads extends View {
   // steps of alpha before that.
   fadeLayer(t) {
     const win = globalThis.window;
+    const PAINT = paintKit();
     if (PAINT && typeof win?.paint_path === "function") {
       try {
         const rect = PAINT.PathBuilder.fill().move_to("0%", "0%").line_to("100%", "0%").line_to("100%", "100%").line_to("0%", "100%").close().build();
@@ -12069,9 +12091,9 @@ export default class Threads extends View {
     // has it, for the list's size callback (tlBase).
     const tlOn = this.tlShown();
     this.tlSlot = tlOn;
-    // A hidden strip keeps no model (about 452 B a turn at Fit, 2.5 MiB at 5,600 turns): shown
-    // again, it places the turns anew.
-    if (!tlOn) this.tlModel = null;
+    // A hidden strip keeps no model (about 452 B a turn at Fit, 2.5 MiB at 5,600 turns) and no
+    // painted paths: shown again, it places the turns anew.
+    if (!tlOn) { this.tlModel = null; this.tlKeep = null; this.tlHatch = null; this.tlFails = null; }
     return v_flex()
       .id("threads-root")
       .track_focus(this.h)
@@ -12140,7 +12162,7 @@ export default class Threads extends View {
       cw: M?.cw ?? null, turns: T?.turns.length ?? 0, drawn: T ? T.to - T.from + 1 : 0, spans,
       layers: T ? T.spans.size + new Set(M.grow.map((g) => g.k)).size : 0, live: M?.geo.live ?? -1,
       grow: (M?.grow ?? []).map((g) => ({ k: g.k, x0: Math.round(g.x0), x1: Math.round(g.x1) })), labels: T?.labels.length ?? 0, ms: this.tlMs ?? null,
-      made: { geo: TL_MADE.geo, layout: TL_MADE.layout, tail: TL_MADE.tail, tracks: TL_MADE.tracks },
+      made: { geo: TL_MADE.geo, layout: TL_MADE.layout, tail: TL_MADE.tail, tracks: TL_MADE.tracks, paths: TL_MADE.paths },
     };
   }
   // A press on the lanes: the nearest step in that lane within 4 px, else its turn's heading
@@ -12251,7 +12273,7 @@ export default class Threads extends View {
     const ticks = div().id("th-tl-ticks").relative().w(cw).h(TL_TK).overflow_hidden()
       .children(T.ticks.map((k) => div().absolute().top(0).left(k.x).h(TL_TK).pl(3).border_l(1).border_color(t.dim)
         .text_size(9.5).font_family(this.mono()).text_color(t.dim).child(k.text)))
-      .child(this.rectLayer(T.fails.map((x) => [x - 3, x + 3]), inks.failed, "th-tl-fails", cw, TL_TK - 4, 4));
+      .child(this.rectLayer(this.failSpans(T.fails), inks.failed, "th-tl-fails", cw, TL_TK - 4, 4));
     const name = (word) => div().h(TL_LANE).flex().items_center().text_size(10.5).text_color(t.dim).child(word);
     return box(h_flex()).items_start()
       .child(v_flex().id("th-tl-gutter").flex_none().w(TL_GUT).pl(12).pt(TL_PT + TL_AX + TL_TK + TL_LT)
@@ -12260,29 +12282,27 @@ export default class Threads extends View {
         .when(Boolean(band), (el) => el.child(band))
         .child(labels).child(ticks).child(div().h(TL_LT)).child(lanes));
   }
+  // The fail marks as spans 6 px wide, made again only for a new layout's marks, so the kept
+  // path is found by identity.
+  failSpans(fails) {
+    if (this.tlFails?.src !== fails) this.tlFails = { src: fails, spans: fails.map((x) => [x - 3, x + 3]) };
+    return this.tlFails.spans;
+  }
   // A layer of filled bars, each span [x0, x1] px of a strip cw px wide (a torn one [x0, x1, 1],
   // timeline.js tornPoints), top px down the lanes and h px tall: one painted path where Herdr
   // has one (its points in % of the layer), else at most 60 divs, and a torn end as its rows
-  // of whole px (a 12 px bar is 7 divs) for up to 40 of them.
+  // of whole px (a 12 px bar is 7 divs) for up to 40 of them. The path is kept by the layer's
+  // id while its spans, width, height and colour stay the same (timeline.js tlPathOf, tlKeep):
+  // building it was most of the strip's paint time.
   rectLayer(spans, color, id, cw, top, h) {
     const win = globalThis.window;
-    const p = (v) => `${((Math.max(0, Math.min(cw, v)) / cw) * 100).toFixed(3)}%`;
-    const q = (v) => `${((v / h) * 100).toFixed(3)}%`;
+    const PAINT = paintKit();
     if (PAINT && typeof win?.paint_path === "function" && spans.length) {
       try {
-        let b = PAINT.PathBuilder.fill();
-        for (const sp of spans) {
-          const [a, z] = sp;
-          if (!(z > 0 && a < cw)) continue;
-          if (sp[2] && z <= cw) {
-            const pts = tornPoints(a, z, h);
-            b = b.move_to(p(pts[0][0]), q(pts[0][1]));
-            for (let k = 1; k < pts.length; k++) b = b.line_to(p(pts[k][0]), q(pts[k][1]));
-            b = b.close();
-          } else b = b.move_to(p(a), "0%").line_to(p(z), "0%").line_to(p(z), "100%").line_to(p(a), "100%").close();
-        }
-        return win.paint_path(b.build(), color).absolute().left(0).top(top).w(cw).h(h);
-      } catch { /* the divs below */ }
+        this.tlKeep ??= new Map();
+        const path = tlPathOf(this.tlKeep, id, spans, `${cw}|${h}|${colorKey(color)}`, (list) => fillPath(PAINT, list, cw, h));
+        return win.paint_path(path, color).absolute().left(0).top(top).w(cw).h(h);
+      } catch { this.tlKeep?.delete(id); /* the divs below */ }
     }
     const inView = spans.filter(([a, z]) => z > 0 && a < cw);
     const plain = inView.filter((sp) => !sp[2] || sp[1] > cw).map(([a, z]) => [Math.max(0, a), Math.min(cw, z)]);
@@ -12294,19 +12314,32 @@ export default class Threads extends View {
   }
   // The breaks between turns, hatched (timeline.js hatchLines: 45 degree lines 5 px apart in
   // each break 4 px or wider, at most TL_HATCH_MAX), one stroked path; a faint fill where
-  // Herdr has no stroked path.
+  // Herdr has no stroked path. The breaks in view 4 px or wider and the built path are kept
+  // with the layout's breaks (by identity) and the width, height and colour (tlHatch), so a
+  // draw that keeps the layout neither filters the breaks again nor builds the path.
   hatchLayer(gaps, color, cw, h) {
-    const wide = gaps.filter(([a, z]) => z - a >= 4 && z > 0 && a < cw).map(([a, z]) => [Math.max(0, a), Math.min(cw, z)]);
+    const key = `${cw}|${h}|${colorKey(color)}`;
+    let k = this.tlHatch;
+    if (!k || k.gaps !== gaps || k.key !== key) {
+      const wide = gaps.filter(([a, z]) => z - a >= 4 && z > 0 && a < cw).map(([a, z]) => [Math.max(0, a), Math.min(cw, z)]);
+      k = this.tlHatch = { gaps, key, wide, path: null };
+    }
+    const wide = k.wide;
     if (!wide.length) return null;
     const win = globalThis.window;
+    const STROKE = strokeKit();
     if (STROKE && typeof win?.paint_path === "function") {
       try {
-        const px = (v) => `${((v / cw) * 100).toFixed(3)}%`;
-        const py = (v) => `${((v / h) * 100).toFixed(3)}%`;
-        let b = STROKE.PathBuilder.stroke(1);
-        for (const [x0, y0, x1, y1] of hatchLines(gaps, cw, h).lines) b = b.move_to(px(x0), py(y0)).line_to(px(x1), py(y1));
-        return win.paint_path(b.build(), color).absolute().top(0).left(0).size_full();
-      } catch { /* the fills below */ }
+        if (!k.path) {
+          TL_MADE.paths++;
+          const px = (v) => `${((v / cw) * 100).toFixed(3)}%`;
+          const py = (v) => `${((v / h) * 100).toFixed(3)}%`;
+          let b = STROKE.PathBuilder.stroke(1);
+          for (const [x0, y0, x1, y1] of hatchLines(gaps, cw, h).lines) b = b.move_to(px(x0), py(y0)).line_to(px(x1), py(y1));
+          k.path = b.build();
+        }
+        return win.paint_path(k.path, color).absolute().top(0).left(0).size_full();
+      } catch { k.path = null; /* the fills below */ }
     }
     return div().id("th-tl-gaps").absolute().top(0).left(0).size_full()
       .children(coarse(wide.map(([a, z]) => [a / cw, z / cw]), 60).map(([a, z]) => div().absolute().top(0).h_full().left(a * cw).w(Math.max(1, (z - a) * cw)).bg(alpha(color, 0.5))));
@@ -12496,6 +12529,7 @@ export default class Threads extends View {
   // else a plain bar.
   slantBar(color, w, h, d) {
     const win = globalThis.window;
+    const PAINT = paintKit();
     if (PAINT && typeof win?.paint_path === "function") {
       try {
         const pts = slantPoints(0, w, h, d);

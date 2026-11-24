@@ -12,9 +12,35 @@ export const tlLen = (h) => Math.max(0, (h?.rows?.length ?? 1) - 1);
 export const tlRow = (h, i) => (i >= 0 && i < tlLen(h) ? h.rows[i + 1] : undefined);
 const stepN = tlLen;
 // How many times the turns were placed (timelineGeo), laid out (timelineLayout), the running
-// turn alone laid out again (tlTail) and a turn's tracks worked out (tlTracks) since the module
-// loaded, for the tests and the debug report: a draw that changes none of them adds none.
-export const TL_MADE = { geo: 0, layout: 0, tail: 0, tracks: 0 };
+// turn alone laid out again (tlTail), a turn's tracks worked out (tlTracks) and a layer's path
+// built (tlPathOf) since the module loaded, for the tests and the debug report: a draw that
+// changes none of them adds none.
+export const TL_MADE = { geo: 0, layout: 0, tail: 0, tracks: 0, paths: 0 };
+// Whether two span lists ([x0, x1] or [x0, x1, 1] for a torn end) are the same, span for span.
+function sameSpans(a, b) {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (x[0] !== y[0] || x[1] !== y[1] || (x[2] ?? 0) !== (y[2] ?? 0)) return false;
+  }
+  return true;
+}
+// A layer's painted path, kept: keep holds, by the layer's id, the spans it was built from, key
+// (its width, height and colour) and the path. The same spans (by identity, else span for
+// span: a layout made again or a running turn's events give new arrays) and key give the kept
+// path; else build(spans) makes it, and it is kept. A path is a host object whose every point
+// was a call into Herdr, so a draw that changes nothing builds none (the paint cost at 2,000
+// and 5,600 turns on the test machine).
+export function tlPathOf(keep, id, spans, key, build) {
+  const k = keep.get(id);
+  if (k && k.key === key && sameSpans(k.spans, spans)) { k.spans = spans; return k.path; }
+  TL_MADE.paths++;
+  const path = build(spans);
+  keep.set(id, { key, spans, path });
+  return path;
+}
 // A step's start and end from its row, ms from the turn's start (NaN for none: an instant has
 // no end), and its flags: TL_TRACK (in the Tools lane it started while another call ran, drawn
 // half height), TL_OPEN (a call with no result yet) and TL_FAILED.

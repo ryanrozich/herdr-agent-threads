@@ -274,7 +274,7 @@ test("timeline view: the debug report's traj.timeline says whether it shows, and
   shownFrame(b, cb);
   const tl = b.trajReport().timeline;
   expect(Object.keys(tl).sort()).toEqual(["can", "cw", "drawn", "grow", "hidden", "labels", "layers", "live", "made", "ms", "rowsLeft", "shown", "spans", "turns", "waiting"]);
-  expect(Object.keys(tl.made).sort()).toEqual(["geo", "layout", "tail", "tracks"]);
+  expect(Object.keys(tl.made).sort()).toEqual(["geo", "layout", "paths", "tail", "tracks"]);
   expect(tl).toMatchObject({ can: true, shown: true, waiting: false, cw: 1370, turns: b.ledger().totals.heads.length, live: -1, grow: [] });
   expect(tl.spans).toBeGreaterThan(0);
   expect(tl.layers).toBeGreaterThan(0);
