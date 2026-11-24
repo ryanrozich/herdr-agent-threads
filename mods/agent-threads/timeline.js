@@ -1,0 +1,298 @@
+// agent-threads: the Trajectory's timeline as data (TRD-23). Pure JavaScript with no Herdr
+// imports, tested under bun (test/timeline.test.js); main.js draws what this returns.
+// Carried from draft 107 (ledger.js there); the items it reads are made by ledger.js ledgerTurn.
+
+import { durText, startText } from "./ledger.js";
+
+
+// ---- the timeline (round 3 and round 7) ----
+// The session as bars on three lanes, Input, Model and Tools, in a strip cw px wide. Two
+// scales: "clock", where a turn is as wide as it took (never under a minimum) and the idle
+// time between turns is folded into a fixed break, hatched; "steps", where every step gets
+// the same width. heads are the ledger's headings in order (each carries its turn's steps,
+// items, from ledgerTurn).
+// It is made in two parts. timelineGeo places the turns with the whole session fitted to the
+// strip (it walks the turns, not the steps). timelineLayout draws a view of that: zoomed z
+// times and x0 px in (in zoomed px), the steps only of the turns in view, and of those only a
+// turn wide enough to draw them (a turn under 2 px is one span per lane it has). Bars that
+// touch are joined, so what is drawn is bounded by the strip's width, not the session's
+// length, at any zoom.
+// A call with no result yet is a bar to the turn's end (to now while the turn runs) with a
+// torn right end. nowMs: the clock, for a running turn.
+export const TL_LANES = Object.freeze(["input", "model", "tools"]);
+const wallOf = (h, nowMs) => {
+  const w = h.going && h.t0 != null ? Math.max(h.span ?? 0, nowMs - h.t0) : (h.total ?? h.span ?? 0);
+  return Number.isFinite(w) && w > 0 ? w : 0;
+};
+export function timelineGeo(heads, cw, scale = "clock", nowMs = Date.now()) {
+  const n = heads.length;
+  const geo = { cw, scale, turns: [], index: new Map(), walls: [], gap: 0, total: 0, steps: 0 };
+  if (!n || !(cw > 0)) return geo;
+  const GAP = cw < 700 ? 14 : 30;
+  const MIN = cw < 700 ? 30 : 48;
+  const gap = n > 1 ? Math.min(GAP, (0.15 * cw) / (n - 1)) : 0;
+  const min = Math.min(MIN, (0.3 * cw) / n);
+  const target = Math.max(1, cw - gap * (n - 1));
+  const walls = heads.map((h) => wallOf(h, nowMs));
+  for (const h of heads) geo.steps += Math.max(1, h.items?.length ?? 1);
+  let widths;
+  if (scale === "steps") {
+    const sw = target / geo.steps;
+    widths = heads.map((h) => Math.max(1, h.items?.length ?? 1) * sw);
+  } else {
+    // The px per ms that fills the strip, each turn at least min wide: the turns held at min
+    // and the px per ms for the rest found in turn until neither moves (a few passes; the
+    // held set only grows as m falls). n * min is at most 30% of the strip, so it fits.
+    let m = 0;
+    let all = 0;
+    for (const w of walls) all += w;
+    if (all > 0) {
+      m = target / all;
+      for (let k = 0; k < 12; k++) {
+        let held = 0;
+        let rest = 0;
+        for (const w of walls) { if (w * m < min) held++; else rest += w; }
+        const next = rest > 0 ? Math.max(0, target - held * min) / rest : 0;
+        if (Math.abs(next - m) <= m * 1e-9) { m = next; break; }
+        m = next;
+      }
+    }
+    widths = walls.map((w) => Math.max(min, w * m));
+    // No turn has a length: each gets an even share.
+    if (!(all > 0)) widths = walls.map(() => target / n);
+  }
+  let x = 0;
+  heads.forEach((h, ti) => {
+    geo.turns.push({ x, w: widths[ti], key: h.key, n: h.n });
+    geo.index.set(h.key, ti);
+    x += widths[ti] + (ti < n - 1 ? gap : 0);
+  });
+  geo.walls = walls;
+  geo.gap = gap;
+  geo.total = x;
+  return geo;
+}
+// How far the timeline zooms: until four steps fill it (the reference's limit), so it grows
+// with the session.
+export function tlMaxZoom(geo) { return Math.max(1, (geo?.steps ?? 0) / 4); }
+// A view kept inside the session: z from 1 to the limit, x0 from 0 to the zoomed end.
+export function tlClamp(geo, view) {
+  const z = Math.min(tlMaxZoom(geo), Math.max(1, Number(view?.z) || 1));
+  const room = Math.max(0, (geo?.total ?? 0) * z - (geo?.cw ?? 0));
+  return { z, x0: Math.min(room, Math.max(0, Number(view?.x0) || 0)) };
+}
+// The view zoomed to z about a point px from the strip's left: the moment under it stays under
+// it (a pinch), or with put, moves to put px (the buttons and keys put it in the middle).
+export function tlZoomAt(geo, view, z, at, put = at) {
+  const v = tlClamp(geo, view);
+  const f = (at + v.x0) / v.z;
+  const nz = tlClamp(geo, { z, x0: 0 }).z;
+  return tlClamp(geo, { z: nz, x0: f * nz - put });
+}
+// A turn's box in the view: { x, w } in px of the strip.
+export function tlBox(L, ti) {
+  const t = L.turns[ti];
+  return t ? { x: t.x * L.z - L.x0, w: t.w * L.z } : null;
+}
+// range: the focus range as { ia, ib, pos } (the first and last row's place in the ledger's
+// rows, and every row's place): bars outside it get their own spans, with "|o" on the key.
+// The rows a band holds, lo to hi px of the view L: the first and last whose bar starts inside
+// it ({ a, b } keys, in order), or null when no bar starts there. Walks the turns the band
+// covers, found by halving.
+export function bandRows(L, heads, lo, hi, nowMs = Date.now()) {
+  const G = L.geo;
+  const T = G?.turns ?? [];
+  if (!T.length || !(hi >= lo)) return null;
+  const z = L.z ?? 1;
+  const x0 = L.x0 ?? 0;
+  const f0 = (lo + x0) / z;
+  const f1 = (hi + x0) / z;
+  let i = 0;
+  let j = T.length - 1;
+  while (i < j) { const m = (i + j) >> 1; if (T[m].x + T[m].w < f0) i = m + 1; else j = m; }
+  let a = null;
+  let b = null;
+  for (let ti = i; ti < T.length && T[ti].x <= f1; ti++) {
+    const h = heads[ti];
+    const wall = G.walls[ti] ?? wallOf(h, nowMs);
+    for (const it of h?.items ?? []) {
+      const bx = itemBox(it, T[ti].x * z - x0, T[ti].w * z, wall, L.scale, h.items.length);
+      if (!bx || bx.x0 < lo || bx.x0 > hi) continue;
+      if (a == null) a = it.key;
+      b = it.key;
+    }
+  }
+  return a == null ? null : { a, b };
+}
+export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), view = null, geo = null, range = null) {
+  const G = geo ?? timelineGeo(heads, cw, scale, nowMs);
+  const { z, x0 } = tlClamp(G, view);
+  const out = { cw, scale, z, x0, geo: G, turns: G.turns, index: G.index, total: G.total, zmax: tlMaxZoom(G), gaps: [], spans: new Map(), labels: [], ticks: [], fails: [], from: 0, to: -1 };
+  const n = G.turns.length;
+  if (!n) return out;
+  const walls = G.walls;
+  // Spans by lane, ink and track: "tools|failed|0" -> [[x0, x1]], joined where they touch. A
+  // span whose right end is an unfinished call's is [x0, x1, 1]: drawn with its torn end.
+  const add = (k, a, b, torn = false) => {
+    let list = out.spans.get(k);
+    if (!list) { list = []; out.spans.set(k, list); }
+    const last = list[list.length - 1];
+    if (last && a <= last[1] + 0.5) {
+      if (b > last[1]) { last[1] = b; if (torn) last[2] = 1; else last.length = 2; }
+      else if (torn && b === last[1]) last[2] = 1;
+      return;
+    }
+    list.push(torn ? [a, b, 1] : [a, b]);
+  };
+  // The turns in view, and a margin: the first found by halving, since turns are in order.
+  const M = 40;
+  const left = (x0 - M) / z;
+  let lo = 0;
+  let hi = n - 1;
+  while (lo < hi) { const m = (lo + hi) >> 1; const t = G.turns[m]; if (t.x + t.w + G.gap < left) lo = m + 1; else hi = m; }
+  out.from = lo;
+  let labelEnd = -Infinity;
+  let failEnd = -Infinity;
+  for (let ti = lo; ti < n; ti++) {
+    const t = G.turns[ti];
+    const x = t.x * z - x0;
+    if (x > cw + M) break;
+    out.to = ti;
+    const h = heads[ti];
+    const w = t.w * z;
+    // The number at the turn's start, or at the strip's left edge while the turn runs past it.
+    const lx = Math.max(x, Math.min(0, x + w - 24));
+    if (x + w - lx >= 24 && lx >= labelEnd) {
+      out.labels.push({ x: lx, w: x + w - lx, text: `${h.n}`, total: x + w - lx >= 120 ? (h.going ? "running" : durText(walls[ti]) || null) : null });
+      labelEnd = lx + Math.max(24, Math.min(x + w - lx, 120));
+    }
+    if (w < 2) {
+      const c = h.cnt ?? {};
+      const x1 = x + Math.max(w, 1);
+      // A turn too narrow for its steps is inside the range when any of its rows is.
+      const ih = range ? range.pos.get(h.key) : null;
+      const o = range && !(ih != null && ih <= range.ib && ih + (h.items?.length ?? 0) >= range.ia) ? "|o" : "";
+      if (c.input) add(`${c.user ? "input|user|0" : c.agent ? "input|agent|0" : "input|context|0"}${o}`, x, x1);
+      if (c.model) add(`model|model|0${o}`, x, x1);
+      if (c.tools) add(`${c.failed ? "tools|failed|0" : "tools|tools|0"}${o}`, x, x1);
+      if (c.failed && x >= failEnd) { out.fails.push(x + w / 2); failEnd = x + 6; }
+    } else {
+      for (const it of h.items ?? []) {
+        const b = itemBox(it, x, w, walls[ti], scale, h.items.length);
+        if (!b || !it.sk || b.x1 < -M || b.x0 > cw + M) continue;
+        const ip = range ? range.pos.get(it.key) : null;
+        add(range && !(ip != null && ip >= range.ia && ip <= range.ib) ? `${it.sk[b.track ? 1 : 0]}|o` : it.sk[b.track ? 1 : 0], b.x0, b.x1, Boolean(b.open));
+        if (it.failed && b.x0 >= failEnd) { out.fails.push((b.x0 + b.x1) / 2); failEnd = b.x0 + 6; }
+      }
+      // Ticks inside a wide turn: on the clock its time from the start, by steps its step
+      // numbers. Only those in view.
+      if (w >= 120) {
+        if (scale === "steps") {
+          const len = h.items.length;
+          const every = Math.max(1, Math.ceil(36 / (w / len)));
+          for (let i = 0; i < len; i += every) { const tx = x + ((i + 0.5) * w) / len; if (tx >= -M && tx <= cw) out.ticks.push({ x: tx, text: `${i + 1}`, step: true }); }
+        } else if (walls[ti] > 0) {
+          const pps = w / walls[ti];
+          const step = [1, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600].map((s) => s * 1000).find((v) => v * pps >= 62);
+          // From the first tick in view.
+          const k0 = step ? Math.max(1, Math.floor(-x / (step * pps))) : 1;
+          for (let k = k0; step && k * step < walls[ti] && k * step * pps < w - 34; k++) {
+            const tx = x + k * step * pps;
+            if (tx > cw) break;
+            if (tx >= -M) out.ticks.push({ x: tx, text: startText(k * step) });
+          }
+        }
+      }
+    }
+    if (ti < n - 1) {
+      const next = heads[ti + 1];
+      out.gaps.push([x + w, x + w + G.gap * z, next.t0 != null && h.t0 != null ? next.t0 - (h.t0 + walls[ti]) : null]);
+    }
+  }
+  return out;
+}
+// The torn end (round 7 decisions, section 2) as a polygon in px, for a bar a to z px and h
+// px tall: the right end cut into teeth (3, each 4 px tall and 5 px deep; 3 px deep under 12
+// px wide; a half-height bar 2 teeth 3 px deep), the left corners cut 1 px.
+export function tornPoints(a, z, h) {
+  const teeth = h < 12 ? 2 : 3;
+  const depth = Math.min(h < 12 || z - a < 12 ? 3 : 5, Math.max(1, z - a - 2));
+  const r = Math.min(1, (z - a) / 4);
+  const th = h / teeth;
+  const pts = [[a, r], [a + r, 0], [z - depth, 0]];
+  for (let i = 0; i < teeth; i++) pts.push([z, (i + 0.5) * th], [z - depth, (i + 1) * th]);
+  pts.push([a + r, h], [a, h - r]);
+  return pts;
+}
+// A polygon whose rows each cross it once (a bar with a torn or slanted end) as whole-pixel
+// rows: [{ y, h, x0, x1 }], rows of the same extent joined. For a Herdr with no filled path.
+export function polyRows(pts, h) {
+  const out = [];
+  for (let y = 0; y < h; y++) {
+    const yc = y + 0.5;
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const [px, py] = pts[i];
+      const [qx, qy] = pts[(i + 1) % pts.length];
+      if ((py <= yc && yc < qy) || (qy <= yc && yc < py)) {
+        const x = px + ((yc - py) * (qx - px)) / (qy - py);
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+      }
+    }
+    if (!(x1 > x0)) continue;
+    const last = out[out.length - 1];
+    if (last && last.y + last.h === y && Math.abs(last.x0 - x0) < 0.25 && Math.abs(last.x1 - x1) < 0.25) last.h++;
+    else out.push({ y, h: 1, x0, x1 });
+  }
+  return out;
+}
+// One step's box on the strip: x0 and x1 in px, and its track. A turn tx px in, w px wide, wall
+// ms long, with len steps. null for a step with no time on the clock scale.
+export function itemBox(it, tx, w, wall, scale, len) {
+  if (scale === "steps") {
+    const sw = w / Math.max(1, len);
+    const pad = sw > 4 ? 1 : 0;
+    return { x0: tx + it.i * sw + pad, x1: tx + (it.i + 1) * sw - pad, track: 0 };
+  }
+  if (it.a == null || !(wall > 0)) return null;
+  // An unfinished call (open) is never under 6 px wide, so its torn end keeps its shape.
+  const least = it.open ? 6 : 3;
+  const x0 = Math.min(tx + (it.a / wall) * w, tx + w - least);
+  const end = it.b != null ? tx + (it.b / wall) * w : it.open ? tx + w : x0 + 3;
+  const box = { x0, x1: Math.max(x0 + least, Math.min(end, tx + w)), track: it.track };
+  if (it.open) box.open = true;
+  return box;
+}
+// The turn and step under px x of the strip in a lane: { turn, key } (key: the step's row,
+// or the turn's heading when no step's bar is within 4 px). heads in the layout's order; x in
+// px of the view (zoomed and panned).
+export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
+  const T = L.turns;
+  if (!T.length) return null;
+  const z = L.z ?? 1;
+  const x0 = L.x0 ?? 0;
+  const fx = (x + x0) / z;
+  let lo = 0;
+  let hi = T.length - 1;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (T[m].x <= fx) lo = m; else hi = m - 1; }
+  const t = T[lo];
+  const h = heads[lo];
+  if (!h || h.key !== t.key) return null;
+  // Past the turn into its break: the nearer turn.
+  if (fx > t.x + t.w && T[lo + 1] && T[lo + 1].x - fx < fx - (t.x + t.w)) return timelineHit(L, heads, T[lo + 1].x * z - x0, lane, nowMs);
+  const wall = wallOf(h, nowMs);
+  const tx = t.x * z - x0;
+  const tw = t.w * z;
+  let best = null;
+  let bestD = 4;
+  for (const it of h.items ?? []) {
+    if (lane && it.lane !== lane) continue;
+    const b = itemBox(it, tx, tw, wall, L.scale, h.items.length);
+    if (!b) continue;
+    const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
+    if (d < bestD || (d === 0 && bestD === 0 && it.track === 1)) { best = it; bestD = d; }
+  }
+  return { turn: h.key, key: best ? best.key : h.key };
+}

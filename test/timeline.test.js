@@ -6,10 +6,13 @@
 // (turns.js), as in test/ledger.test.js.
 import { test, expect } from "bun:test";
 import { ledgerTurn, slantPoints } from "../mods/agent-threads/ledger.js";
-import {
+// As a namespace, so a name the module lacks fails only the tests that use it.
+import * as TL from "../mods/agent-threads/timeline.js";
+
+const {
   TL_LANES, TL_ROOM_MIN, TL_ROOM_GROW, liveRoom, timelineGeo, timelineLayout, timelineHit, itemBox, tlMaxZoom, tlClamp, tlZoomAt, tlBox, bandRows,
   tornPoints, polyRows, timelineModel, tlGrow,
-} from "../mods/agent-threads/timeline.js";
+} = TL;
 
 const T0 = Date.parse("2026-11-01T09:00:00Z");
 // A turn in the reader's shape: steps are [text] or [calls], each call [name, input, at, rt, failed].

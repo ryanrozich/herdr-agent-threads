@@ -395,16 +395,33 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
   const line = timed && span > 0
     ? { tools: stretches(tools, t0, span), sub: stretches(sub, t0, span), model: stretches(model, t0, span), red: stretches(red, t0, span), open: stretches(open, t0, span), openSub: stretches(opens, t0, span) }
     : null;
-  // The turn's own counts, for the filter buttons and the status line.
+  // The turn's own counts, for the filter buttons and the status line, and its steps on the
+  // timeline (timeline.js): each row's lane, ink, start and end (ms from the turn's start; b
+  // null for an instant, open for a call with no result yet) and, in the Tools lane, its
+  // track (1: it started while another call ran, drawn half height).
   const cnt = { steps: 0, input: 0, model: 0, tools: 0, failed: 0, user: 0, agent: 0 };
-  for (const r of rows) {
+  const items = [];
+  let end0 = -Infinity;
+  rows.forEach((r, i) => {
     const k = LEDGER_KINDS[r.lk];
     cnt.steps++;
     if (k?.lane) cnt[k.lane]++;
     if (r.failed) cnt.failed++;
     if (r.lk === "you") cnt.user++;
     if (r.lk === "agent") cnt.agent++;
-  }
+    const a = r.start;
+    const openBar = Boolean(r.open);
+    const b = a != null && r.dur != null ? a + r.dur : null;
+    let track = 0;
+    if (k?.lane === "tools" && a != null) {
+      track = a < end0 ? 1 : 0;
+      if (track === 0) end0 = openBar ? Infinity : b ?? a;
+    }
+    const ink = k?.ink ?? "context";
+    // The timeline's span keys for this step, made once (timelineLayout joins by them).
+    const sk = k?.lane ? [`${k.lane}|${ink}|0`, `${k.lane}|${ink}|1`] : null;
+    items.push({ key: r.key, i, lane: k?.lane ?? null, ink, a, b, open: openBar && a != null, track, failed: r.failed, lk: r.lk, sk });
+  });
   const head = {
     // going, not live or running: those mark the chat's live rows, which tick a clock (main.js).
     kind: "trh", key, turn, si, n: turn.n, ts: turn.ts ?? null, going: live, calls, fails, timed,
@@ -412,7 +429,7 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
     interrupted: Boolean(tr.interrupted), agent: Boolean(turn.agent), line, stale, lastAt, reading,
     // Calls past what the reader keeps: their failures are not known, so the count is a floor.
     partial: cells.some((c) => c.kind === "more"),
-    t0, span, cnt,
+    t0, span, cnt, items,
     // The keys of its failed calls and of the user's messages, for the session's lists.
     failKeys: rows.filter((r) => r.failed).map((r) => r.key), userKeys: rows.filter((r) => r.lk === "you").map((r) => r.key),
   };
