@@ -275,13 +275,13 @@ test("the light draw after a stopped open shows the parts already split, not onl
   expect([r.frames[0].ok, seen[1][0], seen[1][2] > 0, seen[1][1] > seen[0][1]]).toEqual([false, true, true, true]);
 }, 60000);
 
-// A light draw sizes no part longer than MD_MAX. Such a part is a run with no space or line
-// break to split at, and its height (wrapped) costs by its length: at twice the price one of
-// 200,000 characters alone ran past Herdr's time, so the light draw that sized it was stopped
-// too, and from the fifth frame on every draw was (84 in 30 s). A light draw gives it a rough
-// height at no cost and returns. Herdr's first draw is stopped here, so the light window comes
-// whatever the full draws do.
-test("a light draw sizes no part longer than MD_MAX: with one 200,000-character word at twice the price every light draw returns", async () => {
+// A run with no place to split it costs its height (wrapped) by its length: at twice the price
+// one of 200,000 characters sized as Markdown ran past Herdr's time alone, so the light draw
+// that sized it was stopped too, and from the fifth frame on every draw was (84 in 30 s). Past
+// what one Markdown view holds it is plain text, its height counted from its length at no
+// cost, so every light draw returns. Herdr's first draw is stopped here, so the light window
+// comes whatever the full draws do.
+test("with one 200,000-character word at twice the price every light draw returns: the word is plain text, never sized as Markdown", async () => {
   const { v, cx } = await openLong("z".repeat(200000));
   v.probeDue = function () { this.probeLeft = 0; return []; };
   const seen = [];
@@ -312,6 +312,61 @@ test("a reply of one 200,000-character word shows its start as plain text under 
     cx.clip = null;
     expect([v.action("copy", cx), cx.clip === word]).toEqual([true, true]);
   }
+}, 60000);
+
+// A part with no place to split it that one Markdown view still holds (3,501 to 4,096
+// characters) is sized in a light draw like any other part: its height costs about 0.8 ms at
+// twice the price. Stopped by Herdr as it is sized, it shows in the light draw after the stop,
+// not at the light window's end: kept out of light draws, a 3,800-character word showed
+// "Laying out this part…" for 5,153 ms, where one of 3,400 showed at 137 ms.
+test("a word of 3,800 or 4,096 characters, its sizing stopped by Herdr, is sized in a light draw and shown long before the light window ends", async () => {
+  for (const n of [3800, 4096]) {
+    const word = "y".repeat(n);
+    const { v, cx, key } = await openLong(word);
+    v.probeDue = function () { this.probeLeft = 0; return []; };
+    const part = () => v.baseRows.find((x) => x.key.startsWith(`md:${key}:`));
+    let once = false;
+    const stopAt = (where, r) => where === "height" && r.key?.startsWith(`md:${key}:`) && !once && (once = true);
+    const done = await cardDone(v, key);
+    const lit = [];
+    const r = costedFrames(v, cx, 400, () => part()?.kind === "md" && done(), { scale: 2, stopAt, onFrame: () => lit.push(v.light) });
+    costLog(`one ${n}-character word, its sizing stopped, at 2x`, r);
+    expect([n, once, r.stops, part()?.kind, part()?.md === word, r.settled > 0 && lit[r.settled - 1], r.settledMs < 1000]).toEqual([n, true, 1, "md", true, true, true]);
+  }
+}, 60000);
+
+// Herdr's Markdown view holds 4,096 characters (MD_VIEW_CHARS). A run with no place to split it
+// (a long URL, in practice) of up to that draws as on main, one Markdown view of the whole run,
+// selectable; past it, it is plain text, its start under the dim line.
+async function oneRun(text) {
+  const { v, cx, key } = await openLong(text);
+  v.probeDue = function () { this.probeLeft = 0; return []; };
+  const waiting = () => v.baseRows.some((x) => x.kind === "mdrest" && x.key.includes(`:${key}:`));
+  for (let i = 0; i < 200 && (i < 2 || waiting()); i++) draw(v, cx);
+  const card = v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`));
+  return { v, cx, card, last: card.at(-1) };
+}
+test("a run with no break of 4,096 characters, a long URL, draws as one Markdown view of the whole run, and one of 4,097 as plain text", async () => {
+  const url = (n) => `https://docs.example.com/spec/${"a1b2".repeat(n).slice(0, n - 30)}`;
+  const seen = [];
+  for (const n of [4096, 4097]) {
+    const { v, last } = await oneRun(url(n));
+    seen.push([url(n).length, last.kind, last.kind === "md" ? v.partViews(last).join("") === url(n) && v.partViews(last).length : last.shown.length]);
+  }
+  expect(seen).toEqual([[4096, "md", 1], [4097, "mdlong", 4000]]);
+}, 60000);
+
+// The link rules lengthen a part ("ACME-1" becomes a Markdown link 41 characters longer). A run
+// with no break that fits one view as written, and would not with its links, draws as written:
+// Markdown, whole and selectable, without the rules' links. One whose links fit has them.
+test("a run with no break under 4,096 characters that its links would take past it draws as Markdown as written; one whose links fit has them", async () => {
+  const run = (n) => `ACME-1/${"z".repeat(n - 7)}`;
+  const seen = [];
+  for (const n of [4000, 4060]) {
+    const { last } = await oneRun(run(n));
+    seen.push([n, last.kind, last.links ?? null, last.md === run(n), (last.md ?? "").length > 4096]);
+  }
+  expect(seen).toEqual([[4000, "md", 1, false, false], [4060, "md", 0, true, false]]);
 }, 60000);
 
 // In a full draw the rows of the parts split in the draws before are made first, then the split
