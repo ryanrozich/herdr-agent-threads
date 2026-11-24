@@ -2599,6 +2599,7 @@ export default class Threads extends View {
     this.dropAnchor();
     // The open replies' records hold rows made from the old turns.
     this.partTurns = null;
+    this.linkMemo = null;
     Object.assign(s, newSession(s.id, s.file), { reason: s.reason, version: s.version + 1, partial: false, clock: s.clock, senders: s.senders });
     if (fresh) { s.loaded = false; s.error = null; s.missing = false; }
   }
@@ -5542,8 +5543,10 @@ export default class Threads extends View {
   toggle(key, cx) {
     if (this.open.has(key)) {
       this.open.delete(key);
-      // Its reply's record (partMemo): the split, the parts' links and rows.
+      // Its reply's record (partMemo): the split, the parts' links and rows. Its whole reply's
+      // links too (linkedSegs), which hold the reply's segments' texts.
       this.partTurns?.delete(key);
+      this.linkMemo?.delete(key);
       this.dropCode(`${key}:`);
       if (this.selecting === key) this.endSelect();
     } else {
@@ -7060,6 +7063,7 @@ export default class Threads extends View {
     this.senderHits = null;
     this.open.clear();
     this.partTurns = null;
+    this.linkMemo = null;
     this.full.clear();
     this.sel = null;
     this.res = { kind: "resolving" };
