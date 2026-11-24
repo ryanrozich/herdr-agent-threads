@@ -6669,9 +6669,13 @@ test("a reply longer than Herdr draws in one Markdown view opens whole: list ite
 
 // Opening a long reply on a clock that moves only by priced work (performance.now, which the
 // draw's budgets read), at prices from the rig (Herdr 0.1.17, made-up sessions):
-// - splitKB and splitFixed, the split (mdChunks and splitTables) of a reply: 21.6, 27.9, 37.8
-//   and 44.0 ms at 30, 60, 90 and 120 KB on d380ffa, about 14 ms plus 0.26 ms a KB (64 ms at the
-//   200,000-character cap). The fixed part is charged once a split, at its first read.
+// - unit, the split (mdSplitOn) by the work a read does, what it scans and what it makes
+//   (job.work; a split with no count is priced at SPLIT_PER_CHAR units for each character it
+//   scans or makes, which gives the same price for short paragraphs). The rig timed the split
+//   at fcae757c, 128 lines a read, on 120 KB and 200 KB of short paragraphs: 0.144 to 0.176 ms a
+//   KB in the open draw (cold), 0.09 to 0.12 ms in later draws, and a draw's first read no
+//   dearer than its others. Short paragraphs are 3,524 units a KB, so the cold rate is about
+//   0.00005 ms a unit, the price here; the tests that bound a draw run at it and at twice it.
 // - line, the link rules, a non-blank line: 26 parts of short paragraphs took 34 ms on main
 //   (0.024 ms a line), 9 parts 21 ms; the first price, 0.033, from the stopped draws before.
 // - row, each row sized (height()): the 2,080-part card on d380ffa was stopped with 456 to 490
@@ -6681,7 +6685,8 @@ test("a reply longer than Herdr draws in one Markdown view opens whole: list ite
 //   Markdown of 16 to 96 KB drew in 20 to 38.5 ms on main.
 // On the rig 26 parts of short paragraphs never drew: 67 of 73 stopped draws died in the link
 // pass. Past stop ms Herdr stops a draw (costedFrames).
-const P121 = { line: 0.033, splitKB: 0.26, splitFixed: 14, row: 0.009, call: 0.004, char: 0.0001, rest: 8, stop: 50 };
+const P121 = { line: 0.033, unit: 0.00005, row: 0.009, call: 0.004, char: 0.0001, rest: 8, stop: 50 };
+const SPLIT_PER_CHAR = 1.72;
 const shortParas = (n) => Array.from({ length: n }, (_, i) => `Paragraph ${i + 1}: the cart total rounds per line, see ACME-${i + 1}.`).join("\n\n");
 const mixedReply = (kb) => { const one = readFileSync(join(root, "test/fixtures/long-reply.md"), "utf8").trim(); const out = []; for (let i = 1; out.join("\n\n").length < kb * 1024; i++) out.push(one, `Copy ${i} is filed as ACME-${i}.`); return out.join("\n\n"); };
 // One reply, or several on the last turns, every one opened (unless shut).
@@ -6721,29 +6726,37 @@ async function cardDone(v, key) {
 }
 // The host as the rig shows it, on a clock that moves only by priced work (performance.now,
 // which the draw's budgets read), by the 16 ms between frames, and by waits. A render happens
-// only when one is asked for (cx.notify: the open's own, a timer's, or Herdr's 120 ms watch
-// after a stopped render). Past P121.stop ms Herdr stops a draw and keeps what it wrote: no
-// catch runs, the next render finds renderOpen set, and the timers the stopped render asked for
-// still run (7 of 7 on the rig, on main and on a branch of this work). stopAfter: the first
-// renders that many are stopped after rows() as well, as by a long draw of the list.
-function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0 } = {}) {
+// only when one is asked for (cx.notify: the open's own, a timer's, or the pane's own 120 ms
+// poke, which asks once a render has been open CUT_WATCH_MS). Past P121.stop ms Herdr stops a
+// draw and keeps what it wrote: no catch runs, the next render finds renderOpen set, and the
+// timers the stopped render asked for still run (7 of 7 on the rig, on main and on a branch of
+// this work). stopAfter: the first renders that many are stopped after rows() as well, as by a
+// long draw of the list. scale: every price but the stop that many times over. onFrame(ms):
+// after each frame, with the time since the start.
+function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0, scale = 1, onFrame = null } = {}) {
   const P = P121;
   const real = performance.now, timer = cx.timer, notify = cx.notify;
   const STOP = new Error("stopped at the draw's time");
-  let t = 1e7, at = null, stopped = false, linked = 0, splits = 0;
+  let t = 1e7, at = null, stopped = false, linked = 0, splits = 0, readMost = 0;
   const t0 = t;
-  const spend = (ms) => { t += ms; if (at != null && t - at > P.stop) { stopped = true; throw STOP; } };
+  const spend = (ms) => { t += ms * scale; if (at != null && t - at > P.stop) { stopped = true; throw STOP; } };
   const lo = v.linkOne, wr = v.wrapped;
   v.linkOne = function (md) { if (this.links.length) { linked++; spend(md.split("\n").filter((x) => x.trim()).length * P.line); } return lo.call(this, md); };
   v.wrapped = function (s, ...a) { spend(P.call + s.length * P.char); return wr.call(this, s, ...a); };
-  // A read of the split is priced by the bytes it read; one Herdr stopped is lost, as its
-  // state is written back only at its end (mdSplitOn).
+  // A read of the split is priced by the work it did, what it scanned and what it made; one
+  // Herdr stopped is lost, as its state is written back only at its end (mdSplitOn).
   const ss = v.splitSome, hi = v.height;
+  // Where a read has got to in the text: a line being measured counts as far as it is.
+  const pos = (job) => Math.min(job.at, job.text.length + 1) - (job.line != null ? job.line.length + 1 - job.lineScan : 0);
   v.splitSome = function (job) {
     const was = { ...job, cur: job.cur.slice(), chunk: job.chunk.slice() };
+    const n0 = job.n, p0 = pos(job), w0 = job.work;
     if (!job.at) splits++;
     ss.call(this, job);
-    try { spend((was.at ? 0 : P.splitFixed) + ((Math.min(job.at, job.text.length + 1) - was.at) / 1024) * P.splitKB); } catch (e) { Object.assign(job, was); throw e; }
+    const made = job.parts.slice(n0).reduce((k, x) => k + (x.text ?? x).length, 0);
+    const units = w0 != null ? job.work - w0 : SPLIT_PER_CHAR * (pos(job) - p0 + made);
+    readMost = Math.max(readMost, units * P.unit * scale);
+    try { spend(units * P.unit); } catch (e) { Object.assign(job, was); throw e; }
   };
   v.height = function (r) { spend(P.row); return hi.call(this, r); };
   performance.now = () => { if (stopped) throw STOP; return t; };
@@ -6769,6 +6782,7 @@ function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0 } = {}) {
         timers.push(...armed);
         armed = [];
         frames.push({ ok: !stopped, ms: Math.round((t - at) * 10) / 10 });
+        onFrame?.(t - t0);
         at = null;
         stopped = false;
         if (settled < 0 && frames.at(-1).ok && done()) { settled = frames.length; settledMs = Math.round(t - t0); }
@@ -6791,7 +6805,7 @@ function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0 } = {}) {
     delete v.linkOne; delete v.wrapped; delete v.splitSome; delete v.height;
   }
   const ok = frames.filter((x) => x.ok);
-  return { stops: frames.length - ok.length, first: frames.findIndex((x) => x.ok) + 1, settled, settledMs, linked, splits, most: Math.max(0, ...ok.map((x) => x.ms)), later: Math.max(0, ...ok.slice(1).map((x) => x.ms)), frames };
+  return { stops: frames.length - ok.length, first: frames.findIndex((x) => x.ok) + 1, settled, settledMs, linked, splits, readMost: Math.round(readMost * 100) / 100, most: Math.max(0, ...ok.map((x) => x.ms)), later: Math.max(0, ...ok.slice(1).map((x) => x.ms)), frames };
 }
 
 const costLog = (what, r) => { if (process.env.THREADS_COST_LOG) console.log(`${what}: ${JSON.stringify({ ...r, frames: r.frames.slice(0, 14).map((x) => (x.ok ? x.ms : `stop ${x.ms}`)) })}`); };
@@ -6837,6 +6851,30 @@ test("an open reply of 18 or 58 parts, or one with a code fence between long pro
     expect(v.baseRows.find((x) => x.key.startsWith(`md:${key}:`)).md).toContain("tickets.example.com/1)");
   }
 }, 60000);
+
+// Replies whose lines are long, or whose blocks run past MD_MAX with no blank line: a read of
+// the split is bounded by its work as well as its lines, and a block over the limit is split
+// over several reads like the rest, so no draw is stopped at the rig's cold price or at twice
+// it, and the card settles to the parts one whole split makes.
+// Each under the 200,000-character cap, so the card shows it whole.
+const longLines = () => `${"word ".repeat(19990)}\n\n${"next ".repeat(19990)}`;
+const longParas = () => Array.from({ length: 130 }, (_, i) => `Para ${i} ${"lorem ipsum dolor sit amet ".repeat(56).slice(0, 1500)}`).join("\n\n");
+const noBlank = () => Array.from({ length: 2100 }, (_, i) => `Line ${i + 1} of a reply with no blank line, as some agents write it, ACME-${i + 1}.`).join("\n");
+test("replies of long lines, long paragraphs or no blank line draw in time at the rig's cold price and at twice it, and settle to one whole split", async () => {
+  const got = [];
+  for (const [name, text] of [["two 100 KB lines", longLines()], ["130 paragraphs of 1.5 KB", longParas()], ["2,100 lines with no blank line", noBlank()]]) {
+    const want = await splitOf(text);
+    for (const scale of [1, 2]) {
+      const { v, cx, key } = await openLong(text);
+      const r = costedFrames(v, cx, 400, await cardDone(v, key), { scale });
+      costLog(`${name}, at ${scale}x`, r);
+      const same = JSON.stringify(v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).map((x) => x.src)) === JSON.stringify(want);
+      // No read of the split dearer than about a millisecond at the cold price.
+      got.push([name, scale, r.stops, r.first, r.settled > 0, same, r.readMost <= 1.2 * scale]);
+    }
+  }
+  expect(got).toEqual(got.map(([name, scale]) => [name, scale, 0, 1, true, true, true]));
+}, 120000);
 
 test("two capped replies open: no frame passes Herdr's time while both settle, and each is split once", async () => {
   const { v, cx, keys } = await openLong([0, 1].map((j) => shortParas(4000).replaceAll("Paragraph", `Card ${j}, paragraph`)), true);
