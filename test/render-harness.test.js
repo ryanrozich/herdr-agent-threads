@@ -21,6 +21,7 @@ const DEFAULTS = {
   herdrVersion: "0.1.17",
   marks: null,
   pinWrites: 0,
+  extractCalls: null,
   extractHook: null,
   keepSettings: false,
   settingsStale: false,
