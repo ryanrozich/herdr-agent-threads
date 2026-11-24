@@ -1741,27 +1741,30 @@ test("shaping: in a rows build, a turn never shaped after another unit is shaped
 }, 300000);
 
 // Rows never shaped, as the light draws after a stop leave them (on the rig, 3,791 of 5,600
-// turns once the read ended), drained on a priced clock: 300 turns of 2 to 9 ms each at the
-// rate learned, each costing 0.3 ms more than its estimate, with 10 ms of the draw after the
-// rows. A drain draw shapes for its shaping time (12 ms here), and after its first unit a
-// turn never shaped starts only if its expected cost fits what is left, as on main: the rest
-// of the draw keeps its room and no draw is stopped. Before, a turn never shaped skipped that
-// check and was held only by the fit check (fitsHost, 47 ms): each draw shaped to about 47 ms
-// by the estimates, and the estimates' misses took draws past 50 (rig: drain frames of 45 to
-// 52 ms on big5600b, where main's worst is 42).
+// turns once the read ended), drained on a priced clock with 5 ms of the draw after the rows
+// (the rig's draw after the list showed): 300 turns, most of 2 to 9 ms at the rate learned and
+// 0.3 ms over it, and every seventh of 30 ms and 6 ms over it. A drain draw shapes for its
+// shaping time (12 ms here), and after its first unit a turn never shaped starts only if its
+// expected cost fits what is left, as on main: a 30 ms turn runs only as a draw's first, the
+// rest of the draw keeps its room, and no draw is stopped. Before, a turn never shaped skipped
+// that check and was held only by the fit check (fitsHost): a 30 ms turn started 10 ms into a
+// draw, expected to end at 48 with the rest, and its miss took the draw past 50 (10 stops, and
+// the drain not done in 3,000 draws). The rig showed the same on big5600b: drain frames of 45
+// to 52 ms, where main's worst is 42, and a stop inside a reshape run in company.
 test("shaping: rows never shaped are drained within the draw's shaping time, so a drain draw keeps room for the rest of the frame and none is stopped", async () => {
-  const p = await pricedDrain({ n: 400 });
+  const p = await pricedDrain({ n: 400, after: 5 });
   try {
     p.begin();
     const fresh = new Set(p.turns.slice(40, 340));
+    const over = (x) => (x.cost > 25 ? 6 : 0.3);
     let i = 0;
-    for (const t of fresh) { p.restale(t, 2000 + ((i++ * 1373) % 7000)); p.charge(t, 0.3); }
+    for (const t of fresh) { const big = i % 7 === 3; p.restale(t, big ? 30000 : 2000 + ((i * 1373) % 7000)); p.charge(t, big ? 6 : 0.3); i++; }
     const frames = untilDone(p.v, p.step, 3000);
     const late = [];
     for (const [k, f] of frames.entries()) {
       let spent = 0;
       for (const [j, x] of f.log.entries()) {
-        if (j > 0 && fresh.has(x.turn) && spent + (x.cost - 0.3) > 12 + 0.01) late.push([k, j, Math.round(spent * 10) / 10, Math.round((x.cost - 0.3) * 10) / 10]);
+        if (j > 0 && fresh.has(x.turn) && spent + (x.cost - over(x)) > 12 + 0.01) late.push([k, j, Math.round(spent * 10) / 10, Math.round((x.cost - over(x)) * 10) / 10]);
         spent += x.cost;
       }
     }
