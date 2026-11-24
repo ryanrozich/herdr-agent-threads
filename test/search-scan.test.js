@@ -1220,6 +1220,69 @@ test("a step from a match in a long tail being checked again goes the way it is 
   expect(places(v)).toEqual(want(v, "please look"));
 }, 120000);
 
+// An older step from a match in a tail much longer than a slice, being checked again: the
+// match has no place, and the turns between the tail's next turn and it are not checked
+// again yet. The step goes back from the selection itself, so it lands on the nearest older
+// match, with none passed over.
+test("an older step from a match near the end of a 4,000-turn tail being checked again lands on the nearest older match, with none passed over", async () => {
+  const { v, cx, s } = await longPane(5600);
+  tailMore(s, 4000);
+  settleRows(v, cx);
+  v.sel = `0:${s.turns.length}`;
+  const n = (k) => Number(k.split(":")[1]);
+  const r = {};
+  priced(v, () => {
+    v.action("search:please look", cx);
+    for (let k = 0; k < 200 && counting(v); k++) drawOnce(v, cx);
+    v.action("olderMatch", cx);
+    v.action("olderMatch", cx);
+    const from = v.sel;
+    tailMore(s, 1);
+    v.hitsNow();
+    r.checking = v.hitsNow().cur.tail != null && !v.hitsNow().at.has(from);
+    v.action("olderMatch", cx);
+    const nearest = direct(v, "please look").find((k) => n(k) < n(from));
+    r.from = n(from);
+    r.passedOver = n(nearest) - n(v.sel);
+  });
+  expect(r).toEqual({ checking: true, from: 9598, passedOver: 0 });
+}, 300000);
+
+// When the turns back from the selection to the nearest older match are more than one slice
+// can check, the step stays where it is and says nothing passed over: the next press goes on
+// from where the last one stopped, and lands on that match. No press lands past it.
+test("an older step whose slice ends before it reaches a match stays, and the next press goes on from there to the nearest older match", async () => {
+  const { v, cx, s } = await longPane(5600);
+  const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
+  const base = s.turns.length;
+  // 6,000 turns with no reply: "zebra" in the 2,000th and the last, nowhere between.
+  for (let i = 0; i < 6000; i++) {
+    T.apply(s, { k: "p", o: "human", t: i === 2000 || i === 5999 ? `Tail ${i}: the zebra list.` : `Tail ${i}: nothing here.`, ts });
+    T.apply(s, { k: "d", ms: 1000, ts });
+  }
+  settleRows(v, cx);
+  const last = `0:${base + 6000}`;
+  const nearest = `0:${base + 2001}`;
+  v.sel = last;
+  const r = { moves: [] };
+  priced(v, () => {
+    v.action("search:zebra", cx);
+    for (let k = 0; k < 200 && counting(v); k++) drawOnce(v, cx);
+    v.sel = last;
+    // A turn comes in: the tail is checked again from its start, a slice at a time.
+    T.apply(s, { k: "p", o: "human", t: "One more: nothing here.", ts });
+    T.apply(s, { k: "d", ms: 1000, ts });
+    v.hitsNow();
+    r.checking = v.hitsNow().cur.tail != null && v.hitsNow().cur.tail.next < base + 2000;
+    for (let k = 0; k < 20 && v.sel === last; k++) { v.action("olderMatch", cx); r.moves.push(v.sel); }
+  });
+  r.presses = r.moves.length;
+  r.stays = r.moves.slice(0, -1).every((k) => k === last);
+  r.landed = r.moves.at(-1);
+  expect(r.checking).toBe(true);
+  expect({ more: r.presses > 1, stays: r.stays, landed: r.landed }).toEqual({ more: true, stays: true, landed: nearest });
+}, 300000);
+
 // The tail's pop (hitsTail) takes the newest place off in two writes: its entries, then top.
 // A stop between them leaves top - 1 with no entry. A step's own hitsNow finishes the pop
 // first, so a reader does not meet that state; a step met with it still goes to a match,
