@@ -157,6 +157,17 @@ const SHAPE_MS = 12;
 // Rows reshaped first, from the one at the top of the pane down, so what is on screen
 // changes in the first frame.
 const SHAPE_FIRST = 40;
+// The shape bound (boundShapes): only turns near the view keep their shapes whole, the rows
+// drawn and this many rows above and below them, with the open, selected, pinned and running
+// turns. Every other turn's shape keeps only its numbers (thinShape): a shape holds its
+// prompt's and reply's lines and the reply's Markdown start, 11 to 12 KiB a turn in Herdr's
+// script VM, and two Threads panes on a session of 5,600 turns ran its 256 MiB out.
+const SHAPE_NEAR = 40;
+// What a thin shape drops: everything that holds text. part is its reply block's probe part (cmdFor).
+const THIN_DROP = ["prompt", "reply", "md", "kinds", "pHard", "rHard", "chip", "cmd", "part"];
+// Whole shapes made only to draw a thin row that cannot be filled in place (fillRow), kept for
+// the next draws.
+const DRAW_FILLS = 64;
 // Turns at least this long (prompt and reply, in characters) teach the shaping rate (shapeLearn).
 const SHAPE_LEARN = 4000;
 // The hidden probe (probe) draws at most this many parts in one frame, nearest the top of
@@ -482,6 +493,8 @@ const NOTE_LINE = 20; // the working card's 12 px note, set explicitly (about 1.
 // Open-card parts whose text gpui wraps: drawn once more in a hidden probe, measured, and
 // then given that height (measured()).
 const PROBED = new Set(["you", "rhead", "md", "itext", "lhead", "latest", "noreply", "cmd"]);
+// Whether a closed row's shape has a Markdown reply block, whole or thin (thinShape).
+const hasMd = (sh) => sh != null && (sh.md != null || sh.mdLen != null);
 const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (scaled by charW())
 // Where hlBlock cuts a line into words: after white space or a HYPHEN_BREAK.
 const WORD_END = new RegExp(`(?<=[\\s${HYPHEN_BREAK}])`);
@@ -1143,6 +1156,8 @@ export default class Threads extends View {
       measuredWidth: this.measuredWidth ?? null, timing: this.timing ?? null, zoom: this.zoom(),
       // Round 3: each open-card part's estimate, measured height and list slot.
       parts: this.partReport(),
+      // The shape bound (boundShapes): shapes held whole and as numbers only.
+      shapes: this.shapeCounts(),
       // v1 feedback: what each row and card part shows, as text.
       detail: rows.map((r) => this.rowDetail(r)).filter(Boolean),
       counts: this.sessions.length ? this.counts() : null,
@@ -1188,6 +1203,7 @@ export default class Threads extends View {
     switch (r.kind) {
       case "turn": case "wrow": {
         const sh = r.shape;
+        if (sh?.thin) return `${r.kind}${n} thin p${sh.p}/r${sh.r} h${sh.height}`;
         if (r.compact) return `pin${n} ${r.pinNo} p${sh.p} h${sh.height}${r.fresh ? " new" : ""}${r.running ? " live" : ""} | ${sh.prompt.join(" ⏎ ")} | ${sh.reply}`;
         const pl = sh.kinds ? sh.prompt.map((l, i) => (sh.kinds[i] === "q" || sh.kinds[i] === "qonly" ? `▎${l}` : l)) : sh.prompt;
         return `${r.kind}${n} p${sh.p}/r${sh.r}${sh.q ? ` q${sh.q}` : ""}${sh.kinds?.[0] === "qonly" ? " qonly" : ""} h${sh.height}${sh.cmd ? ` cmd:${sh.cmd.name}` : ""}${who} | ${this.metaText(r.turn, r.kind === "wrow")} | ${sh.chip ? `[${sh.chip.label}] ` : ""}${pl.join(" ⏎ ")} | ${sh.reply.join(" ⏎ ")}`;
@@ -2761,6 +2777,7 @@ export default class Threads extends View {
       // reply line carries the clock, so it counts as shown too.
       this.liveShown = Boolean(lr?.live) || rows.some((r) => r.kind === "wake" || r.running);
     }
+    this.boundShapes();
     return this.rowsMemo;
   }
 
@@ -2910,12 +2927,14 @@ export default class Threads extends View {
     return null;
   }
 
-  // A closed row's reply block as a probe part (cmdRow), made once per row object.
+  // A closed row's reply block as a probe part (cmdRow), made once per shape and kept on it
+  // (part), so thinning the shape lets it go too. A thin row's part has no Markdown, only what
+  // its measure is found by; the probe makes the Markdown afresh (probeMd).
   cmdFor(r) {
-    this.cmdOf ??= new WeakMap();
-    let c = this.cmdOf.get(r);
-    if (!c) { c = this.cmdRow(r); this.cmdOf.set(r, c); }
-    return c;
+    const sh = r.shape;
+    if (sh.thin) return { kind: "cmd", key: `cmd:${r.key}`, turn: r.turn, md: null, mdLen: sh.mdLen, mdTail: sh.mdTail, need: sh.need, est: sh.mdEst };
+    if (sh.part?.key !== `cmd:${r.key}`) sh.part = this.cmdRow(r);
+    return sh.part;
   }
 
   // The parts the probe measures changed (probeDue finds them from the rows as it walks).
@@ -2927,7 +2946,7 @@ export default class Threads extends View {
     const cmds = [];
     for (const r of this.baseRows ?? []) {
       if (PROBED.has(r.kind)) probed.push(r);
-      else if (r.kind === "turn" && r.shape?.md != null) cmds.push(this.cmdFor(r));
+      else if (r.kind === "turn" && hasMd(r.shape)) cmds.push(this.cmdFor(r));
       else if (r.live && (r.kind === "working" || r.kind === "wrow")) probed.push(this.workYou(r));
     }
     return probed.concat(cmds);
@@ -4674,14 +4693,13 @@ export default class Threads extends View {
     // The checks below still see whether the turn changed since.
     if (f && f.look !== look) f = this.recallShape(turn, look) ?? f;
     this.shapeStale = false;
-    if (f && turn.shapeKey === f.key && f.look === look && f.p === turn.prompt.length && f.t === text.length && f.live === live && f.tools === turn.tools
-      && f.int === Boolean(turn.interrupted) && f.by === turn.answeredBy && f.inn === turn.answeredIn && f.img === (turn.images?.length ?? 0) && f.ag === Boolean(turn.agent) && f.sv === this.sendersVer) return turn.shapeMemo;
+    if (this.shapeFresh(turn, f, turn.shapeKey, look, live, text)) return turn.shapeMemo;
     // Out of time and never shaped: no key to build (3 µs a turn, 30 ms a draw with 6,000 rows
     // waiting after renders were stopped through a whole load).
     if (turn.shapeKey == null && (this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return this.blankShape(); }
     const q = this.filterText();
     const P = this.prefs;
-    const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
+    const why = this.whyText(turn);
     const key = `${Math.round(this.width)}|${P.textSize}|${this.chars()}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}|${turn.agent ? 1 : 0}|${this.sendersVer}`;
     const fast = { key, look, p: turn.prompt.length, t: text.length, live, tools: turn.tools, int: Boolean(turn.interrupted), by: turn.answeredBy, inn: turn.answeredIn, img: turn.images?.length ?? 0, ag: Boolean(turn.agent), sv: this.sendersVer };
     if (turn.shapeKey === key) { turn.shapeFast = fast; this.keepShape(turn); return turn.shapeMemo; }
@@ -4702,6 +4720,11 @@ export default class Threads extends View {
     this.keepShape(turn);
     this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
     return sh;
+  }
+  // Whether a shape made with fast (and key) still fits the turn and the look.
+  shapeFresh(turn, f, key, look, live, text) {
+    return Boolean(f) && key === f.key && f.look === look && f.p === turn.prompt.length && f.t === text.length && f.live === live && f.tools === turn.tools
+      && f.int === Boolean(turn.interrupted) && f.by === turn.answeredBy && f.inn === turn.answeredIn && f.img === (turn.images?.length ?? 0) && f.ag === Boolean(turn.agent) && f.sv === this.sendersVer;
   }
   // What shaping a turn is expected to cost, in ms: its length at the rate learned from long
   // turns shaped before (shapeLearn); 0 until one has been.
@@ -4729,12 +4752,193 @@ export default class Threads extends View {
     this.keepShape(turn);
     return k.fast;
   }
+  // Every shape a turn holds is in shapesKept. One it replaces or lets go of may still be on a
+  // row (the rows on screen until a rebuild, or a kept row of another width): it is loose, and
+  // the bound thins it once its turn is far (boundShapes), so no whole shape is held anywhere
+  // for a turn far from the view.
   keepShape(turn) {
     const m = (turn.shapesKept ??= new Map());
     const look = turn.shapeFast.look;
+    const was = m.get(look);
+    if (was && was.memo !== turn.shapeMemo) this.loosen(turn, was.memo, look);
     m.delete(look);
     m.set(look, { key: turn.shapeKey, memo: turn.shapeMemo, fast: turn.shapeFast });
-    if (m.size > WIDTHS_KEPT) m.delete(m.keys().next().value);
+    if (m.size > WIDTHS_KEPT) {
+      const [old, k] = m.entries().next().value;
+      this.loosen(turn, k.memo, old);
+      m.delete(old);
+    }
+    if (!turn.shapeMemo.thin && !turn.shapeMemo.blank) (this.fullShapes ??= new Set()).add(turn);
+  }
+  // A shape its turn no longer keeps. One per turn and look: an older one of the same is thinned
+  // (a running turn's shape is replaced at each new line of its reply).
+  loosen(turn, sh, look) {
+    if (!sh || sh.thin || sh.blank) return;
+    const L = (this.loose ??= []);
+    for (let i = L.length - 1; i >= 0; i--) if (L[i].turn === turn && L[i].look === look) { this.thinShape(L[i].sh, look); L.splice(i, 1); }
+    L.push({ turn, sh, look });
+  }
+  // ---- the shape bound ----
+  // A shape kept as numbers only, in place, so every row and kept row that holds it sees the
+  // same: its lines and heights (p, r, height, mdBase, mdEst, the Show more lines, bubbleW,
+  // thumbs, tone) and what its reply block's measure is found by (partSig: the Markdown's
+  // length, its last 24 characters and a table's width, need). look: the look it was made at.
+  thinShape(sh, look) {
+    if (!sh || sh.thin || sh.blank) return;
+    if (sh.md != null) { sh.mdLen = sh.md.length; sh.mdTail = sh.md.slice(-24); sh.need = this.tableNeedOf(sh.md, false); }
+    for (const k of THIN_DROP) delete sh[k];
+    sh.thin = true;
+    sh.look = look;
+  }
+  // The turns whose shapes stay whole: the rows drawn last and SHAPE_NEAR rows each side of
+  // them (before the first draw, the newest turns, where a pane opens), and the selected, open,
+  // pinned and running turns.
+  nearTurns() {
+    const near = new Set();
+    const rows = this.baseRows ?? [];
+    const memo = this.rowsMemo ?? [];
+    const vr = this.viewRange;
+    if (vr && rows.length) {
+      const off = memo[0]?.kind === "spacer" || memo[0]?.kind === "gap" ? 1 : 0;
+      const b = Math.min(rows.length, vr[1] - off + SHAPE_NEAR);
+      for (let i = Math.max(0, vr[0] - off - SHAPE_NEAR); i < b; i++) if (rows[i].turn) near.add(rows[i].turn);
+    } else {
+      const turns = this.sessions.at(-1)?.turns ?? [];
+      for (let i = Math.max(0, turns.length - SHAPE_FIRST - 2 * SHAPE_NEAR); i < turns.length; i++) near.add(turns[i]);
+    }
+    for (const k of [this.sel, ...this.open]) { const t = k ? this.findTurn(k) : null; if (t) near.add(t); }
+    for (const s of this.sessions) { const t = s.turns.at(-1); if (t && !t.done) near.add(t); }
+    for (const t of this.pinTurns ?? []) near.add(t);
+    return near;
+  }
+  // The bound, in one place (the end of rows(), after every way a turn is shaped): a turn with
+  // a whole shape that is not near the view keeps its shapes as numbers (thinShape), the ones
+  // it keeps for each of the last WIDTHS_KEPT looks and the loose ones. A near turn keeps them
+  // whole, so a drag back to a width seen before reshapes nothing on screen. A thin row is made
+  // whole again near the view (fillNear) or when it is drawn (fillRow), and the probe makes a
+  // far row's Markdown afresh (probeMd).
+  boundShapes() {
+    const set = this.fullShapes;
+    if (!set?.size && !this.loose?.length) return;
+    const near = this.nearTurns();
+    for (const turn of set ?? []) {
+      if (near.has(turn)) continue;
+      for (const [lk, k] of turn.shapesKept ?? []) this.thinShape(k.memo, lk);
+      set.delete(turn);
+    }
+    if (this.loose?.length) {
+      this.loose = this.loose.filter((x) => {
+        if (x.sh.thin) return false;
+        if (near.has(x.turn)) return true;
+        this.thinShape(x.sh, x.look);
+        return false;
+      });
+    }
+    this.fillNear();
+  }
+  // The thin rows near the view made whole before they are drawn, nearest first, inside the
+  // draw's shaping time: the rows drawn, then outward from them. What is left waits for a
+  // later frame, or for its draw (fillRow).
+  fillNear() {
+    const rows = this.baseRows ?? [];
+    const vr = this.viewRange;
+    if (!vr || !rows.length) return;
+    const memo = this.rowsMemo ?? [];
+    const off = memo[0]?.kind === "spacer" || memo[0]?.kind === "gap" ? 1 : 0;
+    const a = Math.max(0, vr[0] - off);
+    const b = Math.min(rows.length, vr[1] - off);
+    const one = (i) => {
+      const r = rows[i];
+      if (!r?.shape?.thin || (r.kind !== "turn" && r.kind !== "wrow")) return true;
+      if ((this.shapeSpent ?? 0) > this.shapeMax()) return false;
+      const t0 = now();
+      this.fillRow(r, true);
+      this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
+      return true;
+    };
+    for (let i = a; i < b; i++) if (!one(i)) return;
+    for (let d = 0; d < SHAPE_NEAR; d++) {
+      if (b + d < rows.length && !one(b + d)) return;
+      if (a - 1 - d >= 0 && !one(a - 1 - d)) return;
+    }
+  }
+  // A thin row about to be drawn, made whole: in place when its shape is still the turn's for
+  // this look and the turn has not changed (the same lines and height as before, as shape()
+  // made them), else, for a row of an older look kept on screen through a rebuild or a turn
+  // that changed, a whole shape for this draw only, at the row's own width and column step
+  // when that is all that differs. With only, in place or not at all (null).
+  fillRow(r, only = false) {
+    const sh = r.shape;
+    const turn = r.turn;
+    if (!turn) return r;
+    const live = r.kind === "wrow";
+    const look = this.shapeLook();
+    const text = this.replyText(turn);
+    const k = turn.shapesKept?.get(sh.look);
+    const make = () => this.reshape(turn, live, this.filterText(), this.prefs, this.whyText(turn), text);
+    if (sh.look === look && k?.memo === sh && this.shapeFresh(turn, k.fast, k.key, look, live, text)) {
+      const full = make();
+      for (const f of ["thin", "look", "mdLen", "mdTail", "need"]) delete sh[f];
+      Object.assign(sh, full);
+      if (turn.shapeFast?.look !== look) this.recallShape(turn, look);
+      else (this.fullShapes ??= new Set()).add(turn);
+      return r;
+    }
+    if (only) return null;
+    // A row whose shape the turn has replaced since (a rebuild is due): the turn's own for
+    // this look, whole, if it has one.
+    const cur = sh.look === look ? turn.shapesKept?.get(look) : null;
+    if (cur && cur.memo !== sh && !cur.memo.blank) {
+      if (!cur.memo.thin) return { ...r, shape: cur.memo };
+      if (this.shapeFresh(turn, cur.fast, cur.key, look, live, text)) {
+        const row = { ...r, shape: cur.memo };
+        return this.fillRow(row, true) ?? row;
+      }
+    }
+    // Made for this draw and the next few: kept by row and look, the last DRAW_FILLS of them.
+    const memo = (this.drawFills ??= new Map());
+    const id = `${r.key}|${sh.look}|${look}|${turn.v ?? ""}`;
+    let full = memo.get(id);
+    if (!full) {
+      // The look's width and column step (shapeLook's first and third parts) are the row's
+      // own for this draw, when the rest of it is this look's.
+      const was = String(sh.look).split("|");
+      const is = look.split("|");
+      const w = Number(was[0]);
+      const step = Number(was[2]);
+      if (w > 0 && step > 0 && sh.look !== look && was[1] === is[1] && was.slice(3).join("|") === is.slice(3).join("|")) {
+        const keep = [this.width, this.colStep];
+        this.width = w;
+        this.colStep = step;
+        try { full = make(); } finally { [this.width, this.colStep] = keep; }
+      } else full = make();
+      memo.set(id, full);
+      if (memo.size > DRAW_FILLS) memo.delete(memo.keys().next().value);
+    }
+    return { ...r, shape: full };
+  }
+  // The probe part for a thin row's reply block: its Markdown made afresh and not kept, inside
+  // the draw's shaping time (null once it is spent; false when the row is of another look,
+  // about to be built again).
+  probeMd(r) {
+    const sh = r.shape;
+    if (sh.look !== this.shapeLook()) return false;
+    if ((this.shapeSpent ?? 0) > this.shapeMax()) return null;
+    const t0 = now();
+    const md = this.replyMd(false, this.filterText(), this.prefs, this.whyText(r.turn), this.replyText(r.turn));
+    this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
+    if (!md || md.md.length !== sh.mdLen) return false;
+    return { kind: "cmd", key: `cmd:${r.key}`, turn: r.turn, md: md.md, est: sh.mdEst };
+  }
+  // How many shapes the pane holds whole and thin, for the debug report.
+  shapeCounts() {
+    const full = new Set();
+    const thin = new Set();
+    const see = (sh) => { if (sh && !sh.blank) (sh.thin ? thin : full).add(sh); };
+    for (const s of this.sessions) for (const t of s.turns) for (const k of t.shapesKept?.values() ?? []) see(k.memo);
+    for (const r of this.baseRows ?? []) if (!r.compact) see(r.shape);
+    for (const k of this.keptBases?.values() ?? []) for (const e of k.rows.values()) { see(e.shape); for (const r of e.rows) see(r.shape); }
+    return { full: full.size, thin: thin.size };
   }
   // What every row's shape depends on besides its turn, as one string kept while they stay.
   shapeLook() {
@@ -4790,6 +4994,16 @@ export default class Threads extends View {
       this.shape(s.turns[ti]);
     }
   }
+  whyText(turn) { return turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null; }
+  // A reply, unless a search marks a match in it (q), starts as Markdown (mdPreview): whole
+  // source lines. Its row's shape.md, and what the probe measures (probeMd).
+  replyMd(live, q, P, why, text) {
+    if (live || why || !text) return null;
+    if (q && searchPreview(text, q, PREVIEW_CHARS) != null) return null;
+    const per = readWidth(this.width, P.textSize, this.chars()) / readType(P.textSize).reply;
+    const md = P.truncate ? mdPreview(text, P.replyLines, per) : mdPreview(text, NO_CUT, per, text.length);
+    return md.md.trim() ? md : null;
+  }
   reshape(turn, live, q, P, why, text) {
     const cmd = commandParts(turn);
     // Long messages shortened (truncate) or, by default, shown whole. A search still shows the
@@ -4806,13 +5020,7 @@ export default class Threads extends View {
     // with) draws as it does with no search.
     const flat = q && text ? searchPreview(text, q, PREVIEW_CHARS) : null;
     const hit = flat != null;
-    // A reply, unless a search marks a match in it, starts as Markdown (mdPreview): whole
-    // source lines.
-    if (!live && !why && text && !hit) {
-      md = cut ? mdPreview(text, replyLines, readWidth(this.width, P.textSize, this.chars()) / readType(P.textSize).reply)
-        : mdPreview(text, replyLines, readWidth(this.width, P.textSize, this.chars()) / readType(P.textSize).reply, text.length);
-      if (!md.md.trim()) md = null;
-    }
+    if (!hit) md = this.replyMd(live, null, P, why, text);
     if (live) { preview = ""; tone = "live"; }
     else if (why) { preview = why; tone = "why"; }
     else if (md) preview = " ";
@@ -9373,7 +9581,7 @@ export default class Threads extends View {
     const base = this.sigBase();
     for (let i = Math.max(0, a); i < b && i < rows.length; i++) {
       const r = rows[i];
-      const part = PROBED.has(r.kind) ? r : r.kind === "turn" && r.shape?.md != null ? this.cmdFor(r)
+      const part = PROBED.has(r.kind) ? r : r.kind === "turn" && hasMd(r.shape) ? this.cmdFor(r)
         : r.live && (r.kind === "working" || r.kind === "wrow") ? this.workYou(r) : null;
       if (!part) continue;
       const sig = this.partSig(part, base);
@@ -9757,17 +9965,16 @@ export default class Threads extends View {
   // tableNeed), centred on the line, up to the pane less the column's gutter on each side:
   // the px it takes past the reading line. For a table item (r.table), or a closed turn's
   // reply that holds tables (its widest); 0 otherwise, or when the pane has no room.
+  // A thin row's reply (and its probe part) carries its widest table's need (thinShape).
   tableExtra(r) {
-    const md = r?.table ? (r.src ?? r.md) : r?.kind === "cmd" ? r.md : r?.kind === "turn" ? r.shape?.md : null;
-    if (!md?.includes("|")) return 0;
-    const memo = (this.tableMemo ??= new Map());
-    let need = memo.get(md);
-    if (need == null) {
-      need = 0;
-      for (const p of r.table ? [{ text: md, table: true }] : splitTables(md)) if (p.table) need = Math.max(need, tableNeed(p.text, this.charW(MD_CHAR)));
-      memo.set(md, need);
-      if (memo.size > 200) memo.delete(memo.keys().next().value);
+    const thin = r?.kind === "turn" ? r.shape?.thin : r?.kind === "cmd" && r.md == null;
+    let need = 0;
+    if (thin) need = (r.kind === "turn" ? r.shape.need : r.need) ?? 0;
+    else {
+      const md = r?.table ? (r.src ?? r.md) : r?.kind === "cmd" ? r.md : r?.kind === "turn" ? r.shape?.md : null;
+      need = this.tableNeedOf(md, Boolean(r?.table));
     }
+    if (!(need > 0)) return 0;
     // The reply's line starts at the column's left plus its gutter; each side may grow out to
     // the pane's edge less the same gutter, and less the rail's lane on both sides (it is on
     // one, and the table stays centred on the line).
@@ -9776,6 +9983,19 @@ export default class Threads extends View {
     const right = this.pw() - this.colLeft() - 2 * ROW.PAD_X - this.prose() - lane;
     const half = Math.floor(Math.max(0, Math.min(left, right, (need - this.prose()) / 2)));
     return 2 * half;
+  }
+  // The widest table's width in a text (ui.js tableNeed), or 0 with none.
+  tableNeedOf(md, table) {
+    if (!md?.includes("|")) return 0;
+    const memo = (this.tableMemo ??= new Map());
+    let need = memo.get(md);
+    if (need == null) {
+      need = 0;
+      for (const p of table ? [{ text: md, table: true }] : splitTables(md)) if (p.table) need = Math.max(need, tableNeed(p.text, this.charW(MD_CHAR)));
+      memo.set(md, need);
+      if (memo.size > 200) memo.delete(memo.keys().next().value);
+    }
+    return need;
   }
   // A table drawn extra px wider than the reading line, half of it on each side.
   tableBlock(el, extra) { return extra > 0 ? div().flex_none().w(this.prose() + extra).ml(-extra / 2).child(el) : el; }
@@ -10040,7 +10260,7 @@ export default class Threads extends View {
   // A part's list height: what the probe measured for it, else the estimate. A collapsed
   // row with a Markdown reply adds its block's measure to the rest of the row.
   height(r) {
-    if (r.kind === "turn" && r.shape?.md != null) {
+    if (r.kind === "turn" && hasMd(r.shape)) {
       const m = this.measured(this.cmdFor(r));
       return (m != null ? r.shape.mdBase + m : r.shape.height) - this.splitCut(r) - this.foldCut(r);
     }
@@ -10131,7 +10351,7 @@ export default class Threads extends View {
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
       case "itext": return `${head}|${r.md.length}|${this.linksVer}`;
       case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.repoSig()}|${this.mdBroken?.has(r.key) ? "plain" : "md"}${r.table ? `|t${this.tableExtra(r)}` : ""}`;
-      case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}|t${this.tableExtra(r)}`;
+      case "cmd": return `${head}|${r.md != null ? r.md.length : r.mdLen}|${r.md != null ? r.md.slice(-24) : r.mdTail}|t${this.tableExtra(r)}`;
       case "lhead": return `${head}|${r.turn.followups}`;
       // The Markdown form draws a Show less row only after Show all (not when whole) and a note
       // past the cap (left), so both are part of its layout.
@@ -10249,15 +10469,22 @@ export default class Threads extends View {
     const up = this.anchor && !this.anchor.end;
     const wk = `${this.probeVer ?? 0}|${base}|${this.mdBroken?.size ?? 0}|${top}|${this.probeEpoch ?? 0}|${stamp}|${up ? 1 : 0}`;
     const d0 = this.probeWalk?.key === wk ? this.probeWalk.clean : 0;
+    // A thin row's reply block waits for the next frame once the draw's shaping time is spent.
+    let waits = false;
     const visit = (r) => {
       if (r.probeOk === stamp && r.kind === "turn") return 0;
-      const part = PROBED.has(r.kind) ? r : r.kind === "turn" && r.shape?.md != null ? this.cmdFor(r)
+      let part = PROBED.has(r.kind) ? r : r.kind === "turn" && hasMd(r.shape) ? this.cmdFor(r)
         : r.live && (r.kind === "working" || r.kind === "wrow") ? this.workYou(r) : null;
       if (!part) return 1;
       const sig = this.partSig(part, base);
       if (this.measOf(part.key, sig) > 0) { if (r.kind === "turn") r.probeOk = stamp; return 1; }
       const k = `${part.key}|${sig}`;
       if ((this.probeTries.get(k) ?? 0) >= 3) return 1;
+      if (part.kind === "cmd" && part.md == null) {
+        part = this.probeMd(r);
+        if (part === null) waits = true;
+        if (!part) return 1;
+      }
       want.push([part, sig, k]);
       return 1;
     };
@@ -10268,7 +10495,7 @@ export default class Threads extends View {
       if (up && d > PROBE_NEAR && top - d < 0) break;
       if (top + d < n && !(up && d > PROBE_NEAR)) seen += visit(rows[top + d]);
       if (d > 0 && top - d >= 0) seen += visit(rows[top - d]);
-      if (!want.length) clean = d + 1;
+      if (!want.length && !waits) clean = d + 1;
       if (want.length >= PROBE_MAX) break;
     }
     this.probeWalk = { key: wk, clean };
@@ -10276,7 +10503,7 @@ export default class Threads extends View {
     for (const [, , k] of out) this.probeTries.set(k, (this.probeTries.get(k) ?? 0) + 1);
     // Nothing due anywhere: quiet. Otherwise parts wait, or rows are not looked at yet.
     // Rows below left out while a place is held are not done.
-    const done = !up && top + clean >= n && top - clean < 0;
+    const done = !waits && !up && top + clean >= n && top - clean < 0;
     this.probeAbove = top - clean < 0;
     this.probeLeft = done ? 0 : 1;
     this.probeQuiet = done ? { ver: this.probeVer ?? 0, base, mv: this.measVer ?? 0, broken: this.mdBroken?.size ?? 0 } : null;
@@ -10373,7 +10600,8 @@ export default class Threads extends View {
       else {
         this.drawingRow = x ? { key: x.key, lite: Boolean(held) } : null;
         this.liteDraw = Boolean(held);
-        try { body = x ? this.item(t, x, focusedPanel, h) : div(); } catch (e) { this.drawFailed(e, x); body = this.drawErrorRow(t, e); }
+        // A thin row (boundShapes) is made whole as it is drawn.
+        try { body = x ? this.item(t, x.shape?.thin ? this.fillRow(x) : x, focusedPanel, h) : div(); } catch (e) { this.drawFailed(e, x); body = this.drawErrorRow(t, e); }
         this.liteDraw = false;
         this.drawingRow = null;
       }
