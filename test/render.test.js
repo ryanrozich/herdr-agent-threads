@@ -4,7 +4,7 @@
 // item. The pane reads synthetic fixtures through the real extractor (exec runs it).
 import { test, expect, setSystemTime, spyOn } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync, statSync, appendFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest, ruleSender, newSession as newSessionForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
@@ -27,6 +27,7 @@ import {
   drawRange,
   dropTimers,
   editors,
+  endInChunk2,
   extractCalls,
   fakeH,
   fixture,
@@ -52,9 +53,11 @@ import {
   modDir,
   never,
   openAt,
+  openingPane,
   overlays,
   ownOf,
   pane,
+  paneWith,
   pinPane,
   PINS,
   pinsShown,
@@ -66,6 +69,7 @@ import {
   root,
   ROW,
   rowHeight,
+  s1Child,
   saved,
   scripted,
   scrolled,
@@ -2600,21 +2604,6 @@ test("debug on: a long session's rows settle, and then no next draw is asked for
 
 const busy = () => (busyFile ??= fixture("--busy", "130"));
 
-// A pane on file whose cx is set up by prep before init (hooks must be in place for the read).
-async function paneWith(file, prep, tries = 200) {
-  H.state = {
-    terminals: [{ address: "t4", status: "idle", name: "claude" }],
-    panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
-    props: { terminal: "t4", transcript: file, debug: true }, shared: {},
-  };
-  const v = new Threads();
-  const cx = makeCx();
-  prep?.(cx, v);
-  v.init(state.props, cx);
-  if (tries) await settle(v, tries);
-  return { v, cx };
-}
-
 // Runs in a child bun; the parent test below starts it and checks what it wrote.
 // The child's clock (performance.now, which the read's budgets read too: SLICE_MS, BUILD_MS,
 // SHAPE_MS) moves only by the work counted, at the interpreter's prices (PRICE). On the wall
@@ -2690,22 +2679,6 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   performance.now = realPerf;
   require("node:fs").writeFileSync(process.env.THREADS_OUT, JSON.stringify({ longest, most, read, pcts, calls: extractCalls.filter(([o, n]) => !(o === statSync(file).size - 2 ** 21 && n === 2 ** 21)).map(([, n]) => n), size: statSync(file).size, turns: view.current().turns.length, loaded: view.current().loaded, awaits: m.length / 2, toggleOn, toggleOff, openFrame, nextFrame, allFrame }));
 }, 120000);
-
-// Runs the S1 child (with env added) and gives what it wrote.
-async function s1Child(env = {}) {
-  const out = join(mkdtempSync(join(tmpdir(), "threads-timing-")), "out.json");
-  // Not execFileSync: while the child runs, this process stays free to take a signal, so a
-  // stopped run ends the child too (test/preload.js) instead of leaving it reading.
-  await new Promise((resolve, reject) => {
-    const child = spawn("bun", ["test", join(root, "test/render.test.js"), "-t", "S1 child"], {
-      env: { ...process.env, THREADS_CHILD: "read-timing", THREADS_OUT: out, ...env }, stdio: "ignore",
-    });
-    const timer = setTimeout(() => child.kill(), 120000);
-    child.on("error", reject);
-    child.on("exit", (code, sig) => { clearTimeout(timer); if (code === 0) resolve(); else reject(new Error(`the timing child ended with ${code ?? sig}`)); });
-  });
-  return JSON.parse(readFileSync(out, "utf8"));
-}
 
 test("S1: the read's longest synchronous stretch is at most 30 ms of work at the interpreter's speed, and the percentage rises chunk by chunk", async () => {
   const r = await s1Child();
@@ -20029,37 +20002,8 @@ test("a terminal at px beside the pair is never resized: its width holds through
 });
 
 // ---- the opening (TRD-94): the pane's first session opens at its end, still ----
-// A pane armed by a draw before its session is read, whose read stops (each step waits) while
-// hold() says so. step(f) lets it go on until f() holds, then stops it again.
-async function openingPane(file, holdAt = () => true) {
-  let hold = holdAt;
-  const waiting = [];
-  const { v, cx } = await paneWith(file, (cx) => {
-    cx.sleepHook = () => (hold(v) ? new Promise((r) => waiting.push(r)) : new Promise((r) => setTimeout(r, 0)));
-  }, 0);
-  await until(() => v.current() && v.reading, "the read");
-  draw(v, cx);
-  const go = (f) => { hold = f; for (const r of waiting.splice(0)) r(); };
-  return { v, cx, go, waiting };
-}
 // The text a draw gave its elements.
 const drawnText = (calls) => calls.filter(([n, x]) => n === "child" && typeof x === "string").map(([, x]) => x);
-// A transcript whose first turn has its end in the second chunk: tool results of 100 KB each
-// fill the first 2 MiB, then the reply and the turn's end. Made-up words only.
-function endInChunk2() {
-  const at = (s) => new Date(Date.UTC(2026, 10, 2, 9, 0, s)).toISOString();
-  const lines = [{ type: "user", uuid: "u1", timestamp: at(0), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: "Read every cart module and sum the totals" } }];
-  for (let i = 0; i < 30; i++) {
-    lines.push({ type: "assistant", uuid: `a${i}`, timestamp: at(1 + i), sessionId: "s", message: { id: `m${i}`, role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { file_path: `cart/part${i}.ts` } }] } });
-    lines.push({ type: "user", uuid: `r${i}`, timestamp: at(1 + i), sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: `const kaz${i} = "${"zo".repeat(50000)}";` }] } });
-  }
-  lines.push({ type: "assistant", uuid: "z", timestamp: at(40), sessionId: "s", message: { id: "mz", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "The totals agree." }], usage: { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 9000, cache_creation_input_tokens: 300 } } });
-  lines.push({ type: "system", subtype: "turn_duration", durationMs: 40000, uuid: "d", timestamp: at(40), sessionId: "s" });
-  const dir = mkdtempSync(join(tmpdir(), "threads-open-"));
-  const file = join(dir, "o.jsonl");
-  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
-  return file;
-}
 // Frames until the opening has shown the list (as Herdr draws: timers due, then a draw).
 function openFrames(v, cx, n = 300) {
   const frames = [];
@@ -20616,378 +20560,4 @@ test("the agent message counts follow a session's read ending: a running agent t
   const fresh = v.counts();
   expect(after).toEqual(fresh);
   expect(fresh).not.toEqual(before);
-});
-
-test("a read takes 2 MiB first, so the first figures come at once, then twice the last call up to 16 MiB and no more; a read of new bytes starts at 2 MiB again", async () => {
-  H.extractCalls = [];
-  try {
-    const file = endInChunk2();
-    // Ten more copies of its tool results: about 33 MB in all, past 2 + 4 + 8 + 16 MiB, so a
-    // fifth call shows the growth stops at 16 MiB. Tool results print almost nothing, so no
-    // call is cut.
-    const extra = readFileSync(file, "utf8").split("\n").filter((l) => l.includes("tool_result")).join("\n");
-    writeFileSync(file, `${readFileSync(file, "utf8")}${`${extra}\n`.repeat(10)}`);
-    const size = statSync(file).size;
-    expect(size).toBeGreaterThan(30 * 2 ** 20 + 2 ** 20);
-    const { v, cx, go } = await openingPane(file);
-    go(() => false);
-    await settle(v);
-    const s = v.current();
-    expect(s.loaded).toBe(true);
-    expect(s.offset).toBe(size);
-    // The opening's one read of the file's last 2 MiB for the newest prompt, then the read.
-    const peek = extractCalls.filter(([o, n]) => o === size - 2 * 2 ** 20 && n === 2 * 2 ** 20);
-    expect(peek.length).toBe(1);
-    const first = extractCalls.filter((x) => x !== peek[0] && x[0] < size);
-    expect(first.map(([, n]) => n / 2 ** 20)).toEqual([2, 4, 8, 16, 16]);
-    expect(first[0][0]).toBe(0);
-    // New bytes on a session read to its end: 2 MiB first again.
-    extractCalls.length = 0;
-    appendFileSync(file, `${JSON.stringify({ type: "user", uuid: "u9", timestamp: new Date(Date.UTC(2026, 10, 2, 10, 0, 0)).toISOString(), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: "One more" } })}\n`);
-    v.read(cx);
-    await settle(v);
-    expect(extractCalls[0]).toEqual([size, 2 * 2 ** 20]);
-    draw(v, cx);
-  } finally { H.extractCalls = null; }
-});
-
-test("a read whose call the extractor had to cut (dense text) asks for half from then on", async () => {
-  H.extractCalls = [];
-  try {
-    // 140 turns, each a prompt and a 100 KB reply of plain words: about 14 MB, nearly all of it
-    // events, so 12 MB in one call would print more than the extractor's 6 MiB.
-    const at = (i, s) => new Date(Date.UTC(2026, 10, 2, 9, 0, 0) + i * 60000 + s * 1000).toISOString();
-    const words = "kaz vel orin tam sula pero dint ".repeat(3300);
-    const lines = [];
-    for (let i = 0; i < 140; i++) {
-      lines.push({ type: "user", uuid: `u${i}`, timestamp: at(i, 0), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: `Turn ${i + 1}: write it out` } });
-      lines.push({ type: "assistant", uuid: `a${i}`, timestamp: at(i, 30), sessionId: "s", message: { id: `m${i}`, role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: words }] } });
-      lines.push({ type: "system", subtype: "turn_duration", durationMs: 30000, uuid: `d${i}`, timestamp: at(i, 30), sessionId: "s" });
-    }
-    const dir = mkdtempSync(join(tmpdir(), "threads-dense-"));
-    const file = join(dir, "d.jsonl");
-    writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
-    const size = statSync(file).size;
-    const { v, go } = await openingPane(file);
-    go(() => false);
-    await settle(v);
-    expect(v.current().offset).toBe(size);
-    const MiB = 2 ** 20;
-    const read = extractCalls.filter(([o, n]) => !(o === size - 2 * MiB && n === 2 * MiB));
-    // The 8 MiB call was cut to 4 (its events past 6 MiB): the calls after it ask for 4, not
-    // for a size already cut, and do not grow again.
-    expect(read.map(([, n]) => n / MiB)).toEqual([2, 4, 8, 4, 4]);
-    expect(v.current().turns.length).toBe(140);
-  } finally { H.extractCalls = null; }
-});
-
-// Tool results of 100 KB each, as endInChunk2's, appended to file until it is past bytes.
-function padTools(file, bytes) {
-  const extra = `${readFileSync(file, "utf8").split("\n").filter((l) => l.includes("tool_result")).join("\n")}\n`;
-  let size = statSync(file).size;
-  while (size < bytes) { appendFileSync(file, extra); size += extra.length; }
-}
-
-test("a call that stops short of a line longer than the rest of it was not cut: the read's calls stay at 16 MiB", async () => {
-  H.extractCalls = [];
-  try {
-    const MiB = 2 ** 20;
-    // 17 MiB of tool results, then a 14 MiB one: the 16 MiB call, which starts by 14 MiB,
-    // ends before that line does, so it reads about 3 MiB and nothing is cut.
-    const file = endInChunk2();
-    padTools(file, 17 * MiB);
-    const at = new Date(Date.UTC(2026, 10, 2, 9, 50, 0)).toISOString();
-    appendFileSync(file, `${JSON.stringify({ type: "assistant", uuid: "aL", timestamp: at, sessionId: "s", message: { id: "mL", role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: "tL", name: "Read", input: { file_path: "cart/log.txt" } }] } })}\n`);
-    appendFileSync(file, `${JSON.stringify({ type: "user", uuid: "rL", timestamp: at, sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tL", content: "zo".repeat(7 * MiB) }] } })}\n`);
-    appendFileSync(file, `${JSON.stringify({ type: "assistant", uuid: "zL", timestamp: at, sessionId: "s", message: { id: "mz2", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "The log is long." }] } })}\n`);
-    const size = statSync(file).size;
-    const { v, go } = await openingPane(file);
-    go(() => false);
-    await settle(v);
-    expect(v.current().offset).toBe(size);
-    const read = extractCalls.filter(([o, n]) => !(o === size - 2 * MiB && n === 2 * MiB));
-    // Not 2, 4, 8, 16, 8, 32: a short call is not a cut one, so the cap stays at 16 MiB and the
-    // next call reads the long line whole.
-    expect(read.map(([, n]) => n / MiB)).toEqual([2, 4, 8, 16, 16]);
-  } finally { H.extractCalls = null; }
-}, 60000);
-
-test("a file replaced in the middle of a read starts again at 2 MiB with the full ceiling, whatever the cut file's calls had come down to", async () => {
-  H.extractCalls = [];
-  const MiB = 2 ** 20;
-  try {
-    // The dense session of the test before (its 8 MiB call is cut to 4), with a first uuid of
-    // its own, so the file that replaces it starts differently.
-    const at = (i, s) => new Date(Date.UTC(2026, 10, 2, 9, 0, 0) + i * 60000 + s * 1000).toISOString();
-    const words = "kaz vel orin tam sula pero dint ".repeat(3300);
-    const lines = [];
-    for (let i = 0; i < 140; i++) {
-      lines.push({ type: "user", uuid: `dd${String(i).padStart(6, "0")}`, timestamp: at(i, 0), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: `Turn ${i + 1}: write it out` } });
-      lines.push({ type: "assistant", uuid: `de${String(i).padStart(6, "0")}`, timestamp: at(i, 30), sessionId: "s", message: { id: `m${i}`, role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: words }] } });
-    }
-    const dir = mkdtempSync(join(tmpdir(), "threads-swap-"));
-    const file = join(dir, "d.jsonl");
-    writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
-    // The file that replaces it: endInChunk2's, past 2 + 4 + 8 MiB.
-    const other = endInChunk2();
-    padTools(other, 21 * MiB);
-    const size = statSync(file).size;
-    // The first call after the cut one (a 4 MiB call from past the start): the file is
-    // replaced just before it reads.
-    let swapAt = -1;
-    H.extractHook = async (args) => {
-      const [o, n] = [Number(args[2]), Number(args[3])];
-      if (swapAt < 0 && o > 0 && o !== size - 2 * MiB && n === 4 * MiB && extractCalls.filter(([, k]) => k === 8 * MiB).length) {
-        swapAt = extractCalls.length - 1;
-        writeFileSync(file, readFileSync(other));
-      }
-      return null;
-    };
-    const { v, go } = await openingPane(file);
-    go(() => false);
-    await settle(v);
-    expect(swapAt).toBeGreaterThan(0);
-    const newSize = statSync(other).size;
-    expect(v.current().offset).toBe(newSize);
-    const before = extractCalls.slice(0, swapAt + 1).filter(([o, n]) => !(o === size - 2 * MiB && n === 2 * MiB));
-    expect(before.map(([, n]) => n / MiB)).toEqual([2, 4, 8, 4]);
-    // From the top of the new file: 2 MiB, then growing to 16 MiB, not held at the 4 MiB the
-    // cut file had come down to.
-    const after = extractCalls.slice(swapAt + 1).filter(([o, n]) => !(o === newSize - 2 * MiB && n === 2 * MiB));
-    expect(after[0]).toEqual([0, 2 * MiB]);
-    expect(after.map(([, n]) => n / MiB)).toEqual([2, 4, 8, 16]);
-  } finally { H.extractCalls = null; H.extractHook = null; }
-}, 60000);
-
-test("shaping: a turn whose expected cost would take the draw past its shaping time waits for the next draw, unless it is the draw's first", async () => {
-  const { v } = await pane(fixture("--extra", "3"));
-  const t = v.current().turns.at(-1);
-  // A pasted prompt of 20,000 characters, at 1 µs a character: 20 ms expected.
-  t.prompt = "kaz vel orin tam ".repeat(1250);
-  v.shapeBudget = 12;
-  v.shapeRate = 1e-3;
-  const again = () => { v.sendersVer = (v.sendersVer ?? 0) + 1; v.shapeStale = false; };
-  try {
-    // 5 ms spent: 5 + 20 is past 12, so it keeps the shape it had and is left for the next draw.
-    again();
-    const before = t.shapeMemo;
-    v.shapeSpent = 5;
-    v.shapeLeft = 0;
-    expect(v.shape(t)).toBe(before);
-    expect([v.shapeLeft, v.shapeStale]).toEqual([1, true]);
-    // The draw's first turn is shaped whatever it is expected to cost.
-    again();
-    v.shapeSpent = 0;
-    v.shapeLeft = 0;
-    const sh = v.shape(t);
-    expect(v.shapeStale).toBe(false);
-    expect(v.shapeLeft).toBe(0);
-    expect(sh).not.toBe(before);
-    // Shaping it taught the rate: here far under 1 µs a character, so it fell by a tenth.
-    expect(v.shapeRate).toBeLessThan(1e-3);
-    expect(v.shapeRate).toBeGreaterThanOrEqual(0.9e-3 - 1e-12);
-    // A short turn still fits: its cost is its length at the same rate.
-    const short = v.current().turns[0];
-    again();
-    v.shapeSpent = 5;
-    v.shape(short);
-    expect(v.shapeStale).toBe(false);
-    // Nothing learned yet: no turn is held back for its cost.
-    again();
-    v.shapeRate = undefined;
-    v.shapeSpent = 5;
-    v.shape(t);
-    expect(v.shapeStale).toBe(false);
-  } finally { v.shapeBudget = null; v.shapeRate = undefined; }
-});
-
-test("shaping: a turn left for its cost ends the pass that met it, so a draw never looks at every row still to reshape", async () => {
-  const at = (k) => new Date(Date.UTC(2026, 9, 1, 8) + k * 60000).toISOString();
-  const lines = [];
-  for (let k = 0; k < 1500; k++) lines.push(
-    { type: "user", uuid: `u${k}`, timestamp: at(2 * k), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: `Turn ${k + 1}: zerb kazo quil` } },
-    { type: "assistant", uuid: `a${k}`, timestamp: at(2 * k + 1), sessionId: "s", message: { id: `m${k}`, role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "The cart **total** agrees with `sum()`." }] } });
-  const file = join(mkdtempSync(join(tmpdir(), "threads-cost-")), "c.jsonl");
-  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
-  const { v, cx } = await pane(file);
-  v.debug = false;
-  // The shaping clock counts 1 ms a reshape and nothing else, 12 ms a draw, and every turn is
-  // expected to cost 1.5 ms: with 11 ms spent, a draw's 12th turn waits for its cost.
-  for (const [name, ms] of [["reshape", 1], ["stepLinks", 0], ["mdHeight", 0]]) {
-    const f = v[name];
-    v[name] = function (...a) {
-      const s0 = this.shapeSpent ?? 0;
-      const t0 = performance.now();
-      const r = f.apply(this, a);
-      if (name === "reshape") this.shapeSpent = s0 + ms - (performance.now() - t0);
-      else if ((this.shapeSpent ?? 0) !== s0) this.shapeSpent = s0 + ms;
-      return r;
-    };
-  }
-  const t = v.current().turns[700];
-  v.shapeBudget = 12;
-  v.shapeRate = 1.5 / (t.prompt.length + v.replyText(t).length);
-  // shape() calls made by a pass's own walk (not shapeInView's), the rows it reshaped, and the
-  // rows it counted as left (shapeLeft past what shapeInView counted).
-  let calls = 0;
-  let inView = false;
-  let viewLeft = 0;
-  const shape = v.shape;
-  v.shape = function (...a) { if (!inView) calls++; return shape.apply(this, a); };
-  const siv = v.shapeInView;
-  v.shapeInView = function (...a) { inView = true; try { return siv.apply(this, a); } finally { inView = false; viewLeft = this.shapeLeft; } };
-  const passes = [];
-  const rs = v.reshapeStale;
-  v.reshapeStale = function (...a) { const c0 = calls; const s0 = this.staleRows.length; const r = rs.apply(this, a); passes.push([calls - c0, s0 - this.staleRows.length, s0, this.shapeLeft - viewLeft, this.staleRows.length]); return r; };
-  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
-  try {
-    v.width -= 40;
-    for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || !passes.length); k++) { cx.flush(16); v.render(cx); }
-    expect(v.staleRows).toEqual([]);
-    expect(passes[0][2]).toBeGreaterThan(1000);
-    // None was dropped: every row has its turn's shape at the new width.
-    const look = v.shapeLook();
-    expect(v.baseRows.filter((r) => r.kind === "turn" && !(r.shape === r.turn.shapeMemo && r.turn.shapeFast?.look === look)).length).toBe(0);
-    // Each pass looks at the rows it reshapes and the one it leaves for its cost, however many
-    // wait after it, and counts each row it leaves once; all drain at about 11 a draw.
-    for (const [n, d, , counted, left] of passes) {
-      expect(n).toBeLessThanOrEqual(d + 1);
-      expect(counted).toBe(left);
-    }
-    expect(passes.length).toBeLessThanOrEqual(Math.ceil(passes[0][2] / 10) + 5);
-  } finally { v.shapeBudget = null; v.shapeRate = undefined; H.listWindow = null; }
-}, 30000);
-
-test("shaping: a stale turn over the budget waits while the running turn reshapes first in every draw, and is shaped in the first draw after", async () => {
-  const { v, cx } = await pane(fixture("--extra", "3"));
-  v.debug = false;
-  const t = v.current().turns[0];
-  // A pasted prompt of 20,000 characters, at 1 µs a character: 20 ms expected, past the 12.
-  t.prompt = "kaz vel orin tam ".repeat(1250);
-  v.shapeBudget = 12;
-  v.shapeRate = 1e-3;
-  v.staleRows = [v.baseIndex.get("0:1")];
-  // The running turn reshaped before anything else in each draw (shapeInView), at 1 ms.
-  let running = 10;
-  const siv = v.shapeInView;
-  v.shapeInView = function (...a) { if (running > 0) { running--; this.shapeSpent = (this.shapeSpent ?? 0) + 1; } return siv.apply(this, a); };
-  const frames = [];
-  try {
-    for (let k = 0; k < 20 && v.staleRows.length; k++) { cx.flush(16); v.render(cx); frames.push(running); }
-    expect(v.staleRows).toEqual([]);
-    // Held back for the 10 draws the running turn reshaped first, then shaped in the next.
-    expect(frames.length).toBe(12);
-    expect(v.baseRows[v.baseIndex.get("0:1")].shape).toBe(t.shapeMemo);
-    expect(t.shapeFast.p).toBe(t.prompt.length);
-  } finally { v.shapeBudget = null; v.shapeRate = undefined; }
-});
-
-test("shaping: the rate is learned from long turns, rising at once and falling back by a tenth a turn", async () => {
-  const { v } = await pane(fixture("--extra", "3"));
-  // What the pane's own first draw taught it, forgotten.
-  v.shapeRate = undefined;
-  const long = { prompt: "x".repeat(16000) };
-  const short = { prompt: "x".repeat(3000) };
-  expect(v.shapeCost(long, "")).toBe(0);
-  v.shapeLearn(short, "", 30);
-  expect(v.shapeRate ?? 0).toBe(0);
-  v.shapeLearn(long, "", 32);
-  expect(v.shapeRate).toBeCloseTo(0.002, 9);
-  expect(v.shapeCost(long, "y".repeat(4000))).toBeCloseTo(40, 6);
-  v.shapeLearn(long, "", 1.6);
-  expect(v.shapeRate).toBeCloseTo(0.0018, 9);
-  v.shapeLearn(long, "", 48);
-  expect(v.shapeRate).toBeCloseTo(0.003, 9);
-});
-
-test("S1b: with 16 MiB calls (a longer session) the read's longest synchronous stretch is still at most 30 ms, and the bar rises with every chunk", async () => {
-  const r = await s1Child({ THREADS_S1_BUSY: "500" });
-  expect(r.loaded).toBe(true);
-  expect(r.size).toBeGreaterThan(20 * 2 ** 20);
-  expect(r.calls.slice(0, 4)).toEqual([2 ** 21, 2 ** 22, 2 ** 23, 2 ** 24]);
-  expect(r.longest).toBeLessThanOrEqual(30);
-  expect(r.pcts.length).toBe(r.calls.length);
-  for (let i = 1; i < r.pcts.length; i++) expect(r.pcts[i]).toBeGreaterThan(r.pcts[i - 1]);
-  expect(r.pcts.at(-1)).toBe(100);
-  console.log(`S1b work: ${(r.size / 1e6).toFixed(1)} MB in calls of ${r.calls.map((n) => n / 2 ** 20).join(", ")} MiB; longest stretch ${r.longest.toFixed(1)} ms over ${r.awaits} awaits, at most ${r.most.lines} lines and ${r.most.events} events in one; percent ${r.pcts.join(", ")}`);
-}, 180000);
-
-// Shaping on a clock of its own: each reshape costs its turn's length at trueRate ms a
-// character, and nothing else moves the clock. The prompts of every other turn are made 20,000
-// characters long (20 ms at 1 µs a character); the rest stay short. Then every row is reshaped
-// over frames (a new prompt length, as a text size or width change asks), and each frame's
-// reshapes are logged in order.
-async function shapingRun(trueRate, rate, budget = 12) {
-  const { v, cx } = await pane(fixture("--extra", "40"));
-  const turns = v.current().turns;
-  turns.forEach((t, i) => { t.prompt = i % 2 === 0 ? `${"kaz vel orin tam ".repeat(1250)}${i}` : `${t.prompt} again`; });
-  const real = globalThis.performance.now;
-  let clk = 1e6;
-  globalThis.performance.now = () => clk;
-  const frames = [];
-  const shaped = [];
-  const reshape = v.reshape.bind(v);
-  v.reshape = (turn, live, q, P, why, text) => {
-    const cost = (turn.prompt.length + (text?.length ?? 0)) * trueRate;
-    frames.at(-1)?.push(cost);
-    shaped.push(turns.indexOf(turn));
-    const out = reshape(turn, live, q, P, why, text);
-    clk += cost;
-    return out;
-  };
-  try {
-    v.shapeBudget = budget;
-    v.shapeRate = rate;
-    v.current().version++;
-    v.rowsKey = null;
-    for (let k = 0; k < 400; k++) {
-      frames.push([]);
-      v.render(cx);
-      // The frame's own timers (the next reshape, the next build slice), then the next frame.
-      cx.flush(0, 1);
-      if (!v.rowJob && !(v.shapeLeft > 0) && !v.staleRows?.length && !v.reshapeDue) break;
-    }
-  } finally { globalThis.performance.now = real; v.shapeBudget = null; }
-  return { v, frames: frames.filter((f) => f.length), turns, shaped: shaped.sort((a, b) => a - b) };
-}
-// What a frame shaped past its budget: its whole cost, past the larger of the budget and its
-// first turn's cost (one turn alone may cost more than a frame's budget).
-const over = (f) => f.reduce((a, b) => a + b, 0) - Math.max(12, f[0]);
-
-test("shaping: a draw never shapes past its budget, except for its one first turn, and every row is reshaped", async () => {
-  const { v, frames, shaped } = await shapingRun(1e-3, 1e-3);
-  expect(v.shapeLeft ?? 0).toBe(0);
-  expect(v.staleRows?.length ?? 0).toBe(0);
-  for (const f of frames) expect(over(f)).toBeLessThanOrEqual(1e-9);
-  // The same turns as with no budget at all, each once; a 20 ms turn has a draw to itself,
-  // and the short ones share one.
-  const free = await shapingRun(1e-3, 1e-3, Infinity);
-  expect(shaped).toEqual(free.shaped);
-  expect(free.frames.length).toBe(1);
-  const long = frames.flat().filter((c) => c > 12).length;
-  expect(long).toBeGreaterThan(10);
-  expect(frames.length).toBeGreaterThanOrEqual(long);
-  expect(frames.some((f) => f.length > 1)).toBe(true);
-});
-
-test("shaping: a turn far dearer than estimated runs past the budget once, then the rate it taught holds the others back", async () => {
-  const { v, frames, shaped } = await shapingRun(1e-3, 1e-5);
-  expect(shaped).toEqual((await shapingRun(1e-3, 1e-3, Infinity)).shaped);
-  expect(v.shapeLeft ?? 0).toBe(0);
-  expect(frames.filter((f) => over(f) > 1e-9).length).toBeLessThanOrEqual(1);
-  expect(v.shapeRate).toBeGreaterThanOrEqual(1e-3 * 0.9 ** 40);
-});
-
-test("shaping: a rate far too high holds every turn but the first of each draw, falls back, and shaping still finishes", async () => {
-  const { v, frames, shaped } = await shapingRun(1e-5, 1);
-  expect(shaped).toEqual((await shapingRun(1e-5, 1e-5, Infinity)).shaped);
-  expect(v.shapeLeft ?? 0).toBe(0);
-  expect(v.staleRows?.length ?? 0).toBe(0);
-  for (const f of frames) expect(over(f)).toBeLessThanOrEqual(1e-9);
-  // One turn a draw: the worst a wrong rate costs is a draw for each turn, never a stall.
-  // Each long turn it times lowers the rate by a tenth, so draws start to take two.
-  expect(frames[0].length).toBe(1);
-  expect(frames.length).toBeLessThanOrEqual(shaped.length);
-  expect(v.shapeRate).toBeLessThan(1);
-  expect(frames.some((f) => f.length > 1)).toBe(true);
 });

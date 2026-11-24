@@ -12,8 +12,8 @@
 // one binding has to stay; app and the mod copied into it, made once; and main.js and ui.js
 // themselves, loaded once, with their own module state.
 import { mock, expect } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -308,6 +308,20 @@ export async function pane(file) {
   await settle(v);
   return { v, cx };
 }
+// A pane on file whose cx is set up by prep before init (hooks must be in place for the read).
+export async function paneWith(file, prep, tries = 200) {
+  state = {
+    terminals: [{ address: "t4", status: "idle", name: "claude" }],
+    panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
+    props: { terminal: "t4", transcript: file, debug: true }, shared: {},
+  };
+  const v = new Threads();
+  const cx = makeCx();
+  prep?.(cx, v);
+  v.init(state.props, cx);
+  if (tries) await settle(v, tries);
+  return { v, cx };
+}
 
 export function draw(v, cx) { v.render(cx); v.report(); return v; }
 
@@ -499,3 +513,49 @@ export function drawRange(v, start, end) {
 // A frame with the person's scroll before it: the same rows, the top row moved.
 export function scrolled(v, start, end) { drawRange(v, start, end); }
 export const ownOf = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+// The opening's pane and transcript, and the S1 timing child: render.test.js and
+// read-chunk.test.js use them.
+// A pane armed by a draw before its session is read, whose read stops (each step waits) while
+// hold() says so. step(f) lets it go on until f() holds, then stops it again.
+export async function openingPane(file, holdAt = () => true) {
+  let hold = holdAt;
+  const waiting = [];
+  const { v, cx } = await paneWith(file, (cx) => {
+    cx.sleepHook = () => (hold(v) ? new Promise((r) => waiting.push(r)) : new Promise((r) => setTimeout(r, 0)));
+  }, 0);
+  await until(() => v.current() && v.reading, "the read");
+  draw(v, cx);
+  const go = (f) => { hold = f; for (const r of waiting.splice(0)) r(); };
+  return { v, cx, go, waiting };
+}
+// A transcript whose first turn has its end in the second chunk: tool results of 100 KB each
+// fill the first 2 MiB, then the reply and the turn's end. Made-up words only.
+export function endInChunk2() {
+  const at = (s) => new Date(Date.UTC(2026, 10, 2, 9, 0, s)).toISOString();
+  const lines = [{ type: "user", uuid: "u1", timestamp: at(0), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: "Read every cart module and sum the totals" } }];
+  for (let i = 0; i < 30; i++) {
+    lines.push({ type: "assistant", uuid: `a${i}`, timestamp: at(1 + i), sessionId: "s", message: { id: `m${i}`, role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { file_path: `cart/part${i}.ts` } }] } });
+    lines.push({ type: "user", uuid: `r${i}`, timestamp: at(1 + i), sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: `const kaz${i} = "${"zo".repeat(50000)}";` }] } });
+  }
+  lines.push({ type: "assistant", uuid: "z", timestamp: at(40), sessionId: "s", message: { id: "mz", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "The totals agree." }], usage: { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 9000, cache_creation_input_tokens: 300 } } });
+  lines.push({ type: "system", subtype: "turn_duration", durationMs: 40000, uuid: "d", timestamp: at(40), sessionId: "s" });
+  const dir = mkdtempSync(join(tmpdir(), "threads-open-"));
+  const file = join(dir, "o.jsonl");
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  return file;
+}
+// Runs the S1 child (with env added) and gives what it wrote.
+export async function s1Child(env = {}) {
+  const out = join(mkdtempSync(join(tmpdir(), "threads-timing-")), "out.json");
+  // Not execFileSync: while the child runs, this process stays free to take a signal, so a
+  // stopped run ends the child too (test/preload.js) instead of leaving it reading.
+  await new Promise((resolve, reject) => {
+    const child = spawn("bun", ["test", join(root, "test/render.test.js"), "-t", "S1 child"], {
+      env: { ...process.env, THREADS_CHILD: "read-timing", THREADS_OUT: out, ...env }, stdio: "ignore",
+    });
+    const timer = setTimeout(() => child.kill(), 120000);
+    child.on("error", reject);
+    child.on("exit", (code, sig) => { clearTimeout(timer); if (code === 0) resolve(); else reject(new Error(`the timing child ended with ${code ?? sig}`)); });
+  });
+  return JSON.parse(readFileSync(out, "utf8"));
+}
