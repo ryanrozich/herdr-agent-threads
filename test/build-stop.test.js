@@ -5,7 +5,7 @@
 // (test/render-harness.js), with the harness's made-up session (make-fixture.js).
 import { test, expect } from "bun:test";
 
-import { draw, dropTimers, fixture, pane, settleRows, setup } from "./render-harness.js";
+import { draw, dropTimers, fixture, openAt, pane, probeFrame, scripted, settleList, settleRows, setup, simList, stillAt } from "./render-harness.js";
 
 setup();
 
@@ -176,4 +176,38 @@ test("a full build Herdr stops between indexing a row and sizing it sizes that r
   const parts = v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length;
   // hit 0: the stop fell with the row indexed and its size not yet pushed.
   expect([hit, run.stops, v.baseRows[at]?.key === key, sized, parts > 0, v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i)]).toEqual([0, 1, true, true, true, true]);
+}, 60000);
+
+// A new column width holds the place on screen across the rows built for it: the full build
+// takes the place (takeAnchor) as it ends. That is a call, where Herdr's stop can fall, and the
+// request was cleared before it: stopped there, the place was never taken, and the list moved
+// to another turn. The request is cleared once the place is taken. Made-up session of 400 short
+// turns (scripted).
+test("a full build Herdr stops as it takes the held place of a width change keeps that place: the next build takes it", async () => {
+  const words = "the cart total rounds per line so the order is off by a cent when a coupon applies to a split shipment".split(" ");
+  const say = (i, k) => Array.from({ length: k }, (_, j) => words[(i * 7 + j * 3) % words.length]).join(" ");
+  const ev = [];
+  for (let i = 0; i < 400; i++) {
+    const ts = new Date(Date.UTC(2026, 10, 1, 8, 0) + i * 60000).toISOString();
+    ev.push({ k: "p", o: "human", t: `Prompt ${i}: ${say(i, 18 + (i % 5) * 6)}.`, ts }, { k: "t", t: `Reply ${i}: ${say(i + 3, 30 + (i % 7) * 8)}.` }, { k: "d", ts });
+  }
+  const { v, cx } = await scripted(ev);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  openAt(v, cx, sim, 650);
+  sim.wheel(sim.off / 2);
+  probeFrame(v, cx);
+  settleList(v, cx, sim);
+  const before = sim.last().key;
+  let armed = true;
+  let stops = 0;
+  const takeAnchor = v.takeAnchor;
+  v.takeAnchor = function (...a) { if (armed) { armed = false; throw STOP; } return takeAnchor.apply(this, a); };
+  stillAt(v, 750);
+  for (let k = 0; k < 30; k++) { try { draw(v, cx); } catch (e) { if (e !== STOP) throw e; stops++; } cx.flush?.(0); }
+  const held = v.anchor?.key ?? null;
+  settleList(v, cx, sim);
+  delete v.takeAnchor;
+  expect([armed, stops, held, sim.last().key]).toEqual([false, 1, before, before]);
 }, 60000);
