@@ -275,3 +275,75 @@ test("timeline band: the first and last steps whose bars start inside a band, in
   expect(bandRows(L, heads, L.gaps[0][0] + 1, L.gaps[0][1] - 1)).toBe(null);
   expect(bandRows(L, heads, 10, 5)).toBe(null);
 });
+
+test("timeline bar ends: a finished call's bar runs from its start to its end on the clock", () => {
+  // Turn 2 takes 120 s: Read runs 6 to 60 s on track 0, Grep 10 to 20 s on track 1.
+  const a = head(turn(1, ["Looking.", [["Bash", "x", 6000, 12000, true]]]));
+  const b = head(turn(2, [[["Read", "y", 6000, 60000], ["Grep", "z", 10000, 20000]]], { end: T0 + 120000 }));
+  const L = timelineLayout([a, b], 600, "clock");
+  expect(L.geo.walls[1]).toBe(120000);
+  const { x, w } = L.turns[1];
+  const [read] = L.spans.get("tools|tools|0");
+  const [grep] = L.spans.get("tools|tools|1");
+  expect(read[0]).toBeCloseTo(x + (6000 / 120000) * w, 6);
+  expect(read[1]).toBeCloseTo(x + (60000 / 120000) * w, 6);
+  expect(grep[0]).toBeCloseTo(x + (10000 / 120000) * w, 6);
+  expect(grep[1]).toBeCloseTo(x + (20000 / 120000) * w, 6);
+});
+
+test("timeline tracks: a call that starts as the last one ends stays on the first track; one that starts before it ends does not", () => {
+  const h = head(turn(1, [[["Read", "a", 2000, 3000], ["Grep", "b", 3000, 4000], ["Bash", "c", 3500, 5000]]]));
+  const tools = stepsOf(h).filter((it) => it.lane === "tools");
+  expect(tools.map((it) => [it.a, it.b, it.track])).toEqual([[2000, 3000, 0], [3000, 4000, 0], [3500, 5000, 1]]);
+});
+
+test("timeline tracks: a call with no result holds the first track to the turn's end, so a later call goes on the second", () => {
+  // Not running: Bash never returned, so it runs to the turn's last event, and Read, which
+  // starts after Bash began, runs beside it.
+  const h = head(turn(3, [[["Bash", "sleep", 6000, null]], [["Read", "a", 7000, 8000]]], { done: false, end: null, reply: null }));
+  const tools = stepsOf(h).filter((it) => it.lane === "tools");
+  expect(tools.map((it) => [it.a, it.open, it.track])).toEqual([[6000, true, 0], [7000, false, 1]]);
+  const L = timelineLayout([h], 400, "clock");
+  expect(L.spans.get("tools|tools|1").length).toBe(1);
+});
+
+test("timeline press: a press within 4 px of a bar finds its step; past 4 px, the turn's heading", () => {
+  // One turn 60 s long across 400 px; Read runs 30 to 40 s, the only bar in the Tools lane.
+  const h = head(turn(1, [[["Read", "a", 30000, 40000]]]));
+  const L = timelineLayout([h], 400, "clock");
+  const [[x0, x1]] = L.spans.get("tools|tools|0");
+  expect([x0, x1].map((v) => Math.round(v * 100) / 100)).toEqual([200, 266.67]);
+  const read = stepsOf(h).find((it) => it.lk === "tool").key;
+  const hit = (x) => timelineHit(L, [h], x, "tools").key;
+  expect([hit(x0 - 3), hit(x0), hit((x0 + x1) / 2), hit(x1 + 3)]).toEqual([read, read, read, read]);
+  expect([hit(x0 - 5), hit(x1 + 5)]).toEqual([h.key, h.key]);
+});
+
+test("timeline press: a press at no number finds nothing", () => {
+  const h = head(turn(1, [[["Read", "a", 30000, 40000]]]));
+  const L = timelineLayout([h], 400, "clock");
+  expect(timelineHit(L, [h], Number.NaN, "tools")).toBe(null);
+  expect(timelineHit(L, [h], Number.NaN, null)).toBe(null);
+});
+
+test("timeline bar starts: a step that starts before its turn does is drawn from the turn's start, not left of it", () => {
+  // A tool's time a little before the prompt's (clocks that disagree): turn 2's Read at -5 s.
+  const a = head(turn(1, [[["Bash", "x", 6000, 12000]]]));
+  const b = head(turn(2, [[["Read", "y", -5000, 1000]]]));
+  const L = timelineLayout([a, b], 600, "clock");
+  const read = L.spans.get("tools|tools|0").at(-1);
+  expect(read[0]).toBe(L.turns[1].x);
+  expect(read[1]).toBeCloseTo(L.turns[1].x + (1000 / 60000) * L.turns[1].w, 6);
+  // Straight from tl: a turn 100 px in, 100 px wide, 10 s long.
+  expect(itemBox([-5000, 1000, 0], 0, 100, 100, 10000, "clock", 1)).toEqual({ x0: 100, x1: 110, track: 0 });
+  expect(itemBox([-5000, -4000, 0], 0, 100, 100, 10000, "clock", 1)).toEqual({ x0: 100, x1: 103, track: 0 });
+});
+
+test("timeline running turn: a room for a time with no bound is the least room, and the strip stays placed", () => {
+  expect([Number.POSITIVE_INFINITY, Number.NaN].map(liveRoom)).toEqual([TL_ROOM_MIN, TL_ROOM_MIN]);
+  const a = head(turn(1, [[["Bash", "x", 6000, 12000]]]));
+  const live = head(turn(2, [[["Bash", "bun run e2e", 3000, null]]], { done: false, end: null, reply: null }), true);
+  const geo = timelineGeo([a, live], 600, "clock", Number.POSITIVE_INFINITY);
+  expect(geo.room).toBe(TL_ROOM_MIN);
+  expect(geo.turns.every((t) => Number.isFinite(t.x) && Number.isFinite(t.w) && t.w > 0)).toBe(true);
+});
