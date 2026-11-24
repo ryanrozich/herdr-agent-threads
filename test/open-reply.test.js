@@ -562,6 +562,31 @@ test("a draw Herdr stops halfway through putting an open card's new rows in leav
   expect([armed, r.stops, r.settled > 0, parts, v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i)]).toEqual([false, 1, true, 58, true]);
 }, 60000);
 
+// Herdr's stop is the script engine's interrupt, which falls at any call: a full build can be
+// stopped after it has sized a row and before it has put the row in its index. The build goes
+// on from its next row, so that row was in no index: here the open card's head, which every
+// rebuild of the open turns then took for a turn not shown, and the card never drew.
+test("a full build Herdr stops between sizing a row and indexing it leaves no row out of the index: the open card settles", async () => {
+  const { v, cx, key } = await openLong(shortParas(4000));
+  await cardDone(v, key);
+  const MARK = { key: "stop-here", kind: "md" };
+  let armed = true;
+  let hit = null;
+  // Once the build has indexed three rows, its next index entry is stopped as it is made.
+  const arm = () => {
+    const job = v.rowJob;
+    if (!job?.index || Object.hasOwn(job.index, "set")) return;
+    job.index.set = function (k, i) { if (armed && this.size >= 3) { armed = false; hit = k; v.height(MARK); } return Map.prototype.set.call(this, k, i); };
+  };
+  const ph = v.partH;
+  v.partH = function (...a) { arm(); return ph.apply(this, a); };
+  v.rowsKey = null;
+  const r = costedFrames(v, cx, 80, await cardDone(v, key), { stopAt: (_w, x) => x === MARK });
+  delete v.partH;
+  const parts = v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`) && x.kind === "md").length;
+  expect([armed, hit, r.stops, r.settled > 0, parts, v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i)]).toEqual([false, key, 1, true, 58, true]);
+}, 60000);
+
 // A turn that comes in while an open card waits on its placeholder (mdrest): the build after
 // it keeps the rows before the last day band (keptFrom), the card's among them, so they are not
 // built again. The open turns' work left is counted from what that build makes, and the kept
