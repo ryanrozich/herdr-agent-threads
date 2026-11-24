@@ -1,7 +1,7 @@
 // bun test: the render harness starts each test file clean. bun runs every test file in one
 // process and loads test/render-harness.js once, so a setting one file leaves behind would
 // reach the next file that uses the harness; setup() puts them all back.
-import { test, expect } from "bun:test";
+import { test, expect, describe, beforeAll } from "bun:test";
 import { allPins, closed, editors, heldClock, hostReads, keyBinds, lacking, mdSources, overlays, pinPane, pinsIdle, PINS, saved, scrollHandles, settingsWrites, setup, stubHas, views, work, H } from "./render-harness.js";
 
 const DEFAULTS = {
@@ -125,19 +125,22 @@ test("leak check, part 4: the save of the test before does not land in this one"
 });
 
 // A save queued for later (pinChangedLater, saved by the pane's tick 1.5 s on) belongs to the
-// pane of the test that queued it. The pane is kept here so the next test can look at it.
-let queuedPane = null;
-test("leak check, part 5: a test queues a pin save for later and ends with its pane kept", async () => {
-  const { v } = await pinPane("--extra", "3");
-  queuedPane = v;
-  v.pinChangedLater(v.sessionKey(v.current()));
-  expect(v.pinDueAt).not.toBeNull();
-});
+// pane of the test that queued it. The pane is made and queued in a beforeAll, which runs
+// before the global hook that precedes each test, so the test below can run alone.
+describe("a save queued for later", () => {
+  let queuedPane;
+  beforeAll(async () => {
+    const { v } = await pinPane("--extra", "3");
+    queuedPane = v;
+    v.pinChangedLater(v.sessionKey(v.current()));
+    expect(v.pinDueAt).not.toBeNull();
+  });
 
-test("leak check, part 6: the pane of the test before has no save queued, and no pins record was written", () => {
-  expect(queuedPane.pinDueAt).toBeNull();
-  expect(H.recordFiles).toEqual({});
-  expect(H.pinWrites).toBe(0);
+  test("leak check, part 5: the pane made before the test has no save queued, and no pins record was written", () => {
+    expect(queuedPane.pinDueAt).toBeNull();
+    expect(H.recordFiles).toEqual({});
+    expect(H.pinWrites).toBe(0);
+  });
 });
 
 // Counts the timers a call makes through the global clock functions, then puts them back.
