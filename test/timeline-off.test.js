@@ -175,6 +175,65 @@ test("timeline working off, a width change while the build runs: the build start
   sameStrip(s.M, TL.timelineModel(null, off, 1143, "clock", now, null));
 });
 
+// The off draw and one step of the build after it: { prev, st } with the build running.
+function offBuilding(kind, c) {
+  const { on, off, now } = session(kind);
+  const prev = TL.timelineModel(null, on, CW, "clock", now, null);
+  let st = TL.tlDraw(prev, null, off, CW, now, c.until(), c.clock);
+  st = TL.tlDraw(st.M, st.J, off, CW, now, c.until(), c.clock);
+  expect(st.J.total).toBeGreaterThan(0);
+  return { on, off, now, prev, st };
+}
+
+test("timeline working off, the heads change while the build runs: an event in the last turn, a new turn, working on again; each draw shows its own heads, the draw that ends the build too, and the strip ends as a whole build of the last heads", () => {
+  // An event in the last turn that leaves its length as it was: a note 30 s in. The build runs
+  // on, for the heads it began with; the draw it ends in shows the new ones.
+  {
+    const c = slowClock();
+    const { off, now, st } = offBuilding("grown", c);
+    const J = st.J;
+    const last = off.at(-1);
+    const ev = [...off.slice(0, -1), { ...last, steps: [...last.steps, row(last.key, 3, "you", 30000, null)] }];
+    const { s, shown } = drawOut(st, ev, CW, now, c);
+    expect(shown.length).toBeGreaterThan(1);
+    expect(J.heads).toBe(off);
+    expect(J.model?.heads).toBe(off);
+    for (const x of shown) expect(x.M.heads).toBe(ev);
+    for (const x of shown) expect(x.M.L.turns).toBe(x.M.geo.turns);
+    expect(s.M.heads.at(-1).steps).toHaveLength(4);
+    // Field for field but the step count and the zoom limit from it (geo.steps, L.zmax): the
+    // path that lays out only the last turn keeps the placing's count, one step short here.
+    // That is older than this build.
+    const W = TL.timelineModel(null, ev, CW, "clock", now, null);
+    expect([s.M.geo.steps, s.M.L.zmax]).toEqual([W.geo.steps - 1, (W.geo.steps - 1) / 4]);
+    const geo = { ...s.M.geo, steps: W.geo.steps };
+    sameStrip({ ...s.M, geo, L: { ...s.M.L, geo, zmax: W.L.zmax } }, W);
+  }
+  // A new turn: the strip is placed again whole for it in that draw, so the build is dropped.
+  {
+    const c = slowClock();
+    const { off, now, st } = offBuilding("grown", c);
+    const nt = [...off, { ...doneTurn(off.length), t0: off.at(-1).t0 + 16 * 86400000 - 120000 }];
+    const m = made();
+    const d = TL.tlDraw(st.M, st.J, nt, CW, now, c.until(), c.clock);
+    expect(since(m).geo).toBe(1);
+    expect(d.J).toBe(null);
+    expect(d.M.heads).toBe(nt);
+    sameStrip(d.M, TL.timelineModel(null, nt, CW, "clock", now, null));
+  }
+  // Working on again before the build ends: each draw shows the running heads; the builds end.
+  for (const kind of ["grown", "open", "widest"]) {
+    const c = slowClock();
+    const { on, off, now, st } = offBuilding(kind, c);
+    const back = [...off.slice(0, -1), on.at(-1)];
+    const { s, shown } = drawOut(st, back, CW, now, c);
+    expect(s.J).toBe(null);
+    for (const x of shown) expect([kind, x.M.heads === back]).toEqual([kind, true]);
+    expect(s.M.geo.stale).toBeUndefined();
+    expect(s.M.heads.at(-1).going).toBe(true);
+  }
+});
+
 // ---- on the pane ----
 // A Trajectory pane docked along the bottom, w px wide, its rows built whole.
 async function dockPane(file, w) {
