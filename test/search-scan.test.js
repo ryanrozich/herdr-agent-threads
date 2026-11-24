@@ -46,7 +46,7 @@ const realMatches = T.threadMatches;
 function stopHere() {
   if (!stopV?.renderOpen) return false;
   if (plant?.scan ? stopV.scanning && --plant.scan === 0 : plant && checks() >= plant.at) { plant = null; landed = stopV.scanning ? "scan" : "other"; return true; }
-  return clock() - stopV.renderAt > LIMIT;
+  return base + clock() - stopV.renderAt > LIMIT;
 }
 // A seeded draw of numbers in [0, 1) (mulberry32), so a planted stop lands at the same check
 // in every run.
@@ -106,20 +106,32 @@ const counting = (v) => { const h = v.hitsNow(); return Boolean(h && !h.done); }
 const counted = (v) => !v.rowJob && !counting(v);
 const settled = (v) => counted(v) && !v.staleRows?.length && !(v.shapeLeft > 0);
 
-// Runs fn on the clock, with Herdr's stop armed for v's draws.
+// Runs fn on the clock, with Herdr's stop armed for v's draws. The clock goes on from the real
+// one's time (base), so a time the pane kept from before (a slice's end, a row's cut) is past,
+// as it would be: from 0, how far ahead it looked would depend on how long the run had gone.
+let base = 0;
 function priced(v, fn) {
   const real = performance.now;
+  base = real.call(performance);
   for (const k of Object.keys(paid)) paid[k] = 0;
   spy = spyOn(T, "threadMatches").mockImplementation((...a) => {
     if (stopHere()) throw new Error("interrupted");
     return realMatches(...a);
   });
   stopV = v;
-  performance.now = clock;
-  H.stopDraw = () => v.renderOpen && clock() - v.renderAt > LIMIT;
+  // Whether a check is the scan's (a planted stop's landing).
+  const own = Object.hasOwn(v, "scanHits") ? v.scanHits : null;
+  const scan = v.scanHits;
+  v.scanHits = function (...a) { this.scanning = true; try { return scan.apply(this, a); } finally { this.scanning = false; } };
+  performance.now = () => base + clock();
+  H.stopDraw = () => v.renderOpen && base + clock() - v.renderAt > LIMIT;
   v.frameBase = 0;
   v.cutUntil = 0;
-  try { return fn(); } finally { performance.now = real; H.stopDraw = null; stopV = null; plant = null; fold(); spy.mockRestore(); spy = null; }
+  try { return fn(); } finally {
+    performance.now = real; H.stopDraw = null; stopV = null; plant = null; fold(); spy.mockRestore(); spy = null;
+    if (own) v.scanHits = own;
+    else delete v.scanHits;
+  }
 }
 
 // One draw on the clock: its cost, its checks, and whether Herdr stopped it.
@@ -145,8 +157,11 @@ function drawOnce(v, cx) {
 // row is shaped, at most 1,000 (the rows a search shows are shaped again for its highlights,
 // at most SHAPE_MS a draw: "ar" at 5,600 turns is 1,680 reshapes, 0.4 s of them at the
 // harness's price, about 75 draws at 5 ms).
-async function searchRun(n, x) {
+// With seed, one stop is planted at a random check among the first 400 the scan makes in each
+// query's draws, and the run says whether each query's matches and places are right after it.
+async function searchRun(n, x, seed = 0) {
   const { v, cx, s } = await longPane(n);
+  const rnd = seed ? seeded(seed) : null;
   const turns = s.turns;
   const real = T.threadMatches;
   X = x;
@@ -172,6 +187,8 @@ async function searchRun(n, x) {
         v.input.text = q;
         v.input.handlers.change(null, cx);
         const typed = { ms: clock() - t0, checks: checks() - c0 };
+        landed = null;
+        if (rnd) plantStop(rnd, 400, true);
         const draws = [];
         let countedAt = null;
         for (let k = 0; k < 1000; k++) {
@@ -189,7 +206,8 @@ async function searchRun(n, x) {
           q, typed, counted: countedAt, frames: draws.length, stops: draws.filter((d) => d.stopped).length,
           firstReturn: firstReturn < 0 ? null : firstReturn + 1, settled: settled(v),
           maxMs: Math.max(...draws.map((d) => d.ms)), maxChecks: Math.max(...draws.map((d) => d.checks)),
-          still, count: v.filterCount(), want,
+          still, count: v.filterCount(), want, landed,
+          exact: rnd ? JSON.stringify(places(v)) === JSON.stringify(wantOf(v, q, real)) : null,
         });
       }
       return out;
@@ -199,7 +217,7 @@ async function searchRun(n, x) {
 
 // Each pane's figures once, for the tests that read them.
 const runs = new Map();
-const figures = (n, x) => { const k = `${n}x${x}`; if (!runs.has(k)) runs.set(k, searchRun(n, x)); return runs.get(k); };
+const figures = (n, x, seed = 0) => { const k = `${n}x${x}s${seed}`; if (!runs.has(k)) runs.set(k, searchRun(n, x, seed)); return runs.get(k); };
 // The search command and each letter typed run at most one slice of the matches (SCAN_MS,
 // 6 ms) and check the selected turn: 6.5 ms with the clock read every 32 checks.
 const HANDLER_MS = 6.5;
@@ -221,6 +239,15 @@ for (const x of [1, 2]) for (const n of [2000, 5600]) {
     // The rows are built and the matches counted within 40 draws.
     for (const st of r.steps) expect([st.q, st.counted != null && st.counted <= 40]).toEqual([st.q, true]);
     // The final count is every matching shown turn.
+    expect(r.steps.map((st) => [st.q, String(st.count).replace(/,/g, "").includes(st.want === 0 ? "No matches" : String(st.want))])).toEqual(QUERIES.map((q) => [q, true]));
+  }, 300000);
+  // After a stop the rows wait out the light draws (CUT_MS) to be reshaped, on a timer that
+  // flush(0) does not run: these runs are judged built and counted, not shaped.
+  test(`search ${at}, a stop planted at a random check of the scan in each query's draws: each counts right, every place too`, async () => {
+    const r = await figures(n, x, 20261124 + n + x);
+    if (process.env.THREADS_SEARCH_FIGURES) console.log(JSON.stringify(r));
+    expect(r.steps.map((st) => ({ q: st.q, stops: st.stops, landed: st.landed, exact: st.exact }))).toEqual(QUERIES.map((q) => ({ q, stops: 1, landed: "scan", exact: true })));
+    for (const st of r.steps) expect([st.q, st.counted != null && st.counted <= 40]).toEqual([st.q, true]);
     expect(r.steps.map((st) => [st.q, String(st.count).replace(/,/g, "").includes(st.want === 0 ? "No matches" : String(st.want))])).toEqual(QUERIES.map((q) => [q, true]));
   }, 300000);
   test(`search ${at}: a draw with nothing changed checks no turn, no draw runs past Herdr's time, and the command and each letter take one slice`, async () => {
@@ -296,7 +323,6 @@ test("a rows build stopped anywhere, building or sizing, first slice or later, e
   v.turnRows = function (...a) { stop(this, "building"); return turnRows.apply(this, a); };
   v.height = function (...a) { if (this.rowJob) { stop(this, "sizing"); sized++; } return height.apply(this, a); };
   v.buildRows = function (...a) { rowsFrame = this.renders; return buildRows.apply(this, a); };
-  const base = clock;
   const failed = [];
   try {
     // Cold, with no closed turn's rows kept from an earlier build: 1,203 units a build (600
@@ -308,7 +334,7 @@ test("a rows build stopped anywhere, building or sizing, first slice or later, e
         unit = 0;
         let stops = 0;
         priced(v, () => {
-          performance.now = () => base() + sized * 0.02;
+          performance.now = () => base + clock() + sized * 0.02;
           sized = 0;
           v.rowsKey = null;
           v.rowBuild = null;
@@ -403,21 +429,27 @@ test("a build stopped while sizing, with turns coming in before it resumes, ends
 // The search's matches are found once for each change and kept: the field's count, its place,
 // its two steps and n / Shift n read them, and a draw with nothing changed checks no turn.
 
-// The shown turns q matches, newest first, counted directly.
-const direct = (v, q, agentTurns = false) => {
+// The shown turns q matches, newest first, counted directly (with match, the matcher: the
+// real one inside priced, which counts T.threadMatches as checks).
+const direct = (v, q, agentTurns = false, match = T.threadMatches) => {
   const out = [];
   v.sessions.forEach((s, si) => s.turns.forEach((t, ti) => {
-    if (isShown(t, { agentTurns, live: v.isLive(s, si, ti), turns: s.turns }) && T.threadMatches(s.turns, t, q)) out.push(`${si}:${t.n}`);
+    if (isShown(t, { agentTurns, live: v.isLive(s, si, ti), turns: s.turns }) && match(s.turns, t, q)) out.push(`${si}:${t.n}`);
   }));
   return out.reverse();
 };
-const hiddenDirect = (v, q, agentTurns = false) => {
+const hiddenDirect = (v, q, agentTurns = false, match = T.threadMatches) => {
   let n = 0;
   v.sessions.forEach((s, si) => s.turns.forEach((t, ti) => {
-    if (!isShown(t, { agentTurns, live: v.isLive(s, si, ti), turns: s.turns }) && T.threadMatches(s.turns, t, q)) n++;
+    if (!isShown(t, { agentTurns, live: v.isLive(s, si, ti), turns: s.turns }) && match(s.turns, t, q)) n++;
   }));
   return n;
 };
+// The set the search should hold, in the form places() gives.
+function wantOf(v, q, match = T.threadMatches) {
+  const keys = direct(v, q, false, match);
+  return { keys, at: keys.map((_, i) => i + 1), hidden: hiddenDirect(v, q, false, match), done: true };
+}
 // Draws on the clock until the rows and matches settle: the draws, the stops and the checks.
 // With until counted, until the rows are built and the matches counted: after a stop the
 // rows are reshaped only once the light draws end (CUT_MS on the clock).
@@ -679,10 +711,14 @@ function places(v) {
   v.sel = was;
   return { keys, at, hidden: h.hidden, done: h.done };
 }
-const want = (v, q) => { const keys = direct(v, q); return { keys, at: keys.map((_, i) => i + 1), hidden: hiddenDirect(v, q), done: true }; };
+const want = (v, q) => wantOf(v, q);
 
-for (const q of QUERIES) {
-  test(`"${q}" at 5,600 turns: a turn coming in while the matches are counted leaves the count and every place right`, async () => {
+// Each of these runs again with one stop planted at a random check (seeded), at the change.
+const PLANTED = [0, 99];
+const plantName = (seed) => (seed ? ", with a stop planted at a random check" : "");
+
+for (const q of QUERIES) for (const seed of PLANTED) {
+  test(`"${q}" at 5,600 turns: a turn coming in while the matches are counted leaves the count and every place right${plantName(seed)}`, async () => {
     const { v, cx, s } = await longPane(5600);
     v.sel = `0:${s.turns.length}`;
     const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
@@ -693,6 +729,7 @@ for (const q of QUERIES) {
       expect(counting(v)).toBe(true);
       // A turn comes in and runs (the newest turn, live), then ends, the scan going on.
       T.apply(s, { k: "p", o: "human", t: `Turn ${s.turns.length}: please rename the cart for order 1.`, ts });
+      if (seed) plantStop(seeded(seed), 1000, true);
       seen.push(fieldText(v));
       drawOnce(v, cx);
       seen.push(fieldText(v));
@@ -702,6 +739,7 @@ for (const q of QUERIES) {
       for (let k = 0; k < 60 && counting(v); k++) { drawOnce(v, cx); seen.push(fieldText(v)); }
     });
     expect(counting(v)).toBe(false);
+    if (seed) expect(landed).toBe("scan");
     expect(places(v)).toEqual(want(v, q));
     // "No matches" only once every turn was checked.
     expect(seen.slice(0, -1).some((t) => t.startsWith("No matches"))).toBe(false);
@@ -709,7 +747,7 @@ for (const q of QUERIES) {
     expect(fieldText(v).replace(/,/g, "")).toContain(n ? String(n) : "No matches");
   }, 120000);
 
-  test(`"${q}" at 5,600 turns: sender rules changed while the matches are counted leave the count and every place right`, async () => {
+  test(`"${q}" at 5,600 turns: sender rules changed while the matches are counted leave the count and every place right${plantName(seed)}`, async () => {
     const { v, cx, s } = await longPane(5600, { bare: true });
     v.sel = `0:${s.turns.length}`;
     // The new rules' marking in slices of 1,000 turns, a slice each time the test lets it go on
@@ -731,8 +769,13 @@ for (const q of QUERIES) {
         const run = priced(v, () => { v.action(`search:${q}`, cx); drawOnce(v, cx); return counting(v); });
         expect(run).toBe(true);
         v.setSenders([{ n: 1, re: /^Turn \d+: please check/, label: "Checker" }], [], 1, cx);
+        const rnd = seeded(seed);
         for (let k = 0; k < 80; k++) {
-          priced(v, () => { drawOnce(v, cx); seen.push({ text: fieldText(v), counting: counting(v) }); });
+          priced(v, () => {
+            if (seed && k === 2) { landed = null; plantStop(rnd, 1000, true); }
+            drawOnce(v, cx);
+            seen.push({ text: fieldText(v), counting: counting(v) });
+          });
           const g = gates.shift();
           if (g) { g(); for (let i = 0; i < 5; i++) await Promise.resolve(); }
           else if (!counting(v)) break;
@@ -742,6 +785,7 @@ for (const q of QUERIES) {
     } finally { remark.mockRestore(); cx.sleepHook = null; }
     // 5,600 turns in slices of 1,000.
     expect(slices).toBe(6);
+    if (seed) expect(landed).toBe("scan");
     expect(gates.length).toBe(0);
     expect(counting(v)).toBe(false);
     expect(s.turns.filter((t) => t.agent).length).toBe(1680);
@@ -765,8 +809,6 @@ const tally = (v) => {
 
 test("a draw stopped inside the matches' scan counts each match once", async () => {
   const { v, cx, s } = await longPane(2000);
-  const scan = v.scanHits;
-  v.scanHits = function (...a) { this.scanning = true; try { return scan.apply(this, a); } finally { this.scanning = false; } };
   const rnd = seeded(123);
   const runs = [];
   for (const q of ["rename", "ar"]) {
@@ -832,7 +874,8 @@ test("the Pinned view with every pin it holds in a 5,600-turn session checks onl
 
 // The newest session's turns checked again (hitsTail): more than HITS_TAIL come in at once, and
 // a turn comes in before the scan has got past the turns it checks again. Each ends right.
-test("many turns coming in at once, or one before the scan is past the newest turns, leave the count and every place right", async () => {
+for (const seed of PLANTED) test(`many turns coming in at once, or one before the scan is past the newest turns, leave the count and every place right${plantName(seed)}`, async () => {
+  const rnd = seeded(seed);
   const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
   const more = (s, n, what) => { for (let i = 0; i < n; i++) { T.apply(s, { k: "p", o: "human", t: `Turn ${s.turns.length}: please ${what}.`, ts }); T.apply(s, { k: "d", ms: 1000, ts }); } };
   // 100 at once, while counting.
@@ -844,8 +887,11 @@ test("many turns coming in at once, or one before the scan is past the newest tu
       drawOnce(v, cx);
       expect(counting(v)).toBe(true);
       more(s, 100, "rename the cart");
+      landed = null;
+      if (seed) plantStop(rnd, 1000, true);
       for (let k = 0; k < 60 && counting(v); k++) drawOnce(v, cx);
     });
+    if (seed) expect(landed).toBe("scan");
     expect(places(v)).toEqual(want(v, "rename"));
     expect(want(v, "rename").keys.length).toBe(660);
   }
@@ -866,9 +912,12 @@ test("many turns coming in at once, or one before the scan is past the newest tu
         expect(h.cur.si).toBe(0);
         expect(h.cur.ti).toBeGreaterThan(600);
         more(s, 1, "rename it once more");
+        landed = null;
+        if (seed) plantStop(rnd, 60, true);
         for (let k = 0; k < 200 && counting(v); k++) drawOnce(v, cx);
       });
     } finally { X = 1; }
+    if (seed) expect(landed).toBe("scan");
     expect(counting(v)).toBe(false);
     expect(places(v)).toEqual(want(v, "rename"));
     expect(want(v, "rename").keys.length).toBe(101);
@@ -879,7 +928,8 @@ test("many turns coming in at once, or one before the scan is past the newest tu
 // so the set is found again, in slices, not checked again in one go), a hidden match among the
 // turns checked again, and the session finishing its read (its newest turn turns live, which
 // shows an agent message).
-test("a long piece read at once, a hidden match checked again, and a read finishing keep the count right and the draws in time", async () => {
+for (const seed of PLANTED) test(`a long piece read at once, a hidden match checked again, and a read finishing keep the count right and the draws in time${plantName(seed)}`, async () => {
+  const rnd = seeded(seed);
   const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
   // 4,000 turns read at once into a 600-turn session with "rename" searched, at twice the price.
   {
@@ -892,11 +942,14 @@ test("a long piece read at once, a hidden match checked again, and a read finish
     try {
       priced(v, () => {
         for (let i = 0; i < 4000; i++) { T.apply(s, { k: "p", o: "human", t: `Turn ${s.turns.length}: please rename part ${i}.`, ts }); T.apply(s, { k: "t", t: "Done." }); T.apply(s, { k: "d", ms: 1000, ts }); }
+        landed = null;
+        if (seed) plantStop(rnd, 1000, true);
         for (let k = 0; k < 400; k++) { const d = drawOnce(v, cx); draws.push(d); if (!d.stopped && counted(v)) break; }
       });
     } finally { X = 1; }
-    expect(draws.filter((d) => d.stopped).length).toBe(0);
-    expect(Math.max(...draws.map((d) => d.ms))).toBeLessThanOrEqual(LIMIT);
+    expect(draws.filter((d) => d.stopped).length).toBe(seed ? 1 : 0);
+    if (seed) expect(landed).toBe("scan");
+    expect(Math.max(...draws.filter((d) => !d.stopped).map((d) => d.ms))).toBeLessThanOrEqual(LIMIT);
     expect(places(v)).toEqual(want(v, "rename"));
   }
   // The newest turns hidden matches (agent messages with no reply): a turn comes in, and the
