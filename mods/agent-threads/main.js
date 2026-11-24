@@ -2766,7 +2766,9 @@ export default class Threads extends View {
     const lr = this.baseRows[li];
     if (lr?.live && lr.kind !== "line") {
       const kind = this.sel === lr.key ? "working" : "wrow";
-      if (lr.kind !== kind) { lr.kind = kind; this.baseSizes[li] = this.height(lr); this.fitKey = null; }
+      // Its height is worked out on a copy with the new kind, then the kind and the size are
+      // stored together: a stop in the height leaves the old kind, to change again next draw.
+      if (lr.kind !== kind) { const h = this.height({ ...lr, kind }); lr.kind = kind; this.baseSizes[li] = h; this.fitKey = null; }
     }
     const z = this.zoom();
     const gap = this.floating() ? TOP_BAND : 0;
