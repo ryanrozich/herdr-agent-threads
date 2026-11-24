@@ -435,7 +435,7 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
       track = a < end0 ? 1 : 0;
       if (track === 0) end0 = openBar ? Infinity : b ?? a;
     }
-    tl.push(a ?? Number.NaN, b ?? Number.NaN, (track ? TL_TRACK : 0) | (openBar && a != null ? TL_OPEN : 0) | (r.failed ? TL_FAILED : 0));
+    tl.push(a ?? Number.NaN, b ?? Number.NaN, (track ? TL_TRACK : 0) | (openBar ? TL_OPEN : 0) | (r.failed ? TL_FAILED : 0));
   }
   const head = {
     // going, not live or running: those mark the chat's live rows, which tick a clock (main.js).
