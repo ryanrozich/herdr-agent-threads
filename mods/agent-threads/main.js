@@ -210,6 +210,13 @@ const SIZE_REST = 64;
 // (hitsTail), are checked again for the matches at once when they are this many or fewer;
 // more, and they are checked again in slices, as the scan's next slice.
 const HITS_TAIL = 64;
+// A tail of more turns than this is not checked again: the set is found again from the start,
+// in slices. hitsTail's walk back to the tail's start and its drop of the tail's places run in
+// one call, not cut by the clock: about 0.5 µs a place in bun with the JIT off (5,960 places
+// in 2.9 ms), a few ms at this many on Herdr's interpreter (the rig's figure on Herdr 0.1.18
+// is to come; the cap moves if it says so). It is above the 2,000-turn tails the tests check
+// again as tails.
+const HITS_TAIL_MAX = 2500;
 // The hold (REWRAP_PAUSE_MS) is for a conversation whose last full re-wrap, at a column width
 // not kept, took more than this much of the pane's own draw time; before one has finished,
 // for one of more than HOLD_TURNS turns. A short one re-wraps at every step of a drag.
@@ -9296,7 +9303,8 @@ export default class Threads extends View {
   // at once when they are HITS_TAIL or fewer, else as the scan's next slice (scanHits), first
   // in hitsNow and then first in each draw's slice. The count is final for every turn before
   // the tail all the while. A tail longer than a slice that changes before every draw is not
-  // done while it changes. False when the session got shorter: the set is found again.
+  // done while it changes. False when the session got shorter, or the tail is longer than
+  // HITS_TAIL_MAX: the set is found again.
   hitsTail(h) {
     const S = this.sessions;
     const L = S.length - 1;
@@ -9304,13 +9312,16 @@ export default class Threads extends View {
     const was = h.lens[L];
     if (turns.length < was || was < 2) return false;
     let safe = was - 1;
-    while (safe > 0 && !(turns[safe - 1].done && turns[safe - 1].after?.length)) safe--;
+    // A tail longer than HITS_TAIL_MAX: the set is found again, so neither this walk nor the
+    // drop below goes past it.
+    while (safe > 0 && !(turns[safe - 1].done && turns[safe - 1].after?.length)) if (was - --safe > HITS_TAIL_MAX) return false;
     // A slice stopped earlier is cut back first. A tail still being checked again: from its
     // next turn on, the turns are not checked yet.
     this.hitsCut(h);
     if (h.cur.tail) safe = Math.min(safe, h.cur.tail.next);
     // A turn that was open at the last check can be answered by a newer one now.
     if (h.open < safe) safe = h.open;
+    if (was - safe > HITS_TAIL_MAX) return false;
     // The matches from safe on: the newest places, and the hidden ones in the newest session.
     while (h.top > h.bot) {
       const p = h.top - 1;
