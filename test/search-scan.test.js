@@ -717,15 +717,15 @@ for (const q of QUERIES) {
 }
 
 // ---- the Pinned view ----
-// The Pinned view's matches are among its pins, five at most (pins.js PIN_LIMIT): its count,
-// place and steps check those, never the session's turns.
-test("the Pinned view with all five pins in a 5,600-turn session checks only its pins for a search", async () => {
+// The Pinned view's matches are among its pins, PIN_LIMIT at most (pins.js): its count, place
+// and steps check those, never the session's turns.
+test("the Pinned view with every pin it holds in a 5,600-turn session checks only its pins for a search", async () => {
   const { PIN_LIMIT } = await import("../mods/agent-threads/pins.js");
-  expect(PIN_LIMIT).toBe(5);
   const { v, cx, s } = await longPane(5600);
   await new Promise((r) => setTimeout(r, 20));
-  // Pins on five turns, two of which have "rename".
-  const keys = [5581, 5585, 5591, 5595, 5600].map((n) => `0:${n}`);
+  // As many pins as it holds, two of them on turns with "rename" (5,581 and 5,591), the rest
+  // on the turns after them, which have none.
+  const keys = [5581, 5591, ...Array.from({ length: PIN_LIMIT - 2 }, (_, i) => 5592 + i)].map((n) => `0:${n}`);
   for (const k of keys) { v.sel = k; v.action("pin", cx); }
   expect(v.pinnedList().length).toBe(PIN_LIMIT);
   v.setView("pinned");
