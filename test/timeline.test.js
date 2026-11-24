@@ -496,3 +496,34 @@ test("timeline press: of two bars on top at a point, on the same track and ink, 
   // Inside the long one, clear of the short one: the long one.
   expect(timelineHit(L, heads, box(3).x0 + 5, "tools", T0, 11).key).toBe("tr:0:0:3");
 });
+
+test("timeline press: a turn under 2 px at Fit is drawn as one span per lane; a press gets the turn under the pointer, and a step of it, the one drawn on top, only where its span is within 4 px; the span is the step's bar for the press and the outline", () => {
+  for (const cw of [1143, 1370]) {
+    const heads = strip(2000);
+    // One turn with no tools call: in the Tools lane it has no span, so a press there gets
+    // its heading.
+    const q = heads[1000];
+    heads[1000] = { ...q, cnt: { ...q.cnt, tools: 0, failed: 0 }, stepRows: [q.stepRows[0], q.stepRows[3]], tl: [0, Number.NaN, 0, 10000, 60000, 0] };
+    const L = timelineLayout(heads, cw, "clock", T0, null);
+    for (const ti of [0, 1, 999, 1233, 1980, 1998, 1999]) {
+      const T = tlBox(L, ti);
+      expect(T.w).toBeLessThan(2);
+      const span = { x0: T.x, x1: T.x + Math.max(T.w, 1), track: 0 };
+      // The bar a press and the outline use is the span the layers draw, at the turn's own x.
+      for (const si of [0, 1, 2, 3]) expect(TL.tlBar(L, heads, ti, si, T0)).toEqual(span);
+      const x = T.x + T.w / 2;
+      // The tools span is red where the turn has a failed call: the failed call is on top.
+      expect(timelineHit(L, heads, x, "tools", T0, 4)).toEqual({ turn: `0:${ti}`, key: `tr:0:${ti}:2` });
+      expect(timelineHit(L, heads, x, "input", T0, 4)).toEqual({ turn: `0:${ti}`, key: `tr:0:${ti}:0` });
+      expect(timelineHit(L, heads, x, "model", T0, 4)).toEqual({ turn: `0:${ti}`, key: `tr:0:${ti}:3` });
+    }
+    const T = tlBox(L, 1000);
+    expect(timelineHit(L, heads, T.x + T.w / 2, "tools", T0, 4)).toEqual({ turn: "0:1000", key: "0:1000" });
+    expect(timelineHit(L, heads, T.x + T.w / 2, "model", T0, 4)).toEqual({ turn: "0:1000", key: "tr:0:1000:1" });
+  }
+  // A wide turn's bar is its own (itemBox), as before.
+  const few = strip(3);
+  const L = timelineLayout(few, 1370, "clock", T0, null);
+  const T = tlBox(L, 1);
+  expect(TL.tlBar(L, few, 1, 2, T0)).toEqual(itemBox(few[1].tl, 2, T.x, T.w, L.geo.walls[1], "clock", 4));
+});

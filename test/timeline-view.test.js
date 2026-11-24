@@ -426,3 +426,39 @@ test("timeline view: a press on a failed call drawn over other calls selects it 
   expect(own(c, "th-tl-sel")).toContainEqual(["left", box.x0 - 2]);
   expect(own(c, "th-tl-sel")).toContainEqual(["w", box.x1 - box.x0 + 4]);
 });
+
+test("timeline view: at 2,000 turns the selected step's outline is around its turn's drawn span, not left of it, and a press at its middle gets that step", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "3"), "bottom", 1440);
+  shownFrame(b, cb);
+  const heads = Array.from({ length: 2000 }, (_, i) => {
+    const key = `0:${i}`;
+    return {
+      kind: "trh", key, n: i + 1, t0: 1e12 + i * 100000, total: 60000, span: 60000, going: false,
+      cnt: { steps: 2, input: 0, model: 0, tools: 2, failed: 1, user: 0, agent: 0 },
+      stepRows: [{ kind: "tr", key: `tr:${key}:0`, lk: "tool" }, { kind: "tr", key: `tr:${key}:1`, lk: "failed", failed: true }],
+      tl: [1000, 5000, 0, 6000, 9000, 4],
+    };
+  });
+  for (const ti of [0, 1233, 1999]) {
+    const key = `tr:0:${ti}:1`;
+    H.rec = [];
+    b.timelineView(theme, { totals: { heads }, partial: false }, [{ key }], 0, trajInks(theme, true));
+    const c = H.rec;
+    H.rec = null;
+    const L = b.tlModel.L;
+    const T = TL.tlBox(L, ti);
+    expect(T.w).toBeLessThan(1);
+    const s0 = T.x;
+    const s1 = T.x + Math.max(T.w, 1);
+    const sel = own(c, "th-tl-sel");
+    expect(sel).not.toBe(null);
+    const left = sel.find((e) => e[0] === "left")[1];
+    const w = sel.find((e) => e[0] === "w")[1];
+    // It holds the span, centred on it: widened around the span's own x, never moved off it.
+    expect(left).toBeLessThanOrEqual(s0);
+    expect(left + w).toBeGreaterThanOrEqual(s1);
+    expect(Math.abs(left + w / 2 - (s0 + s1) / 2)).toBeLessThan(0.01);
+    // A press at the outline's middle gets the step outlined.
+    expect(TL.timelineHit(L, heads, left + w / 2, "tools", Date.now(), 4).key).toBe(key);
+  }
+});
