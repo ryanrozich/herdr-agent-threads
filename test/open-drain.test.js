@@ -972,3 +972,175 @@ test("the opening: a row the line refused is reshaped first next frame only whil
   }
   expect(got).toEqual([["still", 1, true, null], ["wheel", 0, false, null], ["jump", 0, false, null], ["top row", 0, false, null]]);
 }, 30000);
+
+// A plain chat drained, then on a priced clock: a reshape costs its characters (prompt and
+// reply) at rate ms each, as the rate shape() learned says (shapeRate, set to it), a draw has
+// after ms of work after its rows, and frames are 16 ms apart. Herdr's stop is modelled as
+// Herdr does it, on the draw's total: a reshape that runs past 50 ms from the render's start
+// is interrupted (nothing of it kept), a draw whose work ends past it is stopped once that
+// work is done (what it set is kept), and the render is left open. restale(turn, chars) makes
+// a turn chars longer and leaves its row to reshape; step() gives the frame's reshapes, in
+// order ({ turn, at, cost }), and whether it was stopped.
+async function pricedDrain({ n = 120, rate = 0.001, after: afterMs = 10 } = {}) {
+  let after = afterMs;
+  const realPerf = performance.now.bind(performance);
+  let clock = 0;
+  performance.now = () => (clock += 0.001);
+  const { v, cx, go } = await openingPane(plainChat(n));
+  v.debug = false;
+  v.opening.at -= 1000;
+  v.shapeBudget = 12;
+  v.listH = 600;
+  let on = false;
+  let log = [];
+  const reshape = v.reshape;
+  v.reshape = function (...a) {
+    const cost = on ? (a[0].prompt.length + (a[5] ?? "").length) * rate : 0;
+    if (this.renderOpen) log.push({ turn: a[0], at: clock - this.renderAt, cost });
+    clock += cost;
+    if (on && this.renderOpen && clock - this.renderAt > 50) throw STOP;
+    return reshape.apply(this, a);
+  };
+  const draw = v.frame;
+  v.frame = function (...a) {
+    const o = draw.apply(this, a);
+    if (on && this.renderOpen) { clock += after; if (clock - this.renderAt > 50) throw STOP; }
+    return o;
+  };
+  go(() => false);
+  await settle(v);
+  v.scroll = { scroll_to_bottom() {}, scroll_to_item() {} };
+  const step = () => {
+    clock += 16;
+    for (const x of cx.timers) x.ms -= 16;
+    cx.flush(16);
+    log = [];
+    let stopped = false;
+    try { frame(v, cx); } catch (e) { if (e !== STOP) throw e; stopped = true; v.renderOpen = true; H.rec = null; }
+    return { log, stopped };
+  };
+  for (let k = 0; (v.openActive() || v.staleRows?.length) && k < 800; k++) step();
+  expect([v.openActive(), v.staleRows.length]).toEqual([false, 0]);
+  step();
+  const restale = (turn, chars = 0) => {
+    if (chars) turn.prompt = `${turn.prompt} ${"kaz vel orin tam ".repeat(Math.ceil(chars / 17))}`;
+    Object.assign(turn, { shapeKey: null, shapeFast: null, shapesKept: null });
+    const i = v.baseRows.findIndex((r) => r.turn === turn);
+    if (!v.staleRows.includes(i)) { v.staleRows.push(i); v.staleRows.sort((x, y) => x - y); }
+    // As a rebuild that leaves rows to reshape asks for the walk.
+    v.reshapeDue = true;
+  };
+  const begin = () => { on = true; v.shapeRate = rate; };
+  const end = () => { performance.now = realPerf; };
+  // A new chunk of the session read (its version), as an agent writing its reply makes.
+  const grow = () => { v.sessions[0].version++; };
+  return { v, cx, step, turns: v.sessions[0].turns, restale, begin, end, grow, setAfter: (x) => { after = x; } };
+}
+// Frames until nothing is left to reshape and the light frames after a stop are over.
+function untilDone(v, step, max = 900) {
+  const frames = [];
+  for (let k = 0; k < max && (v.staleRows.length || v.cutUntil > performance.now() || frames.length < 3); k++) frames.push(step());
+  return frames;
+}
+
+// A turn expected to cost 44 ms, with 10 ms of the draw after it: with the margin it fits no
+// draw (44 + 10 + 3 > 50), so it can never fit. It runs only as its draw's first shaping unit,
+// alone (unitAlone, counted in aloneRun): nothing else is shaped in that draw. It passes
+// Herdr's limit once, in that draw, as one turn that size does on main. It ends before the
+// stop (44 ms), so what it shaped is kept: no later draw shapes it again.
+test("shaping: a turn that can never fit runs alone as its draw's first unit, passes Herdr's limit once, and keeps its shape", async () => {
+  const p = await pricedDrain();
+  try {
+    const big = p.turns.at(-3);
+    const near = [p.turns.at(-1), p.turns.at(-2), p.turns.at(-4)];
+    p.begin();
+    p.restale(big, 44000);
+    for (const t of near) p.restale(t);
+    const alone0 = p.v.aloneRun ?? 0;
+    const frames = untilDone(p.v, p.step);
+    const withBig = frames.filter((f) => f.log.some((x) => x.turn === big));
+    expect(withBig.length).toBe(1);
+    expect(withBig[0].log.map((x) => x.turn === big)).toEqual([true]);
+    expect(frames.filter((f) => f.stopped).length).toBe(1);
+    expect(withBig[0].stopped).toBe(true);
+    expect([p.v.staleRows.length, big.shapeKey != null, (p.v.aloneRun ?? 0) - alone0]).toEqual([0, true, 1]);
+    for (const t of near) expect(frames.some((f) => f.log.some((x) => x.turn === t))).toBe(true);
+  } finally { p.end(); }
+}, 120000);
+
+// A turn of 30 ms fits an empty draw (30 + 10 + 3 within 50) but not the draw it met, one whose
+// work after its rows was 25 ms the time before (frameBase): it is refused, owed, and reshaped
+// first in the next draw, ahead of a turn made stale in between, with no stop.
+test("shaping: a turn that fits an empty draw but not the one it met is reshaped first in the next, with no stop", async () => {
+  const p = await pricedDrain();
+  try {
+    const t30 = p.turns.at(-3);
+    const newer = p.turns.at(-1);
+    const later = p.turns.at(-2);
+    const at = (f) => f.log.map((x) => p.turns.indexOf(x.turn));
+    p.begin();
+    p.setAfter(25);
+    p.step();
+    p.setAfter(10);
+    p.restale(t30, 30000);
+    p.restale(newer);
+    const f1 = p.step();
+    expect(at(f1)).toEqual([p.turns.indexOf(newer)]);
+    p.restale(later);
+    const f2 = p.step();
+    expect(at(f2)[0]).toBe(p.turns.indexOf(t30));
+    const frames = [f1, f2, ...untilDone(p.v, p.step)];
+    expect(frames.filter((f) => f.stopped).length).toBe(0);
+    expect(frames.flatMap((f) => f.log).filter((x) => x.turn === t30).length).toBe(1);
+    expect(p.v.staleRows.length).toBe(0);
+  } finally { p.end(); }
+}, 120000);
+
+// Two turns that can never fit: one a draw, each alone, in the order the draw meets them (the
+// turns in view from the top, shapeInView), each passing Herdr's limit once.
+test("shaping: two turns that can never fit run one a draw, alone, in order", async () => {
+  const p = await pricedDrain();
+  try {
+    const a = p.turns.at(-2);
+    const b = p.turns.at(-4);
+    p.begin();
+    p.restale(a, 44000);
+    p.restale(b, 44000);
+    const frames = untilDone(p.v, p.step, 1400);
+    const shaped = frames.filter((f) => f.log.length);
+    expect(shaped.map((f) => f.log.map((x) => p.turns.indexOf(x.turn)))).toEqual([[p.turns.indexOf(b)], [p.turns.indexOf(a)]]);
+    expect(frames.filter((f) => f.stopped).length).toBe(2);
+    expect(p.v.staleRows.length).toBe(0);
+  } finally { p.end(); }
+}, 120000);
+
+// The running turn keeps its own allowance: reshaped first in every draw while it fits. A long
+// live reply that can never fit is not reshaped at each update (each would pass Herdr's limit,
+// and after each stop the next came 5 s later): while it runs it keeps the shape it had, and
+// once it ends it is shaped once, alone.
+test("shaping: a running turn whose reply can never fit is not reshaped at each update, and is shaped once, alone, when it ends", async () => {
+  const p = await pricedDrain();
+  try {
+    const live = p.turns.at(-1);
+    live.done = false;
+    p.grow();
+    p.step();
+    p.begin();
+    // Fits: reshaped in every draw it grows in.
+    let frames = [];
+    for (let k = 0; k < 10; k++) { live.after.push(`More of the reply, line ${k}.`); p.grow(); frames.push(p.step()); }
+    expect(frames.filter((f) => f.log.some((x) => x.turn === live)).length).toBe(10);
+    // Grown past what can ever fit: 60 updates, no reshape of it and no stop.
+    live.after.push("agrees with quil ".repeat(2600));
+    frames = [];
+    for (let k = 0; k < 60; k++) { live.after.push(`More of the reply, line ${k}.`); p.grow(); frames.push(p.step()); }
+    expect([frames.filter((f) => f.log.some((x) => x.turn === live)).length, frames.filter((f) => f.stopped).length]).toEqual([0, 0]);
+    // It ends: shaped once, alone.
+    live.done = true;
+    p.grow();
+    frames = untilDone(p.v, p.step);
+    const withLive = frames.filter((f) => f.log.some((x) => x.turn === live));
+    expect(withLive.map((f) => f.log.length)).toEqual([1]);
+    expect(frames.filter((f) => f.stopped).length).toBeLessThanOrEqual(1);
+  } finally { p.end(); }
+}, 120000);
