@@ -365,3 +365,37 @@ test("timeline view: every turn number and tick the model gives is drawn, not th
   expect(Math.max(...lefts.slice(1).map((x, k) => x + ws[k + 1]))).toBeGreaterThanOrEqual(T.fails.at(-1) + 3 - 0.5);
   expect(fails).toContainEqual(["bg", theme.blocked]);
 });
+
+test("timeline view: at 2,000 turns the strip has numbers, thinned to every k-th turn, and the selected turn's number is drawn wherever it is", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "3"), "bottom", 1440);
+  shownFrame(b, cb);
+  const heads = Array.from({ length: 2000 }, (_, i) => {
+    const key = `0:${i}`;
+    return {
+      kind: "trh", key, n: i + 1, t0: 1e12 + i * 100000, total: 60000, span: 60000, going: false,
+      cnt: { steps: 1, input: 0, model: 0, tools: 1, failed: 0, user: 0, agent: 0 },
+      stepRows: [{ kind: "tr", key: `tr:${key}:0`, lk: "tool" }],
+      tl: [1000, 5000, 0],
+    };
+  });
+  const view = (shown) => {
+    H.rec = [];
+    b.timelineView(theme, { totals: { heads }, partial: false }, shown, 0, trajInks(theme, true));
+    const c = H.rec;
+    H.rec = null;
+    return words(own(c, "th-tl-labels"));
+  };
+  const none = view([]);
+  const T = b.tlModel.L;
+  expect(none.length).toBeGreaterThanOrEqual(10);
+  expect(none).toEqual(T.labels.map((l) => l.text));
+  expect(none[0]).toBe("1");
+  for (const w of none.slice(1)) expect(Number(w) % T.every).toBe(0);
+  // A turn selected, by its heading or one of its steps: its number is drawn too.
+  for (const key of ["0:1233", "tr:0:1233:0", "0:1", "0:1999", "0:0"]) {
+    const ti = Number(b.turnOfRow(key).split(":")[1]);
+    const drawn = view([{ key }]);
+    expect(drawn).toContain(`${ti + 1}`);
+    expect(drawn).toEqual(TL.tlNumbers(T, heads, ti).map((l) => l.text));
+  }
+});

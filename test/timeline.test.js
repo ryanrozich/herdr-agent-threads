@@ -328,17 +328,17 @@ test("timeline hatch: at Fit the breaks 4 px or wider make at most TL_HATCH_MAX 
   expect(TL.hatchLines([[10, 13, null], [-40, -1, null], [1400, 1430, null]], 1370, LANES_H).lines).toEqual([]);
 });
 
-test("timeline labels, ticks and fail marks: never more than fit, at any session length: numbers 24 px apart, ticks 62 px apart, fail marks 6 px apart, the last turn's kept", () => {
+test("timeline labels, ticks and fail marks: never more than fit, at any session length: numbers apart by their own width and a gap, ticks 62 px apart, fail marks 6 px apart, the last turn's kept", () => {
   for (const cw of [1370, 2500]) {
     for (const n of [1, 3, 10, 40, 100, 400, 2000, 6000]) {
       const L = timelineLayout(strip(n), cw, "clock", T0, null);
       const gapsOf = (xs) => xs.slice(1).map((x, i) => x - xs[i]);
       const lx = L.labels.map((l) => l.x);
       const tx = L.ticks.map((k) => k.x);
-      for (const d of gapsOf(lx)) expect(d).toBeGreaterThanOrEqual(24);
+      L.labels.slice(1).forEach((l, i) => expect(l.x - lx[i]).toBeGreaterThanOrEqual(TL.tlNumW(L.labels[i].text) + TL.TL_NUM_GAP));
       for (const d of gapsOf(tx)) expect(d).toBeGreaterThanOrEqual(62);
       for (const d of gapsOf(L.fails)) expect(d).toBeGreaterThanOrEqual(6);
-      expect(L.labels.length).toBeLessThanOrEqual(Math.floor(cw / 24) + 1);
+      expect(L.labels.length).toBeLessThanOrEqual(Math.floor(cw / (TL.tlNumW("1") + TL.TL_NUM_GAP)) + 1);
       expect(L.ticks.length).toBeLessThanOrEqual(Math.floor(cw / 62) + 1);
       expect(L.fails.length).toBeLessThanOrEqual(Math.floor(cw / 6) + 1);
       // The marks run to the strip's right end: the last turn's failure is among them.
@@ -362,4 +362,79 @@ test("timeline model: a selection change or a press places nothing again; the pl
   // A new width: placed again.
   timelineModel(next, heads, 1330, "clock", T0, null);
   expect([TL.TL_MADE.geo - before.geo, TL.TL_MADE.layout - before.layout]).toEqual([2, 2]);
+});
+
+// The numbers' steps, 1, 2, 5, 10, 20, 50 and on, and where a turn's number sits at Fit: at its
+// start. A multiple of k whose number would run past the strip's end has none; the selected
+// turn's is moved inside it.
+const STEPS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
+const numAt = (L, ti) => Math.min(Math.max(0, L.turns[ti].x), L.cw - TL.tlNumW(`${ti + 1}`));
+const fits = (L, ti) => Math.max(0, L.turns[ti].x) + TL.tlNumW(`${ti + 1}`) <= L.cw;
+const clash = (a, b) => a.x + TL.tlNumW(a.text) + TL.TL_NUM_GAP > b.x;
+
+test("timeline numbers: every k-th turn has its number, k the smallest of 1, 2, 5, 10, 20, 50 and on that keeps them apart, and the first turn always; at 2,000 turns on 1,370 and 2,500 px there are numbers", () => {
+  const got = {};
+  for (const cw of [1370, 2500]) {
+    for (const n of [3, 20, 85, 400, 2000, 5600]) {
+      const L = timelineLayout(strip(n), cw, "clock", T0, null);
+      const k = L.every;
+      got[`${cw}/${n}`] = [k, L.labels.length];
+      expect(STEPS).toContain(k);
+      // The first turn's number, then only multiples of k, in order and apart.
+      expect(L.labels[0].text).toBe("1");
+      expect(L.labels[0].x).toBe(0);
+      for (const l of L.labels.slice(1)) expect(Number(l.text) % k).toBe(0);
+      L.labels.slice(1).forEach((l, i) => expect(clash(L.labels[i], l)).toBe(false));
+      // Every multiple of k is there, but one that would touch the first turn's number.
+      const want = [];
+      for (let ti = k - 1; ti < n; ti += k) {
+        if (ti === 0 || !fits(L, ti)) continue;
+        const l = { x: numAt(L, ti), text: `${ti + 1}` };
+        if (!clash({ x: 0, text: "1" }, l)) want.push(l.text);
+      }
+      expect(L.labels.slice(1).map((l) => l.text)).toEqual(want);
+      // The step below k would put two numbers too close.
+      const below = STEPS[STEPS.indexOf(k) - 1];
+      if (below) {
+        const xs = [];
+        for (let ti = below - 1; ti < n; ti += below) if (ti > 0 && fits(L, ti)) xs.push({ x: numAt(L, ti), text: `${ti + 1}` });
+        expect(xs.slice(1).some((l, i) => clash(xs[i], l))).toBe(true);
+      }
+    }
+  }
+  // Few turns: each its number, and the wide ones their lengths too. Narrow ones keep the
+  // number and drop the length first.
+  expect(got["1370/3"]).toEqual([1, 3]);
+  expect(got["1370/20"]).toEqual([1, 20]);
+  expect(timelineLayout(strip(3), 1370, "clock", T0, null).labels.every((l) => l.total === "1m 00s")).toBe(true);
+  expect(timelineLayout(strip(20), 1370, "clock", T0, null).labels.every((l) => l.total == null)).toBe(true);
+  // Past 52 turns, where a turn is under 24 px, the numbers are thinned, not gone.
+  expect(got["1370/2000"][1]).toBeGreaterThanOrEqual(10);
+  expect(got["2500/2000"][1]).toBeGreaterThanOrEqual(10);
+  expect(got["1370/5600"][1]).toBeGreaterThanOrEqual(10);
+  expect([got["1370/2000"][0], got["2500/2000"][0]]).toEqual([100, 50]);
+});
+
+test("timeline numbers: the selected turn's number always shows and wins a clash; only the numbers it touches give way, the first turn's too", () => {
+  for (const cw of [1370, 2500]) {
+    const heads = strip(2000);
+    const L = timelineLayout(heads, cw, "clock", T0, null);
+    expect(TL.tlNumbers(L, heads, null)).toBe(L.labels);
+    expect(TL.tlNumbers(L, heads, undefined)).toBe(L.labels);
+    for (const ti of [0, 1, 2, 7, 98, 99, 100, 101, 999, 1233, 1998, 1999]) {
+      const nums = TL.tlNumbers(L, heads, ti);
+      const s = nums.find((l) => l.text === `${ti + 1}`);
+      expect(s).toBeDefined();
+      expect(s.x).toBe(numAt(L, ti));
+      expect(s.x + TL.tlNumW(s.text)).toBeLessThanOrEqual(cw);
+      nums.slice(1).forEach((l, i) => expect(clash(nums[i], l)).toBe(false));
+      // The rest are the layout's own, less those the selected one touches.
+      const kept = L.labels.filter((l) => l.text === s.text || !(l.x <= s.x ? clash(l, s) : clash(s, l)));
+      expect(nums.map((l) => l.text)).toEqual([...new Set([...kept.map((l) => l.text), s.text])].sort((a, b) => a - b));
+      // The first turn's stays unless the selected one touches it.
+      if (!clash({ x: 0, text: "1" }, s)) expect(nums[0].text).toBe("1");
+    }
+    // A selected turn already numbered: the layout's numbers as they are.
+    expect(TL.tlNumbers(L, heads, 99).map((l) => l.text)).toEqual(L.labels.map((l) => l.text));
+  }
 });
