@@ -4,7 +4,7 @@
 // draw for 15.7 s on the owner's machine, in the search field's count and place.
 import { test, expect, spyOn } from "bun:test";
 import * as T from "../mods/agent-threads/core/turns.js";
-import { isShown } from "../mods/agent-threads/ui.js";
+import { isShown, oneCharTest, searchable } from "../mods/agent-threads/ui.js";
 import { H, PRICE, draw, scripted, settleRows, setup, theme } from "./render-harness.js";
 
 setup();
@@ -258,6 +258,34 @@ for (const x of [1, 2]) for (const n of [2000, 5600]) {
     expect(r.steps.map((st) => [st.q, st.typed.ms <= HANDLER_MS])).toEqual(QUERIES.map((q) => [q, true]));
   }, 300000);
 }
+
+// n (olderMatch) right after a letter, before any draw: the step asks for the rows first
+// (action), which starts the new search's rows build, one slice of it (BUILD_MS, 10 ms) in the
+// handler, then the step itself. A later n checks nothing.
+const STEP_MS = 10 + HANDLER_MS;
+for (const x of [1, 2]) test(`n right after a letter at 5,600 turns${x === 1 ? "" : `, at ${x}x the prices`} takes one slice of rows and one of the scan at most, a later n none`, async () => {
+  const { v, cx, s } = await longPane(5600);
+  v.sel = `0:${s.turns.length}`;
+  X = x;
+  let r;
+  try {
+    r = priced(v, () => {
+      v.input.text = "ar";
+      v.input.handlers.change(null, cx);
+      const t0 = clock();
+      const c0 = checks();
+      v.action("olderMatch", cx);
+      const first = { ms: clock() - t0, checks: checks() - c0 };
+      const t1 = clock();
+      const c1 = checks();
+      v.action("olderMatch", cx);
+      return { first, later: { ms: clock() - t1, checks: checks() - c1 } };
+    });
+  } finally { X = 1; }
+  if (process.env.THREADS_SEARCH_FIGURES) console.log(JSON.stringify({ step: x, ...r }));
+  expect(r.first.ms).toBeLessThanOrEqual(STEP_MS);
+  expect(r.later.checks).toBe(0);
+}, 120000);
 
 // A rows build stopped inside one of its slices goes on to the rows one build makes. The slice
 // that resumes a build adds to the rows it was handed, and the place it starts from moves only
@@ -1060,6 +1088,16 @@ test("a search needs two characters, or one in a script written without spaces",
   const isSearch = (q) => { v.setQuery(q, cx); return v.filterText() !== ""; };
   for (const q of ["a", "7", "é", "ー", "😀", "  a  "]) expect([q, isSearch(q)]).toEqual([q, false]);
   for (const q of ["ar", "a7", "字", "𠀀", "あ", "カ", "한", "ก", "ລ", "ក", "က"]) expect([q, isSearch(q)]).toEqual([q, true]);
+});
+
+// The Script property escapes are built at load, in a try: an engine without them (a
+// SyntaxError) gets a minimum of 2 code points for every script, and the mod still loads.
+test("with no Script property escapes in the engine, a search is two characters in every script", () => {
+  expect(oneCharTest()).toBeInstanceOf(RegExp);
+  const none = oneCharTest(() => { throw new SyntaxError("Invalid property name"); });
+  expect(none).toBeNull();
+  for (const q of ["字", "あ", "한", "ก", "a"]) expect([q, searchable(q, none)]).toEqual([q, false]);
+  for (const q of ["ar", "字字", "あい"]) expect([q, searchable(q, none)]).toEqual([q, true]);
 });
 
 test("under the minimum the list is as it was, nothing is checked, and the field says to type more", async () => {
