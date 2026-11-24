@@ -17,11 +17,13 @@
 // Where the reader has more than ATIF holds, it goes in extra:
 // - A step's end (end_ts), a call's input summary (tool_call.extra.input), a result's time
 //   (result_ts) and whether it failed, under Harbor's name tool_result_is_error (true or
-//   false when the reader knows, left out when it does not). OpenCode's reader gives no
-//   result events, so for OpenCode the command line takes both from calls.sh (a call's
-//   error state or a non-zero exit code, and its end time). The panel's reader keeps no
-//   arguments, so arguments is {} unless the caller read them (the command line does, from
-//   calls.sh); a call whose input was not JSON, or was not read, keeps {} and says so
+//   false when the reader knows, left out when it does not). OpenCode's, Pi's and Antigravity's
+//   readers give no result events, so for those three the command line takes both from calls.sh
+//   (OpenCode: a call's error state or a shell call's non-zero exit code; Pi: the result's
+//   isError; Antigravity: true for an ERROR or FAILED step, else left out; and the end time,
+//   when it is not before the call's start). The panel's reader keeps no arguments, so
+//   arguments is {} unless the caller read them (the command line does, from calls.sh); a
+//   call whose input was not JSON, or was not read, keeps {} and says so
 //   (extra.arguments_unread).
 // - A call with no result yet keeps its observation result, with no content and
 //   extra.no_result. A call the transcript gives no id has none made up for the join: its
@@ -56,7 +58,17 @@ export const ATIF_VERSION = "ATIF-v1.7";
 // Harbor's agent names (AgentName) for the readers' harness names.
 export const AGENT_NAMES = { claude: "claude-code", codex: "codex", opencode: "opencode", pi: "pi", cursor: "cursor-cli", antigravity: "antigravity-cli" };
 
-// A time as ISO 8601: from milliseconds (the reader's) or an ISO string (calls.sh's).
+// A time string's milliseconds, or NaN. Date.parse rolls a day its month lacks into the next
+// month (2026-02-30 reads as March 2), so a written date that does not exist is not a time.
+function timeOf(s) {
+  const d = /^(\d{4})-(\d\d)-(\d\d)/.exec(s);
+  // Day 0 of the next month is this month's last day.
+  if (d && Number(d[3]) > new Date(Date.UTC(Number(d[1]), Number(d[2]), 0)).getUTCDate()) return Number.NaN;
+  return Date.parse(s);
+}
+
+// A time as ISO 8601: from milliseconds (the reader's) or an ISO string (calls.sh's, which
+// the command line has checked with timeOf).
 const iso = (t) => {
   const ms = typeof t === "string" ? Date.parse(t) : t;
   return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
@@ -87,10 +99,12 @@ function turnMetrics(turn) {
 
 // One turn's steps, numbered from `next`. results: an optional Map from call id to what the
 // command line read from calls.sh: the result's text (out), the call's whole input (args), or
-// that its input is not JSON (unread); for OpenCode, whose reader gives no result events,
-// whether the call failed (failed) and when it ended (end); and for a subagent call its
-// trajectory (sub) or that its transcript was not found (subMissing). The reader's outcome
-// comes first: failed and end only fill in what it does not know.
+// that its input is not JSON (unread); for OpenCode, Pi and Antigravity, whose readers give
+// no result events, that the call has a result (ended), whether it failed (failed) and when it
+// ended (end); and for a subagent call its trajectory (sub) or that its transcript was not
+// found (subMissing). The reader's outcome comes first: ended, failed and end only fill in
+// what it does not know. A call with a result is never marked as having none, whatever is
+// unknown.
 function turnSteps(turn, tr, next, results, helperId, claudeSteps) {
   const steps = [];
   // Harbor marks every Claude step (claudeSteps): is_sidechain true, with agent_id, on a
@@ -154,7 +168,7 @@ function turnSteps(turn, tr, next, results, helperId, claudeSteps) {
           subagent_link: got?.sub && got.subLink ? got.subLink : undefined,
           result_ts: iso(c.result?.end ?? got?.end),
           tool_result_is_error: typeof c.result?.failed === "boolean" ? c.result.failed : typeof got?.failed === "boolean" ? got.failed : undefined,
-          no_result: c.result?.end == null && c.result?.failed == null && got?.end == null && got?.failed == null ? true : undefined,
+          no_result: c.result?.end == null && c.result?.failed == null && !got?.ended ? true : undefined,
           subagent: c.subagent ? clean(c.subagent) ?? undefined : undefined,
         }),
       }));
@@ -258,6 +272,14 @@ export function atif(s, { agent = "claude", version = "unknown", results = null,
 const SUB_DEPTH = 4;
 // Codex day folders searched for a thread's children: its own days and one either side.
 const CODEX_DAYS = 60;
+// The agents whose readers give no result events, so the export takes each call's outcome and
+// end time from calls.sh's out lines.
+const OUTCOME_FROM_CALLS = new Set(["opencode", "pi", "antigravity"]);
+// Antigravity names every conversation's file alike, <data>/brain/<id>/.system_generated/logs/
+// transcript_full.jsonl (or transcript.jsonl beside it), so its session id is the folder's
+// <id>, as the panel's reader takes it (harness.js AGY_FILE). A file outside that layout, such
+// as a copy, keeps its own name, as every other agent's does.
+const AGY_FILE = /\/brain\/([0-9A-Za-z_-]+)\/\.system_generated\/logs\/transcript(?:_full)?\.jsonl$/;
 
 async function main(argv) {
   // The model's reasoning is exported by default (Claude Code and Codex); --no-reasoning leaves
@@ -270,7 +292,7 @@ async function main(argv) {
   }
   const cp = await import("node:child_process");
   const fs = await import("node:fs");
-  const { join, dirname, basename, sep } = await import("node:path");
+  const { join, dirname, basename, resolve, sep } = await import("node:path");
   const { fileURLToPath } = await import("node:url");
   const { newSession, apply, parseChunk, nextChunk, replaced, rewindTail } = await import("./turns.js");
   const here = dirname(fileURLToPath(import.meta.url));
@@ -315,7 +337,8 @@ async function main(argv) {
       }
       return s;
     }
-    s = newSession(basename(path).replace(/\.jsonl$/, ""), path);
+    const agyId = agent === "antigravity" ? AGY_FILE.exec(resolve(path))?.[1] : undefined;
+    s = newSession(agyId ?? basename(path).replace(/\.jsonl$/, ""), path);
     s.keepWakes = true;
     s.offset = from;
     const base = 1 << 20;
@@ -354,16 +377,31 @@ async function main(argv) {
         const r = results.get(x.id) ?? {};
         if (x.k === "out") {
           r.out = x.out;
-          // OpenCode's reader gives no result events, so its calls' outcome and end time are
-          // these. Every other agent's stay as its reader has them.
-          if (agent === "opencode") {
+          // OpenCode's, Pi's and Antigravity's readers give no result events, so their
+          // calls' outcome and end time are these, and a call with an out line has a result.
+          // Every other agent's stay as its reader has them.
+          if (OUTCOME_FROM_CALLS.has(agent)) {
+            r.ended = true;
+            // An Antigravity step rewritten under its step_index (ERROR, then DONE) prints a
+            // line each time, and the last is the step: its outcome and time replace the
+            // earlier ones whole, an unknown one included.
+            if (agent === "antigravity") { delete r.failed; delete r.end; }
             if (typeof x.err === "boolean") r.failed = x.err;
             if (typeof x.ts === "string") r.end = x.ts;
           }
         }
+        else if (x.k === "in") { if (OUTCOME_FROM_CALLS.has(agent) && typeof x.ts === "string") r.start = x.ts; }
         else if (x.k === "args") { if (x.unread) r.unread = true; else r.args = x.args; if (Object.hasOwn(x, "raw")) r.raw = x.raw; }
         results.set(x.id, r);
       }
+    }
+    // An end counts when it is a time after 1970, on a day that exists, and not before the
+    // call's start; a missing start, or one that is not a time, compares false. Otherwise the end is left out, and the
+    // outcome stays.
+    for (const r of results.values()) {
+      if (r.end === undefined) continue;
+      const end = timeOf(r.end);
+      if (!(end > 0) || end < timeOf(r.start ?? "")) delete r.end;
     }
     return results;
   };

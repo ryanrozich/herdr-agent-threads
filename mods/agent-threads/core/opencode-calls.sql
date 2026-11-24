@@ -1,10 +1,13 @@
 -- agent-threads: one step group's calls from OpenCode 1.x's part table (opencode.sh calls), for
 -- level 3. Bound by the caller: :sid the session, :ids a JSON array of call ids. Prints each
 -- call's input and output as calls.sh does. Selects named fields only.
--- A call failed when its status is error (the tool itself failed), or when it completed with an
--- exit code other than 0 (state.metadata.exit: the shell tool, "bash", completes whatever its
--- command exits with). A shell call that completed with no exit code (null after an abort or a
--- timeout) leaves err null: unknown, not false. A completed call's text is its output only.
+-- A call failed when its status is error (the tool itself failed), or when a shell call (bash or
+-- shell) completed with an exit code other than 0 (state.metadata.exit: the shell tool, "bash",
+-- completes whatever its command exits with). Any other named tool is read by its status alone,
+-- even with an exit code in its metadata. A completed call with no tool name and an exit code
+-- may be the shell or not, so it leaves err null. A shell call that completed with no exit
+-- code (null after an abort or a timeout) leaves err null: unknown, not false.
+-- A completed call's text is its output only.
 -- A time counts when it is a number above 0, and an end only when it is not before the start.
 with want as (select value id from json_each(:ids)),
 c as (
@@ -24,9 +27,10 @@ o as (
     case when status = 'completed' then coalesce(json_extract(st,'$.output'), '')
       else coalesce(json_extract(st,'$.output'), json_extract(st,'$.error'), '') end txt,
     case when status = 'error' then 'true'
+      when coalesce(tool, '') = '' and json_type(st,'$.metadata.exit') in ('integer','real') then 'null'
+      when coalesce(tool, '') not in ('bash','shell') then 'false'
       when json_type(st,'$.metadata.exit') in ('integer','real') then case when json_extract(st,'$.metadata.exit') <> 0 then 'true' else 'false' end
-      when tool in ('bash','shell') then 'null'
-      else 'false' end failed
+      else 'null' end failed
   from t)
 select json_object('id', id, 'k', 'in',
   'ts', case when t0 is null then null else strftime('%Y-%m-%dT%H:%M:%fZ', t0 / 1000.0, 'unixepoch') end,

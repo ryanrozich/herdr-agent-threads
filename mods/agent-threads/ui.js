@@ -1,7 +1,7 @@
 // agent-threads: small pure helpers for drawing (no Herdr imports), tested under bun.
 
 import { harnessOf } from "./harness.js";
-import { fmtTokens, fmtPct } from "./core/turns.js";
+import { fmtTokens, fmtPct, fmtDuration, fmtTime, shortModel, fmtBytes } from "./core/turns.js";
 
 // The panel action for a key press, or null. Chords with cmd, ctrl, alt or fn belong to
 // Herdr and the system (cmd-c, cmd-shift-t, ctrl-tab), so they are never taken.
@@ -3122,4 +3122,66 @@ export function bubbleStyle(value, t, agent) {
   }
   const ink = bubbleInk(hex);
   return { fill: hex, ink, sub: alpha(ink, 0.78), bar: alpha(ink, 0.5), outline: false };
+}
+
+// ---- the opening (main.js openView) ----
+// While a session is first read, and until its last screenful is measured, the pane shows what
+// it knows of the session in place of rows. The lines, each on a row of its own from the first
+// paint, so a figure arriving never moves another: the title; what is read of the total; the
+// turns found; the agent and model; when it started and was last active (or "Working now",
+// once the read is complete and its last turn is running); the time those span, idle gaps
+// included; the counts so far; the newest typed prompt's head and its text. A line whose
+// figure is not known yet is empty. Every figure is what the pane knows at that moment.
+export const OPEN_ROWS = 9;
+// Decimal megabytes, as a file listing shows them (fmtBytes too).
+const OPEN_MB = 1e6;
+const openN = (x) => x.toLocaleString();
+const openMany = (x, w) => `${openN(x)} ${w}${x === 1 ? "" : "s"}`;
+// The pane's own form for a time: the clock today, else the day and the clock.
+export function openWhen(ts, now = Date.now()) {
+  return dayKey(ts) === dayKey(now) ? fmtTime(ts) : `${dayLabel(ts, now)} ${fmtTime(ts)}`;
+}
+// "42s", "3h 05m" (as a turn's time is written), and "6d 6h" past a day.
+export function fmtSpan(ms) {
+  if (!(ms > 0)) return "";
+  if (ms < 86400000) return fmtDuration(ms);
+  const h = Math.floor(ms / 3600000);
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+// o: { offset, size, pct, units ("bytes", or "turns" for OpenCode's prompts), turns, loaded,
+// agent, model, start, active, working, prompts, tools, tokens, pins, newest, now }.
+export function openLines(o) {
+  const prompts = o.units === "turns";
+  // Under a MB, the sizes are fmtBytes' own ("5 KB", never "0.0 MB"), each with its unit.
+  const kb = !prompts && fmtBytes(o.size).endsWith(" KB");
+  const amount = (x) => (prompts ? openN(x) : kb ? fmtBytes(x) : (x / OPEN_MB).toFixed(1));
+  const unit = prompts ? " prompts" : kb ? "" : " MB";
+  const read = !(o.size > 0) ? "" : o.offset > 0 && o.pct != null ? `${amount(Math.min(o.offset, o.size))} of ${amount(o.size)}${unit} · ${o.pct}%` : `${amount(o.size)}${unit}`;
+  const turns = o.offset > 0 || o.loaded ? `${openMany(o.turns ?? 0, "turn")}${o.loaded ? "" : " so far"}` : "";
+  const agent = [o.agent, o.model ? shortModel(o.model) : null].filter(Boolean).join(" · ");
+  const active = o.loaded && o.working ? "Working now" : o.active ? `last active ${openWhen(o.active, o.now)}` : null;
+  const when = [o.start ? `Started ${openWhen(o.start, o.now)}` : null, active].filter(Boolean).join(" · ");
+  const spans = o.start && o.active && o.active > o.start ? `Spans ${fmtSpan(o.active - o.start)}` : "";
+  const counts = [o.prompts != null ? openMany(o.prompts, "prompt") : null, o.tools != null ? openMany(o.tools, "tool call") : null,
+    o.tokens != null ? `${fmtTokens(o.tokens)} tokens` : null, o.pins > 0 ? openMany(o.pins, "pin") : null].filter(Boolean);
+  const head = o.newest ? `Newest prompt${o.newest.ts ? ` · ${openWhen(o.newest.ts, o.now)}` : ""}` : "";
+  return ["Reading this session", read, turns, agent, when, spans, counts.length ? `So far: ${counts.join(" · ")}` : "", head, o.newest?.text ?? ""];
+}
+// The newest prompt a person typed, by the rule that gives a turn the prompt bubble: their own
+// sender, not a command line, with text. Plain text, its whitespace collapsed. Null when none.
+export function newestPrompt(turns) {
+  for (let i = (turns?.length ?? 0) - 1; i >= 0; i--) {
+    const t = turns[i];
+    if (t?.sender?.kind !== "you" || t.cmd) continue;
+    const text = String(t.prompt ?? "").replace(/\s+/g, " ").trim();
+    if (text) return { text, ts: t.ts ?? null };
+  }
+  return null;
+}
+// A line split into its figures (true: a digit run, with its commas and point) and the rest,
+// so each digit can take a cell of one width and a count does not wobble as it grows.
+export function figRuns(text) {
+  const out = [];
+  for (const m of String(text ?? "").matchAll(/(\d[\d,.]*\d|\d)|([^\d]+)/g)) out.push(m[1] ? [m[1], true] : [m[2], false]);
+  return out;
 }
