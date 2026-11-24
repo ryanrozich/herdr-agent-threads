@@ -9223,8 +9223,10 @@ export default class Threads extends View {
     const slots = this.slotsMemo;
     const due = this.light ? [] : this.probeDue();
     // Parts left for later frames (PROBE_MAX): the parts drawn now report their sizes and
-    // ask for a frame, but one that never reports would not, so ask here too.
-    if (this.probeLeft > 0 && !this.probeNext) {
+    // ask for a frame, but one that never reports would not, so ask here too. Not from a light
+    // draw, which measures none: it drew again every frame through the light window, doing
+    // nothing, and the window's end asks for the draw that goes on.
+    if (!this.light && this.probeLeft > 0 && !this.probeNext) {
       this.probeNext = true;
       cx.timer.after(16, (cx) => { this.probeNext = false; cx.notify(); });
     }
