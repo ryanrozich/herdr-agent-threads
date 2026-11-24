@@ -6469,7 +6469,6 @@ test("a reply longer than Herdr draws in one Markdown view opens whole: list ite
   draw(v, cx);
 });
 
-
 // A synthetic reply of about 10,000 words in prose, lists and a table, with no code fence.
 function longProse(words) {
   const out = [];
@@ -7808,23 +7807,6 @@ test("the probe takes the parts nearest the top of the pane first, walking out b
   v.partSig = (...a) => { sigs++; return visit(...a); };
   expect(v.probeDue().length).toBe(0);
   expect(sigs).toBe(0);
-});
-
-// Following, a read that brings a new turn goes to the end (jumpLatest), as Latest does: a
-// scroll still waiting for the rows to settle (an open's scroll of a card) is dropped, or it
-// would land once they did and take the view from the end. Waits on the list's row cap,
-// which carries the rule that every route to the newest turn drops a pending scroll.
-test.skip("following, a read that brings a new turn drops a scroll still waiting and goes to the end", async () => {
-  const { appendFileSync } = await import("node:fs");
-  const { file, rest } = grownFixture();
-  const { v, cx } = await pane(file);
-  const key = v.turnKeys(v.rows())[0];
-  v.scrollTo = { key, how: "card", until: Date.now() + 400 };
-  v.follow = true;
-  appendFileSync(file, rest);
-  v.read(cx);
-  await settle(v);
-  expect([v.current().turns.length, v.follow, v.toBottom, v.scrollTo ?? null]).toEqual([3, true, true, null]);
 });
 
 test("the Jump to latest pill floats while the end of the list is off screen, with a dot when a turn came in below", async () => {

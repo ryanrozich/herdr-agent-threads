@@ -3,9 +3,9 @@
 // of a long draw is modelled (costedFrames), on the render tests' harness (render-harness.js).
 import { test, expect } from "bun:test";
 import { segments } from "../mods/agent-threads/core/turns.js";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { draw, dropTimers, fixture, frame, pane, root, settleRows, setup } from "./render-harness.js";
+import { draw, dropTimers, fixture, frame, pane, root, settle, settleRows, setup } from "./render-harness.js";
 
 setup();
 
@@ -884,3 +884,27 @@ test("drawing an open capped reply's parts leaves the closed rows' Markdown memo
   const after = new Set(v.mdMemo.keys());
   expect([parts.length, parts.filter((p) => after.has(p)).length, before.filter((k) => !after.has(k)).length]).toEqual([58, 0, 0]);
 }, 60000);
+
+// A three-turn session cut before its third prompt (file), and the rest of it to append (rest).
+function grownFixture() {
+  const file = fixture("--only", "3");
+  const lines = readFileSync(file, "utf8").split("\n").filter(Boolean);
+  const prompts = lines.map((l, i) => [JSON.parse(l), i]).filter(([j]) => j.type === "user" && !j.isMeta && (typeof j.message?.content === "string" || j.message?.content?.some?.((c) => c.type === "text"))).map(([, i]) => i);
+  writeFileSync(file, `${lines.slice(0, prompts[2]).join("\n")}\n`);
+  return { file, rest: `${lines.slice(prompts[2]).join("\n")}\n` };
+}
+// Following, a read that brings a new turn goes to the end (jumpLatest), as Latest does: a
+// scroll still waiting for the rows to settle (an open's scroll of a card) is dropped, or it
+// would land once they did and take the view from the end. Waits on the list's row cap,
+// which carries the rule that every route to the newest turn drops a pending scroll.
+test.skip("following, a read that brings a new turn drops a scroll still waiting and goes to the end", async () => {
+  const { file, rest } = grownFixture();
+  const { v, cx } = await pane(file);
+  const key = v.turnKeys(v.rows())[0];
+  v.scrollTo = { key, how: "card", until: Date.now() + 400 };
+  v.follow = true;
+  appendFileSync(file, rest);
+  v.read(cx);
+  await settle(v);
+  expect([v.current().turns.length, v.follow, v.toBottom, v.scrollTo ?? null]).toEqual([3, true, true, null]);
+});
