@@ -6,8 +6,9 @@
 //
 // bun runs every test file in one process and loads this module once, so each test file calls
 // setup() as it starts: it re-installs the module stand-ins and, through reset(), puts every
-// setting below back to its default and empties every shared list and count. Nothing is reset
-// between the tests of one file. What reset() leaves alone: keyBinds, since the mod binds its
+// setting below back to its default and empties every shared list and count. reset() also runs
+// before every test (test/preload.js calls the hook set at the bottom of this file), so a pin,
+// a setting or a record one test wrote never reaches the next. What reset() leaves alone: keyBinds, since the mod binds its
 // keys once per process (ui.js), so a later file's panes bind nothing and the record of that
 // one binding has to stay; app and the mod copied into it, made once; and main.js and ui.js
 // themselves, loaded once, with their own module state.
@@ -249,6 +250,9 @@ export function setup() {
   }));
 }
 setup();
+// Before every test, in every file: test/preload.js runs this hook (a hook registered here
+// would bind only to the file that loaded this module first).
+globalThis.__threadsHarnessEachTest = reset;
 export const { default: Threads } = await import("../mods/agent-threads/main.js");
 export const { thumbSize, tileRow, bubbleMax, ROW, columnWidth, railLook, rowHeight, MD_MAX, alpha: alphaForTest, dayKey } = await import("../mods/agent-threads/ui.js");
 

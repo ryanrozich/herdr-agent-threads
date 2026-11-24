@@ -5,7 +5,7 @@
 // stopped by SIGINT, SIGTERM or SIGHUP) the processes it started that are still alive are
 // stopped and the folder is removed. A run killed outright (SIGKILL) leaves its folder; a
 // later run removes it once its pid is gone and it is over an hour old.
-import { afterAll } from "bun:test";
+import { afterAll, beforeEach } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -139,6 +139,12 @@ function cleanup() {
 
 // bun test does not fire process "exit"; an afterAll in a preload runs once, after every file.
 afterAll(cleanup);
+
+// Once test/render-harness.js is loaded it sets a hook that puts every setting a test can
+// write back to its start before each test (the pins and settings records, the logs, the
+// panes). A global hook reaches every test file; one set by the harness would bind to a
+// single file.
+beforeEach(() => { globalThis.__threadsHarnessEachTest?.(); });
 for (const [sig, n] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGHUP", 1]]) {
   process.on(sig, () => { cleanup(); process.exit(128 + n); });
 }
