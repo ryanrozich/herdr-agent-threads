@@ -54,6 +54,9 @@ async function addCapTurns(s, from, n) {
 // A small window, for a session of 150 turns: past 60 items it slides to 50, and a reader up
 // in the session sees it stop at 66.
 const SMALL = { slide: 60, block: 10, stop: 66 };
+// Every made-up session here has the same id, so its pins are the same in each test, and
+// pins.json lasts the whole file. p toggles: a test that pins starts with none (as pinPane does).
+const noPins = () => { delete H.recordFiles[PINS]; };
 const EDGE = new Set(["gap", "spacer", "tail", "more"]);
 const itemsIn = (v) => v.rows().filter((r) => !EDGE.has(r.kind)).length;
 const inList = (v, k) => v.rows().some((r) => r.key === k);
@@ -216,6 +219,7 @@ test("a reader up in a long session sees nothing above the view move as turns ar
 });
 
 test("every way to an older turn moves the window to it: #n, a search step, the outline, the rail, a pin, up, Home and Show earlier", async () => {
+  noPins();
   const { v, cx } = await capSession(150, SMALL);
   const asked = scrollsOf(v);
   const reached = (k) => asked.includes(k) || v.landed?.key === k;
@@ -377,6 +381,7 @@ test("the window counts list items, so an open card with many parts stays inside
 });
 
 test("a selection the window leaves out stays selected, and the first key that acts on it brings the window back", async () => {
+  noPins();
   const { v, cx, s } = await capSession(150, SMALL);
   v.jumpLatest(true);
   frames(v, cx);
@@ -415,6 +420,7 @@ test("a selection the window leaves out stays selected, and the first key that a
 });
 
 test("Show earlier and Show later are stops for up and down, Enter presses them, they read plainly and they are not turns", async () => {
+  noPins();
   const { v, cx } = await capSession(150, SMALL);
   v.jumpLatest(true);
   frames(v, cx);
@@ -576,6 +582,7 @@ test("following, a newest turn whose rows run past the window shows from its hea
 });
 
 test("a jump to one turn with more items than the list takes lands on its head, and the cut is below it, which is not the end", async () => {
+  noPins();
   const { v, cx } = await capSession(150, { ...SMALL, max: 40 }, 140, 80);
   v.jumpLatest(true);
   frames(v, cx);
@@ -632,8 +639,7 @@ test("a jump to one turn with more items than the list takes lands on its head, 
 // The Pinned view reads from its top when no row is kept (capKey), so latest there keeps the
 // last row instead; the Chat's list keeps its newest items with none.
 test("in the Pinned view past the cap, latest after a scroll to a huge pin's head shows the newest pin: the list ends with it", async () => {
-  // No pins from an earlier test: p toggles, and pins.json lasts the file (as pinPane does).
-  delete H.recordFiles[PINS];
+  noPins();
   const { v, cx } = await capSession(150, { ...SMALL, max: 40 }, 140, 80);
   v.jumpLatest(true);
   frames(v, cx);
