@@ -195,6 +195,10 @@ const BUILD_MS = 10;
 const WIDTHS_KEPT = 3;
 // Rows left unsized at the end of a build slice that are sized in it anyway (buildStep).
 const SIZE_REST = 64;
+// A turn come in while a search is on: the newest turns, from the one keptFrom's rule keeps
+// (hitsTail), are checked again for the matches when they are this many or fewer; more, and
+// all of them are.
+const HITS_TAIL = 64;
 // The hold (REWRAP_PAUSE_MS) is for a conversation whose last full re-wrap, at a column width
 // not kept, took more than this much of the pane's own draw time; before one has finished,
 // for one of more than HOLD_TURNS turns. A short one re-wraps at every step of a drag.
@@ -1350,6 +1354,8 @@ export default class Threads extends View {
         let i = 0;
         do {
           i = remarkSenders(s, rules, i, cx ? now() + SLICE_MS : Infinity);
+          // Each slice can change any turn's sender: the search's matches are found again (hits).
+          this.remarkVer = (this.remarkVer ?? 0) + 1;
           if (i >= s.turns.length) break;
           await cx.sleep(0);
           if (this.remarkGen !== gen) return;
@@ -6428,6 +6434,17 @@ export default class Threads extends View {
       // field already says it is the first mention or the newest, and nothing wraps.
       case "olderMatch":
       case "newerMatch": {
+        const h = this.hitsNow();
+        if (h) {
+          if (h.top === h.bot) return false;
+          const p = h.at.get(this.sel);
+          const j = p == null ? h.top - 1 : p + (name === "olderMatch" ? -1 : 1);
+          if (j < h.bot || j >= h.top) return true;
+          this.sel = h.by.get(j);
+          this.follow = false;
+          this.scrollTo = { key: this.sel, how: "center" };
+          return true;
+        }
         const mk = this.matchKeys(keys);
         if (!mk.length) return false;
         const i = mk.indexOf(this.sel);
@@ -7251,6 +7268,8 @@ export default class Threads extends View {
     // The Trajectory, in its own pane or in this one: the ledger only, with its own list.
     if (this.traj) return this.trajFrame(cx);
     this.rows();
+    // The search's matches, before anything reads them (hitsNow).
+    this.hitsNow();
     this.syncOutEditors(cx);
     // Rows left with their old shape (SHAPE_MS): the next frame goes on with them.
     // A rows build left for later slices (buildStep): the next frame goes on with it.
@@ -7934,16 +7953,15 @@ export default class Threads extends View {
     if (n != null) return !n ? "turn #" : this.jumpKey(n) ? `turn ${n}` : `no turn ${n}`;
     const q = this.filterText();
     if (!q) return null;
-    const status = this.status();
     let hit = 0, hiddenHit = 0;
     // The Pinned view shows every pin, agent message or not, and nothing else: the matches
-    // are the pins the search matches.
+    // are the pins the search matches. Elsewhere the kept set (hitsNow).
     if (this.view === "pinned") hit = this.matchKeys().length;
-    else this.sessions.forEach((s, si) => s.turns.forEach((t, ti) => {
-      const on = isShown(t, { agentTurns: this.prefs.agentTurns, live: this.isLive(s, si, ti, status), turns: s.turns });
-      const m = threadMatches(s.turns, t, q);
-      if (on) { if (m) hit++; } else if (m) hiddenHit++;
-    }));
+    else {
+      const h = this.hitsNow();
+      hit = h.top - h.bot;
+      hiddenHit = h.hidden;
+    }
     const hidden = hiddenHit ? ` · ${hiddenHit} hidden` : "";
     if (!hit) return `No matches${hidden}`;
     const { at, n: all } = this.matchPlace();
@@ -8945,9 +8963,147 @@ export default class Threads extends View {
   // Where the selection is among the matches, counted from the newest: { at (1 for the
   // newest, 0 when no match is selected), n }.
   matchPlace() {
+    const h = this.hitsNow();
+    if (h) {
+      const p = h.at.get(this.sel);
+      return { at: p == null ? 0 : h.top - p, n: h.top - h.bot };
+    }
     const mk = this.matchKeys();
     const i = mk.indexOf(this.sel);
     return { at: i < 0 ? 0 : mk.length - i, n: mk.length };
+  }
+
+  // ---- the search's matches (hits) ----
+  // The shown turns the search matches, found once for each change and kept across draws:
+  // the field's count and place, its two steps, n / Shift n and a new search's first
+  // selection read them, and a draw with nothing changed checks no turn. Not in the Pinned
+  // view, whose matches are among its pins (matchKeys over its rows).
+  // The set: what it was found for (base, and each session, its version, turn count and
+  // loaded); at, a match's key to its place, and by, back: places run from bot (the oldest
+  // found) up to top - 1 (the newest); hidden, the matches among hidden agent messages, and
+  // hidL, their turn indexes in the newest session; cur, the next turn to check, going back
+  // from the newest; done once every turn is checked.
+  // It is found again from the newest turn for a new search, the agent messages shown or
+  // hidden, new sender rules (each slice of their marking, remark), a session added or
+  // changed other than the newest, or more than HITS_TAIL turns of the newest to check again
+  // (hitsTail). The rows' own build does not depend on it, and opening or closing a turn
+  // changes nothing in it.
+  hitsNow() {
+    const q = this.filterText();
+    if (!q || this.view === "pinned") return null;
+    const S = this.sessions;
+    const L = S.length - 1;
+    const base = `${q}|${this.prefs.agentTurns ? 1 : 0}|${this.sendersVer}|${this.remarkVer ?? 0}`;
+    let h = this.hits;
+    if (h && h.base === base && h.sessions.length === S.length && S.every((s, i) => s === h.sessions[i])) {
+      let older = false;
+      let newest = false;
+      for (let i = 0; i <= L; i++) {
+        if (S[i].version === h.vers[i] && S[i].turns.length === h.lens[i] && Boolean(S[i].loaded) === h.loaded[i]) continue;
+        if (i < L) older = true;
+        else newest = true;
+      }
+      if (older || (newest && !this.hitsTail(h))) h = null;
+    } else h = null;
+    if (!h) {
+      h = this.hits = { base, q, agents: Boolean(this.prefs.agentTurns), sessions: S.slice(), at: new Map(), by: new Map(), top: 0, bot: 0,
+        hidden: 0, hidL: [], cur: { si: L, ti: L >= 0 ? S[L].turns.length - 1 : -1 }, done: false };
+    }
+    h.vers = S.map((s) => s.version);
+    h.lens = S.map((s) => s.turns.length);
+    h.loaded = S.map((s) => Boolean(s.loaded));
+    if (!h.done) this.scanHits(h, Infinity);
+    // A new search's selection (setQuery): the newest match, once one is found, unless the
+    // selection moved meanwhile.
+    const want = this.hitsSelect;
+    if (want && (h.top > h.bot || h.done)) {
+      this.hitsSelect = null;
+      if (h.top > h.bot && this.sel === want.sel) {
+        this.sel = h.by.get(h.top - 1);
+        this.follow = false;
+        this.scrollTo = { key: this.sel, how: "center" };
+      }
+    }
+    return h;
+  }
+
+  // Checks turns of the set, going back from h.cur, until the clock passes until (read every
+  // 32 turns, as the rows' build does). The turns checked.
+  scanHits(h, until) {
+    const S = this.sessions;
+    let { si, ti } = h.cur;
+    let n = 0;
+    while (si >= 0) {
+      const s = S[si];
+      for (; ti >= 0; ti--) {
+        if ((++n & 31) === 0 && until !== Infinity && now() > until) { h.cur = { si, ti }; return n - 1; }
+        this.hitCheck(h, s, si, ti, false);
+      }
+      si--;
+      ti = si >= 0 ? S[si].turns.length - 1 : -1;
+    }
+    h.cur = { si: -1, ti: -1 };
+    h.done = true;
+    return n;
+  }
+
+  // One turn checked for the set: a shown match takes the next place, older (below bot) or
+  // newer (at top); a hidden one is counted.
+  hitCheck(h, s, si, ti, newer) {
+    const t = s.turns[ti];
+    if (!threadMatches(s.turns, t, h.q)) return;
+    if (!isShown(t, { agentTurns: h.agents, live: this.isLive(s, si, ti), turns: s.turns })) {
+      h.hidden++;
+      if (si === this.sessions.length - 1) h.hidL.push(ti);
+      return;
+    }
+    const key = `${si}:${t.n}`;
+    const p = newer ? h.top++ : --h.bot;
+    h.at.set(key, p);
+    h.by.set(p, key);
+  }
+
+  // Only the newest session changed (a turn came in, the running one grew or ended): the
+  // matches before the first turn keptFrom's rule keeps (the turns before the last done turn
+  // with a reply are settled; a reply links back only to the turns after it) stay, and the
+  // turns from there are checked again. False when that is more than HITS_TAIL turns, or the
+  // session got shorter: the set is found again.
+  hitsTail(h) {
+    const S = this.sessions;
+    const L = S.length - 1;
+    const turns = S[L].turns;
+    const was = h.lens[L];
+    if (turns.length < was || was < 2) return false;
+    let safe = was - 1;
+    while (safe > 0 && !(turns[safe - 1].done && turns[safe - 1].after?.length)) safe--;
+    if (turns.length - safe > HITS_TAIL) return false;
+    // The matches from safe on: the newest places, and the hidden ones in the newest session.
+    while (h.top > h.bot) {
+      const k = h.by.get(h.top - 1);
+      const c = k.indexOf(":");
+      if (Number(k.slice(0, c)) !== L || Number(k.slice(c + 1)) - 1 < safe) break;
+      h.top--;
+      h.by.delete(h.top);
+      h.at.delete(k);
+    }
+    const hid = h.hidL.filter((ti) => ti < safe);
+    h.hidden -= h.hidL.length - hid.length;
+    h.hidL = hid;
+    // Checked back past safe already: the turns from safe are checked again now, oldest first,
+    // each match the newest so far. Not yet: every match found is from safe on and is gone,
+    // and the scan starts again at the newest turn.
+    if (h.done || h.cur.si < L || h.cur.ti < safe) for (let ti = safe; ti < turns.length; ti++) this.hitCheck(h, S[L], L, ti, true);
+    else h.cur = { si: L, ti: turns.length - 1 };
+    return true;
+  }
+
+  // Whether the selected turn is shown and the search matches it.
+  selMatches() {
+    const t = this.sel ? this.findTurn(this.sel) : null;
+    const si = t ? Number(this.sel.split(":")[0]) : -1;
+    const s = this.sessions[si];
+    if (!s || s.turns[t.n - 1] !== t) return false;
+    return isShown(t, { agentTurns: this.prefs.agentTurns, live: this.isLive(s, si, t.n - 1), turns: s.turns }) && threadMatches(s.turns, t, this.filterText());
   }
 
   // Turn n of the newest session that has one.
@@ -8962,13 +9118,21 @@ export default class Threads extends View {
     this.query = text ?? "";
     const n = jumpTarget(this.query);
     // A search starts at its newest match: the selection moves there unless it is on a match.
+    // The matches are found newest first (hitsNow), which moves the selection to the first
+    // one found.
+    this.hitsSelect = null;
     if (n == null && this.filterText()) {
-      const mk = this.matchKeys();
-      if (mk.length && !mk.includes(this.sel)) {
-        this.sel = mk[mk.length - 1];
-        this.follow = false;
-        this.scrollTo = { key: this.sel, how: "center" };
+      if (this.view === "pinned") {
+        const mk = this.matchKeys();
+        if (mk.length && !mk.includes(this.sel)) {
+          this.sel = mk[mk.length - 1];
+          this.follow = false;
+          this.scrollTo = { key: this.sel, how: "center" };
+        }
+        return;
       }
+      if (!this.selMatches()) this.hitsSelect = { sel: this.sel };
+      this.hitsNow();
       return;
     }
     const key = n ? this.jumpKey(n) : null;
