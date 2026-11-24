@@ -13,49 +13,61 @@ import { turnIds } from "../mods/agent-threads/pins.js";
 import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf, COMPACT_PAD as COMPACT_PAD_T } from "../mods/agent-threads/ledger.js";
 
 import {
-  H,
-  MD_MAX,
-  ROW,
-  Threads,
   afterPress,
+  allPins,
   alphaForTest,
   app,
   bubbleMax,
   calls,
   closed,
   columnWidth,
+  compactPins,
   dayKey,
   draw,
+  drawRange,
   dropTimers,
   editors,
   fakeH,
   fixture,
   focusCalls,
+  frame,
+  H,
+  handlerAfterId,
   hcBy,
   herdrSettings,
   herdrVersion,
   hostPlatform,
   hostReads,
+  itemWords,
   keyBinds,
+  keyEv,
   lacking,
   lastList,
   log,
   makeCx,
   marks,
+  MD_MAX,
   mdSources,
   modDir,
   never,
   openAt,
   overlays,
+  ownOf,
   pane,
+  pinPane,
+  PINS,
+  pinsShown,
   pinWrites,
   probeFrame,
   railLook,
   rec,
   recordFiles,
   root,
+  ROW,
   rowHeight,
+  saved,
   scripted,
+  scrolled,
   settingsWrites,
   settle,
   settleList,
@@ -66,9 +78,14 @@ import {
   state,
   stillAt,
   stubHas,
+  svgs,
   theme,
+  Threads,
   thumbSize,
   tileRow,
+  toastText,
+  tooltips,
+  until,
   views,
   work,
   worked,
@@ -888,7 +905,6 @@ const senderEvents = () => [
   // The From message, with no reply: hidden once a rule marks it.
   { k: "p", o: "human", t: FROM, ts: at(4) }, { k: "d", ms: 200, ts: at(5) },
 ];
-const tooltips = (v, cx) => { H.rec = []; v.render(cx); const out = rec.filter(([n]) => n === "tooltip").map(([, x]) => x); H.rec = null; return out; };
 
 test("with no sender rules nothing changes: typed prompts stay the person's", async () => {
   const { v, cx } = await scripted(senderEvents());
@@ -1014,7 +1030,6 @@ const twoKinds = () => scripted([
 const recOf = (fn) => { H.rec = []; try { fn(); return rec; } finally { H.rec = null; } };
 // The colour each dashed edge was drawn in: the border_color after each border_dashed.
 const dashes = (c) => c.flatMap((e, i) => (e[0] === "border_dashed" ? [c.slice(i + 1).find((x) => x[0] === "border_color")?.[1] ?? null] : []));
-const svgs = (c) => c.filter((e) => e[0] === "svg").map((e) => e[1].split("/").pop());
 
 test("a message a sender rule matched reads \"matched by rule\" with the tag icon, its tooltip says a rule named its sender; a sent one is as before", async () => {
   const { senderIcon, kindWords } = await import("../mods/agent-threads/ui.js");
@@ -1626,7 +1641,6 @@ test("an agent row's sender label leaves room for the time and #n at 240 px (R6)
 
 // ---- round 2 ----------------------------------------------------------------------------
 
-const keyEv = (key, extra = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false }, ...extra });
 async function settleCx(cx) { await Promise.all(cx.pending); cx.pending = []; }
 const writes = () => log.filter((x) => x[0] === "run" || x[0] === "clipboard").map((x) => (x[0] === "run" ? `${x[1]}${x[2] ? ` ${JSON.stringify(x[2])}` : ""}` : "clipboard"));
 
@@ -2601,10 +2615,6 @@ async function paneWith(file, prep, tries = 200) {
   if (tries) await settle(v, tries);
   return { v, cx };
 }
-async function until(f, what, n = 400) {
-  for (let i = 0; i < n; i++) { if (f()) return; await new Promise((r) => setTimeout(r, 10)); }
-  throw new Error(`timed out waiting for ${what}`);
-}
 
 // Runs in a child bun; the parent test below starts it and checks what it wrote.
 // The child's clock (performance.now, which the read's budgets read too: SLICE_MS, BUILD_MS,
@@ -2944,14 +2954,6 @@ test("S1: a slow extractor call or a sleep never wipes a loaded session", async 
 
 // ---- round 3: V3a, design px at any zoom --------------------------------------------------
 
-// The handler a recorded element chain set right after .id(id), or null.
-function handlerAfterId(calls, id, name) {
-  for (let i = 0; i < calls.length; i++) {
-    if (calls[i][0] !== "id" || calls[i][1] !== id) continue;
-    for (let j = i + 1; j < calls.length && j < i + 8; j++) if (calls[j][0] === name) return calls[j].at(-1);
-  }
-  return null;
-}
 
 test("V3a: at zoom 0.9 the panel lays out in design px and hands the list the same design px (the list zooms them)", async () => {
   const { v, cx } = await pane(fixture("--extra", "3", "--latest", "--langs"));
@@ -3046,7 +3048,6 @@ function probeEntries(calls) {
   }
   return out;
 }
-function frame(v, cx) { H.rec = []; v.render(cx); const c = rec; H.rec = null; return c; }
 
 test("V3b: the open card's text parts are measured in the probe, and the list uses the measure", async () => {
   const { v, cx } = await pane(fixture("--extra", "2", "--latest", "--commands", "--blocks"));
@@ -4140,16 +4141,6 @@ test("a row cut off shows Answered in #N, goes there, and search finds the answe
 
 // ---- pins ----
 
-const PINS = join(app, "data/agent-threads/pins.json");
-async function pinPane(...flags) {
-  delete recordFiles[PINS];
-  const { v, cx } = await pane(fixture(...flags));
-  await new Promise((r) => setTimeout(r, 20)); // the first read of pins.json
-  return { v, cx, keys: () => v.turnKeys(v.rows()) };
-}
-const saved = async () => { await new Promise((r) => setTimeout(r, 30)); return JSON.parse(recordFiles[PINS] ?? "{}"); };
-const allPins = (j) => Object.values(j.sessions ?? {}).flatMap((x) => x.pins);
-const toastText = (v) => v.toast?.text ?? null;
 
 test("p pins the selected turn, teaches the return key, and saves; p again unpins and u undoes", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
@@ -4173,24 +4164,6 @@ test("p pins the selected turn, teaches the return key, and saves; p again unpin
   await saved();
   expect(allPins(JSON.parse(recordFiles[PINS])).length).toBe(2);
   expect(v.key(keyEv("u"), cx)).toBeUndefined(); // nothing left to undo, and no error
-  draw(v, cx);
-});
-
-test("a sixth pin is refused in the design's words, and undo cannot pass the limit", async () => {
-  const { v, cx, keys } = await pinPane("--extra", "8");
-  const k = keys();
-  for (let i = 0; i < 5; i++) { v.sel = k[i]; v.action("pin", cx); }
-  v.sel = k[5];
-  v.action("pin", cx);
-  expect(toastText(v)).toBe("Pins are full (5). Unpin one first.");
-  expect(v.pinnedList().length).toBe(5);
-  v.sel = k[0];
-  v.action("pin", cx);
-  v.sel = k[6];
-  v.action("pin", cx);
-  v.action("undoUnpin", cx);
-  expect(toastText(v)).toBe("Pins are full (5). Unpin one first.");
-  expect(v.pinnedList().length).toBe(5);
   draw(v, cx);
 });
 
@@ -4662,15 +4635,18 @@ test("the pins show in the Pinned view at every width; the header and footer say
   v.width = 500;
   const btn = () => v.headerButtons().find((b) => b[0] === "th-pin");
   // The list's header has no pin button (p and an open turn's pin do it); the Pinned view
-  // keeps one, as Unpin for the selected pin.
+  // keeps one, as Unpin for the selected pin: an action, not a toggle, so never drawn on. A
+  // turn that is not a pin is no pin selected there: dimmed and inert.
   v.sel = k[0];
   expect(btn()).toBeUndefined();
   v.setView("pinned");
   expect(btn()[2]).toMatch(/^Unpin #\d+ \(p\)$/);
-  expect(btn()[4]).toBe(true);
-  v.sel = k[6];
-  expect(btn()[2]).toMatch(/^Pin #\d+ \(p\)$/);
   expect(btn()[4]).toBe(false);
+  expect(btn()[8]).toBe(false);
+  v.sel = k[6];
+  expect(btn()[2]).toBe("Select a pin to unpin it (p)");
+  expect(btn()[4]).toBe(false);
+  expect(btn()[8]).toBe(true);
   v.setView("all");
   const pinned = () => v.headerButtons().find((b) => b[0] === "th-pinned");
   expect(pinned().slice(1, 7)).toEqual([null, "Open the Pinned column beside Threads (v)", "pinned", false, null, "Pinned 5"]);
@@ -4696,12 +4672,12 @@ test("v in a pane under 480 px shows Pinned in the same pane: pins oldest first,
   expect(v.view).toBe("pinned");
   expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
   expect(toastText(v)).toBe("Pinned shows here: the Pinned column needs Threads 480 px wide");
-  expect(v.headerText()).toBe("3 of 5");
+  expect(v.headerText()).toBe("3 of 7");
   // The heading leads: the pin and "Pinned", then the agent badge, then the count.
   const head = (x) => { H.rec = []; x.header(theme); const c = rec; H.rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
   const hv = head(v);
   expect(hv.indexOf("Pinned")).toBeGreaterThanOrEqual(0);
-  expect(hv.indexOf("Pinned")).toBeLessThan(hv.indexOf("3 of 5"));
+  expect(hv.indexOf("Pinned")).toBeLessThan(hv.indexOf("3 of 7"));
   H.rec = []; v.header(theme); const ids = rec.filter((e) => e[0] === "id").map((e) => e[1]); H.rec = null;
   expect(ids.indexOf("th-pinned-heading")).toBeGreaterThanOrEqual(0);
   expect(ids.indexOf("th-pinned-heading")).toBeLessThan(ids.indexOf("th-badge"));
@@ -4733,6 +4709,7 @@ test("v in a pane under 480 px shows Pinned in the same pane: pins oldest first,
   for (const p of [...v.pinnedList()]) v.unpin(p, cx);
   v.setView("pinned");
   expect(v.rows()).toEqual([expect.objectContaining({ kind: "note", key: "pins:none" })]);
+  expect(v.rows()[0].text).toMatch(/and 1 to 7 bring you back to each\.$/);
   draw(v, cx);
 });
 
@@ -4781,20 +4758,29 @@ test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700,
   w.listH = 900;
   w.rowsKey = null;
   expect(w.rows()[0].kind).not.toBe("spacer");
-  // Its header: the Pinned heading, no badge, the pin button and "All turns", with room for "1 of 5" at 240 px.
-  w.width = 240;
-  expect(w.headerButtons().map((b) => [b[0], b[6]])).toEqual([["th-pinned", "All turns"]]);
-  expect(w.headerButtons()[0][2]).toBe("Back to Threads, all turns (v)");
-  // From 300 px its pin button is back: Unpin for the selected pin, the one way to unpin a
-  // closed pin with the mouse (the list's header has none).
-  w.width = 320;
-  expect(w.headerButtons().map((b) => b[0])).toEqual(["th-pin", "th-pinned"]);
+  // Its header: the Pinned heading, no badge, the unpin button and "All turns", at every
+  // width: the unpin is the one click that needs no row's place, so it stays under 300 px
+  // too, where a list that scrolls has no row buttons.
+  for (const width of [240, 320]) {
+    w.width = width;
+    expect(w.headerButtons().map((b) => [b[0], b[6]])).toEqual([["th-pin", null], ["th-pinned", "All turns"]]);
+    expect(w.headerButtons()[1][2]).toBe("Back to Threads, all turns (v)");
+  }
+  // At 240 px the text keeps 30 px: the pane less its 20 px padding, the heading's 74, the
+  // unpin's 32 and All turns' 84. "1 of 7" (40 px) would not fit there, so under 300 px the
+  // count reads "1/7" (20 px); from 300 px it is "1 of 7" again.
   w.width = 240;
   expect(w.headerLayout().badge).toBe(0);
-  expect(w.headerLayout().text).toBeGreaterThanOrEqual(Math.ceil("1 of 5".length * 6.6));
+  expect(w.headerLayout().text).toBe(240 - 20 - 74 - 32 - 84);
+  expect(w.headerLayout().text).toBeGreaterThanOrEqual(Math.ceil("1/7".length * 6.6));
+  expect(w.headerLayout().text).toBeLessThan(Math.ceil("1 of 7".length * 6.6));
   H.rec = []; w.header(theme); const wh = rec; H.rec = null;
   const ws = wh.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
-  expect(ws.slice(0, 2)).toEqual(["Pinned", "1 of 5"]);
+  expect(ws.slice(0, 2)).toEqual(["Pinned", "1/7"]);
+  w.width = 320;
+  expect(w.headerText()).toBe("1 of 7");
+  expect(w.headerLayout().text).toBeGreaterThanOrEqual(Math.ceil("1 of 7".length * 6.6));
+  w.width = 240;
   expect(ws).not.toContain("Claude");
   // The accent: the header's tint, and its bar along the top.
   expect(wh.some((e) => e[0] === "bg" && e[1] === alphaForTest(theme.accent, 0.08))).toBe(true);
@@ -4836,16 +4822,6 @@ test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700,
 
 // ---- day headers in the Pinned view ----------------------------------------------------
 
-// Pins the turns at these indexes, in this order, then shows the Pinned view in this pane.
-async function pinsShown(fixtureFlags, order, width = 400) {
-  const { v, cx, keys } = await pinPane(...fixtureFlags);
-  const k = keys();
-  for (const i of order) { v.sel = k[i]; v.action("pin", cx); }
-  v.width = width;
-  v.key(keyEv("v"), cx); // under 480 px, v shows Pinned in this pane
-  expect(v.view).toBe("pinned");
-  return { v, cx, k };
-}
 const headsAndPins = (v) => v.rows().filter((r) => r.kind === "pday" || r.kind === "turn")
   .map((r) => (r.kind === "pday" ? `day ${r.name}` : `pin ${r.pinNo}`));
 
@@ -4974,8 +4950,6 @@ test("Pinned column: the same day headers as the narrow view, drawn as a compact
 // The Pinned column's list at a 1150 px window, measured on a test window (debug listH): the
 // pane is 1032 px, less the header, the footer and the day strip.
 const PIN_LIST_H = 926;
-const compactPins = (v) => v.rows().filter((r) => r.kind === "turn");
-const itemWords = (v, r) => { H.rec = []; v.item(theme, r, true, v.height(r)); const c = rec; H.rec = null; return c; };
 
 test("Pinned view: each closed pin is a compact row, its digit, number, time, two prompt lines and one reply line", async () => {
   const { v, cx } = await pinsShown(["--extra", "6"], [7, 3, 5]);
@@ -5049,6 +5023,22 @@ test("Pinned column: five pins, one day apart, fit a 240 to 400 px column at a 1
   expect(compactPins(v).every((r) => v.height(r) === pinRowHeight(2))).toBe(true);
   expect(long.reduce((sum, r) => sum + v.height(r), 0)).toBeLessThanOrEqual(PIN_LIST_H);
   draw(v, cx);
+});
+
+test("Pinned column: seven pins, one day apart, fit a 240 to 400 px column at a 1150 px window without scrolling", async () => {
+  const { v, cx } = await pinsShown(["--only", "7", "--gap", "86400"], [6, 4, 2, 0, 3, 1, 5]);
+  for (const width of [240, 280, 320, 400]) {
+    v.width = width;
+    v.rowsKey = null;
+    const rows = v.rows();
+    expect(rows.filter((r) => r.kind === "pday").length).toBe(7);
+    expect(compactPins(v).map((r) => r.pinNo)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    draw(v, cx);
+    expect(lastList.sizes.reduce((x, y) => x + y, 0)).toBeLessThanOrEqual(PIN_LIST_H);
+  }
+  // The longest rows (two prompt lines each) with a pill over each still fit.
+  const pday = v.rows().find((r) => r.kind === "pday");
+  expect(7 * pinRowHeight(2) + 7 * v.height(pday)).toBeLessThanOrEqual(PIN_LIST_H);
 });
 
 test("a closed running pin keeps its clock ticking: the 1 s timer still sees a live turn shown", async () => {
@@ -7135,11 +7125,6 @@ function grownFixture() {
   return { file, rest: `${lines.slice(cut).join("\n")}\n` };
 }
 
-// The list as gpui draws it with only the rows from start to end on screen.
-function drawRange(v, start, end) {
-  const rows = v.rows();
-  v.listItems(theme, rows, v.slotsMemo ?? rows.map(() => 40), { start, end: end ?? rows.length }, true, false);
-}
 
 test("mdParts keeps the texts used last: a long reply on screen is not split again while the probe walks hundreds of others", async () => {
   const { v } = await pane(fixture());
@@ -7930,8 +7915,6 @@ function runningFixture() {
   return { file, rest: `${lines.slice(cut).join("\n")}\n` };
 }
 
-// A frame with the person's scroll before it: the same rows, the top row moved.
-function scrolled(v, start, end) { drawRange(v, start, end); }
 function atBottom(v, cx) {
   draw(v, cx);
   v.toBottom = false;
@@ -12520,7 +12503,6 @@ async function sendersPane(senders = SENDS, file = null) {
 const lastSenders = () => JSON.parse(settingsWrites.at(-1)).senders;
 function typeSender(v, k, text, cx) { v.senderInputs[k].set_value(text); v.senderInputs[k].handlers.change({}, cx); }
 const idsAt = (c, id) => c.findIndex((e) => e[0] === "id" && e[1] === id);
-const ownOf = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
 
 test("Agent messages ends with a Sender rules row, with its count and how many are not working; it opens the page, as the command does", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
