@@ -12,8 +12,8 @@
 // one binding has to stay; app and the mod copied into it, made once; and main.js and ui.js
 // themselves, loaded once, with their own module state.
 import { mock, expect } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -102,9 +102,10 @@ export const hostReads = { settings: 0, panes: 0, terminals: 0 };
 export let marks = null;
 export const stamp = (what) => { if (marks) marks.push([what, performance.now(), { ...work }]); };
 export let pinWrites = 0;
-export let extractHook = null;
-// The extractor's calls, as [offset, bytes], while a test collects them.
+// The extractor's calls, as [offset, bytes], while a test collects them (an array; null: not collected).
 export let extractCalls = null;
+// A test's stand-in for the extractor: its answer, or null to run it.
+export let extractHook = null;
 // What the pane wrote to settings.json (the viewer keeps its panel choice there). With
 // keepSettings set, a write is also what the next read finds, as on disk.
 export const settingsWrites = [];
@@ -198,8 +199,8 @@ export function reset() {
   herdrVersion = "0.1.17";
   marks = null;
   pinWrites = 0;
-  extractHook = null;
   extractCalls = null;
+  extractHook = null;
   keepSettings = false;
   settingsStale = false;
   lacking.clear();
@@ -237,6 +238,7 @@ export function setup() {
     exec: async (cmd, args) => {
       // A link the pane opens is logged, never opened.
       if (cmd === "open") { log.push(["open", ...args]); return { code: 0, stdout: "", stderr: "" }; }
+      // The extractor's calls, as [offset, bytes], while a test collects them.
       if (extractCalls && String(args?.[0] ?? "").endsWith("core/extract.sh")) extractCalls.push([Number(args[2]), Number(args[3])]);
       // A test's stand-in for the extractor: its answer, or null to run it.
       if (extractHook && String(args?.[0] ?? "").endsWith("core/extract.sh")) { const r = await extractHook(args); if (r) return r; }
@@ -295,16 +297,48 @@ export async function settle(v, tries = 200) {
   throw new Error("the pane never finished reading");
 }
 
-export async function pane(file) {
+// The pane cuts its row build and its shaping into slices by the clock (buildMax and
+// shapeMax, in ms of performance.now). A test pane takes each to its end in one slice, so
+// rows() or a frame right after any change sees every row and every shape on any machine:
+// on the real clock a busy machine cut the slices short, and a test read part of the rows.
+// What is built, and in what order, is the same. Only the clock's part is replaced: a light
+// frame still shapes nothing, and a budget a test sets (shapeBudget, or its own buildMax)
+// still holds. pane() and paneWith() give such a pane. The opt-out, for a test about the
+// slices themselves or one that times the pane's work: pane(file, { sliced: true }), or
+// sliced(v) before the pane's first rows are built.
+const WHOLE_SLICE_MS = 1e9;
+export function unsliced(v) {
+  const shapeMax = Object.getPrototypeOf(v).shapeMax;
+  v.buildMax = () => WHOLE_SLICE_MS;
+  v.shapeMax = function () { return this.light || this.shapeBudget != null ? shapeMax.call(this) : WHOLE_SLICE_MS; };
+  return v;
+}
+export function sliced(v) { delete v.buildMax; delete v.shapeMax; return v; }
+
+export async function pane(file, { sliced: keep = false } = {}) {
   state = {
     terminals: [{ address: "t4", status: "idle", name: "claude" }],
     panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
     props: { terminal: "t4", transcript: file, debug: true }, shared: {},
   };
-  const v = new Threads();
+  const v = keep ? new Threads() : unsliced(new Threads());
   const cx = makeCx();
   v.init(state.props, cx);
   await settle(v);
+  return { v, cx };
+}
+// A pane on file whose cx is set up by prep before init (hooks must be in place for the read).
+export async function paneWith(file, prep, tries = 200) {
+  state = {
+    terminals: [{ address: "t4", status: "idle", name: "claude" }],
+    panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
+    props: { terminal: "t4", transcript: file, debug: true }, shared: {},
+  };
+  const v = unsliced(new Threads());
+  const cx = makeCx();
+  prep?.(cx, v);
+  v.init(state.props, cx);
+  if (tries) await settle(v, tries);
   return { v, cx };
 }
 
@@ -314,33 +348,6 @@ export function draw(v, cx) { v.render(cx); v.report(); return v; }
 // The busy fixture, made once per process (as app is: reset() leaves it).
 let busyFile = null;
 export const busy = () => (busyFile ??= fixture("--busy", "130"));
-// A pane on file whose cx is set up by prep before init (hooks must be in place for the read).
-export async function paneWith(file, prep, tries = 200) {
-  state = {
-    terminals: [{ address: "t4", status: "idle", name: "claude" }],
-    panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
-    props: { terminal: "t4", transcript: file, debug: true }, shared: {},
-  };
-  const v = new Threads();
-  const cx = makeCx();
-  prep?.(cx, v);
-  v.init(state.props, cx);
-  if (tries) await settle(v, tries);
-  return { v, cx };
-}
-// A pane armed by a draw before its session is read, whose read stops (each step waits) while
-// hold() says so. step(f) lets it go on until f() holds, then stops it again.
-export async function openingPane(file, holdAt = () => true) {
-  let hold = holdAt;
-  const waiting = [];
-  const { v, cx } = await paneWith(file, (cx) => {
-    cx.sleepHook = () => (hold(v) ? new Promise((r) => waiting.push(r)) : new Promise((r) => setTimeout(r, 0)));
-  }, 0);
-  await until(() => v.current() && v.reading, "the read");
-  draw(v, cx);
-  const go = (f) => { hold = f; for (const r of waiting.splice(0)) r(); };
-  return { v, cx, go, waiting };
-}
 // The text a draw gave its elements.
 export const drawnText = (calls) => calls.filter(([n, x]) => n === "child" && typeof x === "string").map(([, x]) => x);
 
@@ -360,6 +367,17 @@ export function dropTimers(v, cx) { cx.timers = []; v.shapeNext = false; v.build
 // Draws until the rows are built and shaped. Rows left waiting are reshaped in the frame the
 // 0 ms timer asks for (reshapeDue), as Herdr runs it: a draw alone never takes them up.
 export function settleRows(v, cx) { draw(v, cx); for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || v.shapeLeft > 0); k++) { cx.flush(0); draw(v, cx); } }
+// Runs fn, which must not await, with performance.now held where it was, then puts the real
+// clock back. The slices a draw cuts by now() (BUILD_MS, SHAPE_MS) then never run out, so each
+// frame fn draws does all the work it has, and fn draws the same frames on any machine,
+// however busy. A held clock never runs ahead of the real one, so no time the pane keeps from
+// inside fn is in its future afterwards.
+export function heldClock(fn) {
+  const real = performance.now;
+  const t = real.call(performance);
+  performance.now = () => t;
+  try { return fn(); } finally { performance.now = real; }
+}
 
 // Herdr's v_virtual_list as the pane meets it: an offset in px that new heights do not move,
 // held to the list at each layout; scroll_to_item to the near edge or the middle, and
@@ -440,23 +458,6 @@ export function openAt(v, cx, sim, w) {
 }
 
 // The harness's settings a test changes (an importer cannot assign an imported binding).
-// A transcript whose first turn has its end in the second chunk: tool results of 100 KB each
-// fill the first 2 MiB, then the reply and the turn's end. Made-up words only.
-export function endInChunk2() {
-  const at = (s) => new Date(Date.UTC(2026, 10, 2, 9, 0, s)).toISOString();
-  const lines = [{ type: "user", uuid: "u1", timestamp: at(0), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: "Read every cart module and sum the totals" } }];
-  for (let i = 0; i < 30; i++) {
-    lines.push({ type: "assistant", uuid: `a${i}`, timestamp: at(1 + i), sessionId: "s", message: { id: `m${i}`, role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { file_path: `cart/part${i}.ts` } }] } });
-    lines.push({ type: "user", uuid: `r${i}`, timestamp: at(1 + i), sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: `const kaz${i} = "${"zo".repeat(50000)}";` }] } });
-  }
-  lines.push({ type: "assistant", uuid: "z", timestamp: at(40), sessionId: "s", message: { id: "mz", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "The totals agree." }], usage: { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 9000, cache_creation_input_tokens: 300 } } });
-  lines.push({ type: "system", subtype: "turn_duration", durationMs: 40000, uuid: "d", timestamp: at(40), sessionId: "s" });
-  const dir = mkdtempSync(join(tmpdir(), "threads-open-"));
-  const file = join(dir, "o.jsonl");
-  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
-  return file;
-}
-
 export const H = {
   get calls() { return calls; },
   set calls(x) { calls = x; },
@@ -492,10 +493,10 @@ export const H = {
   set marks(x) { marks = x; },
   get pinWrites() { return pinWrites; },
   set pinWrites(x) { pinWrites = x; },
-  get extractHook() { return extractHook; },
-  set extractHook(x) { extractHook = x; },
   get extractCalls() { return extractCalls; },
   set extractCalls(x) { extractCalls = x; },
+  get extractHook() { return extractHook; },
+  set extractHook(x) { extractHook = x; },
   get keepSettings() { return keepSettings; },
   set keepSettings(x) { keepSettings = x; },
   get settingsStale() { return settingsStale; },
@@ -549,3 +550,49 @@ export function drawRange(v, start, end) {
 // A frame with the person's scroll before it: the same rows, the top row moved.
 export function scrolled(v, start, end) { drawRange(v, start, end); }
 export const ownOf = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+// The opening's pane and transcript, and the S1 timing child: render.test.js and
+// read-chunk.test.js use them.
+// A pane armed by a draw before its session is read, whose read stops (each step waits) while
+// hold() says so. step(f) lets it go on until f() holds, then stops it again.
+export async function openingPane(file, holdAt = () => true) {
+  let hold = holdAt;
+  const waiting = [];
+  const { v, cx } = await paneWith(file, (cx) => {
+    cx.sleepHook = () => (hold(v) ? new Promise((r) => waiting.push(r)) : new Promise((r) => setTimeout(r, 0)));
+  }, 0);
+  await until(() => v.current() && v.reading, "the read");
+  draw(v, cx);
+  const go = (f) => { hold = f; for (const r of waiting.splice(0)) r(); };
+  return { v, cx, go, waiting };
+}
+// A transcript whose first turn has its end in the second chunk: tool results of 100 KB each
+// fill the first 2 MiB, then the reply and the turn's end. Made-up words only.
+export function endInChunk2() {
+  const at = (s) => new Date(Date.UTC(2026, 10, 2, 9, 0, s)).toISOString();
+  const lines = [{ type: "user", uuid: "u1", timestamp: at(0), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: "Read every cart module and sum the totals" } }];
+  for (let i = 0; i < 30; i++) {
+    lines.push({ type: "assistant", uuid: `a${i}`, timestamp: at(1 + i), sessionId: "s", message: { id: `m${i}`, role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { file_path: `cart/part${i}.ts` } }] } });
+    lines.push({ type: "user", uuid: `r${i}`, timestamp: at(1 + i), sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: `const kaz${i} = "${"zo".repeat(50000)}";` }] } });
+  }
+  lines.push({ type: "assistant", uuid: "z", timestamp: at(40), sessionId: "s", message: { id: "mz", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "The totals agree." }], usage: { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 9000, cache_creation_input_tokens: 300 } } });
+  lines.push({ type: "system", subtype: "turn_duration", durationMs: 40000, uuid: "d", timestamp: at(40), sessionId: "s" });
+  const dir = mkdtempSync(join(tmpdir(), "threads-open-"));
+  const file = join(dir, "o.jsonl");
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  return file;
+}
+// Runs the S1 child (with env added) and gives what it wrote.
+export async function s1Child(env = {}) {
+  const out = join(mkdtempSync(join(tmpdir(), "threads-timing-")), "out.json");
+  // Not execFileSync: while the child runs, this process stays free to take a signal, so a
+  // stopped run ends the child too (test/preload.js) instead of leaving it reading.
+  await new Promise((resolve, reject) => {
+    const child = spawn("bun", ["test", join(root, "test/render.test.js"), "-t", "S1 child"], {
+      env: { ...process.env, THREADS_CHILD: "read-timing", THREADS_OUT: out, ...env }, stdio: "ignore",
+    });
+    const timer = setTimeout(() => child.kill(), 120000);
+    child.on("error", reject);
+    child.on("exit", (code, sig) => { clearTimeout(timer); if (code === 0) resolve(); else reject(new Error(`the timing child ended with ${code ?? sig}`)); });
+  });
+  return JSON.parse(readFileSync(out, "utf8"));
+}

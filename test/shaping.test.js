@@ -1,166 +1,36 @@
-// bun test: the read's extractor calls (2 MiB first, growing to 16 MiB, halved after a cut)
-// and shaping by a turn's expected cost, on the render harness (test/render-harness.js),
-// which setup() starts clean. Moved from render.test.js, which is near the 1 MiB lint-size
-// limit.
+// bun test: the shaping pass's budget (280): a turn whose expected cost would take a draw past
+// its shaping time waits for the next draw, unless it is the draw's first; a turn left for its
+// cost ends the pass that met it; and the rate it expects is learned from long turns. On the
+// render harness (test/render-harness.js). Moved whole from render.test.js.
 import { test, expect } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync, statSync, appendFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  draw,
-  endInChunk2,
-  extractCalls,
-  fixture,
-  H,
-  openingPane,
-  pane,
-  settle,
-  setup,
-} from "./render-harness.js";
+import { fixture, H, pane, setup } from "./render-harness.js";
 
 setup();
 
-test("a read takes 2 MiB first, so the first figures come at once, then twice the last call up to 16 MiB and no more; a read of new bytes starts at 2 MiB again", async () => {
-  H.extractCalls = [];
-  try {
-    const file = endInChunk2();
-    // Ten more copies of its tool results: about 33 MB in all, past 2 + 4 + 8 + 16 MiB, so a
-    // fifth call shows the growth stops at 16 MiB. Tool results print almost nothing, so no
-    // call is cut.
-    const extra = readFileSync(file, "utf8").split("\n").filter((l) => l.includes("tool_result")).join("\n");
-    writeFileSync(file, `${readFileSync(file, "utf8")}${`${extra}\n`.repeat(10)}`);
-    const size = statSync(file).size;
-    expect(size).toBeGreaterThan(30 * 2 ** 20 + 2 ** 20);
-    const { v, cx, go } = await openingPane(file);
-    go(() => false);
-    await settle(v);
-    const s = v.current();
-    expect(s.loaded).toBe(true);
-    expect(s.offset).toBe(size);
-    // The opening's one read of the file's last 2 MiB for the newest prompt, then the read.
-    const peek = extractCalls.filter(([o, n]) => o === size - 2 * 2 ** 20 && n === 2 * 2 ** 20);
-    expect(peek.length).toBe(1);
-    const first = extractCalls.filter((x) => x !== peek[0] && x[0] < size);
-    expect(first.map(([, n]) => n / 2 ** 20)).toEqual([2, 4, 8, 16, 16]);
-    expect(first[0][0]).toBe(0);
-    // New bytes on a session read to its end: 2 MiB first again.
-    extractCalls.length = 0;
-    appendFileSync(file, `${JSON.stringify({ type: "user", uuid: "u9", timestamp: new Date(Date.UTC(2026, 10, 2, 10, 0, 0)).toISOString(), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: "One more" } })}\n`);
-    v.read(cx);
-    await settle(v);
-    expect(extractCalls[0]).toEqual([size, 2 * 2 ** 20]);
-    draw(v, cx);
-  } finally { H.extractCalls = null; }
-});
-
-test("a read whose call the extractor had to cut (dense text) asks for half from then on", async () => {
-  H.extractCalls = [];
-  try {
-    // 140 turns, each a prompt and a 100 KB reply of plain words: about 14 MB, nearly all of it
-    // events, so 12 MB in one call would print more than the extractor's 6 MiB.
-    const at = (i, s) => new Date(Date.UTC(2026, 10, 2, 9, 0, 0) + i * 60000 + s * 1000).toISOString();
-    const words = "kaz vel orin tam sula pero dint ".repeat(3300);
-    const lines = [];
-    for (let i = 0; i < 140; i++) {
-      lines.push({ type: "user", uuid: `u${i}`, timestamp: at(i, 0), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: `Turn ${i + 1}: write it out` } });
-      lines.push({ type: "assistant", uuid: `a${i}`, timestamp: at(i, 30), sessionId: "s", message: { id: `m${i}`, role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: words }] } });
-      lines.push({ type: "system", subtype: "turn_duration", durationMs: 30000, uuid: `d${i}`, timestamp: at(i, 30), sessionId: "s" });
-    }
-    const dir = mkdtempSync(join(tmpdir(), "threads-dense-"));
-    const file = join(dir, "d.jsonl");
-    writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
-    const size = statSync(file).size;
-    const { v, go } = await openingPane(file);
-    go(() => false);
-    await settle(v);
-    expect(v.current().offset).toBe(size);
-    const MiB = 2 ** 20;
-    const read = extractCalls.filter(([o, n]) => !(o === size - 2 * MiB && n === 2 * MiB));
-    // The 8 MiB call was cut to 4 (its events past 6 MiB): the calls after it ask for 4, not
-    // for a size already cut, and do not grow again.
-    expect(read.map(([, n]) => n / MiB)).toEqual([2, 4, 8, 4, 4]);
-    expect(v.current().turns.length).toBe(140);
-  } finally { H.extractCalls = null; }
-});
-
-// Tool results of 100 KB each, as endInChunk2's, appended to file until it is past bytes.
-function padTools(file, bytes) {
-  const extra = `${readFileSync(file, "utf8").split("\n").filter((l) => l.includes("tool_result")).join("\n")}\n`;
-  let size = statSync(file).size;
-  while (size < bytes) { appendFileSync(file, extra); size += extra.length; }
+// Runs f with performance.now held, and v.reshape taking msPerChar ms a character of its turn
+// (prompt and reply, as shapeLearn counts them) on that clock: a reshape of known cost,
+// whatever the machine is doing meanwhile. The clock and v.reshape are put back after.
+function reshapeAt(v, msPerChar, f) {
+  const real = globalThis.performance.now;
+  const own = Object.hasOwn(v, "reshape");
+  const reshape = v.reshape;
+  let clk = 1e6;
+  globalThis.performance.now = () => clk;
+  v.reshape = function (turn, live, q, P, why, text) {
+    const out = reshape.call(this, turn, live, q, P, why, text);
+    clk += (turn.prompt.length + (text?.length ?? 0)) * msPerChar;
+    return out;
+  };
+  try { return f(); } finally {
+    globalThis.performance.now = real;
+    if (own) v.reshape = reshape;
+    else delete v.reshape;
+  }
 }
-
-test("a call that stops short of a line longer than the rest of it was not cut: the read's calls stay at 16 MiB", async () => {
-  H.extractCalls = [];
-  try {
-    const MiB = 2 ** 20;
-    // 17 MiB of tool results, then a 14 MiB one: the 16 MiB call, which starts by 14 MiB,
-    // ends before that line does, so it reads about 3 MiB and nothing is cut.
-    const file = endInChunk2();
-    padTools(file, 17 * MiB);
-    const at = new Date(Date.UTC(2026, 10, 2, 9, 50, 0)).toISOString();
-    appendFileSync(file, `${JSON.stringify({ type: "assistant", uuid: "aL", timestamp: at, sessionId: "s", message: { id: "mL", role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: "tL", name: "Read", input: { file_path: "cart/log.txt" } }] } })}\n`);
-    appendFileSync(file, `${JSON.stringify({ type: "user", uuid: "rL", timestamp: at, sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tL", content: "zo".repeat(7 * MiB) }] } })}\n`);
-    appendFileSync(file, `${JSON.stringify({ type: "assistant", uuid: "zL", timestamp: at, sessionId: "s", message: { id: "mz2", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "The log is long." }] } })}\n`);
-    const size = statSync(file).size;
-    const { v, go } = await openingPane(file);
-    go(() => false);
-    await settle(v);
-    expect(v.current().offset).toBe(size);
-    const read = extractCalls.filter(([o, n]) => !(o === size - 2 * MiB && n === 2 * MiB));
-    // Not 2, 4, 8, 16, 8, 32: a short call is not a cut one, so the cap stays at 16 MiB and the
-    // next call reads the long line whole.
-    expect(read.map(([, n]) => n / MiB)).toEqual([2, 4, 8, 16, 16]);
-  } finally { H.extractCalls = null; }
-}, 60000);
-
-test("a file replaced in the middle of a read starts again at 2 MiB with the full ceiling, whatever the cut file's calls had come down to", async () => {
-  H.extractCalls = [];
-  const MiB = 2 ** 20;
-  try {
-    // The dense session of the test before (its 8 MiB call is cut to 4), with a first uuid of
-    // its own, so the file that replaces it starts differently.
-    const at = (i, s) => new Date(Date.UTC(2026, 10, 2, 9, 0, 0) + i * 60000 + s * 1000).toISOString();
-    const words = "kaz vel orin tam sula pero dint ".repeat(3300);
-    const lines = [];
-    for (let i = 0; i < 140; i++) {
-      lines.push({ type: "user", uuid: `dd${String(i).padStart(6, "0")}`, timestamp: at(i, 0), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: `Turn ${i + 1}: write it out` } });
-      lines.push({ type: "assistant", uuid: `de${String(i).padStart(6, "0")}`, timestamp: at(i, 30), sessionId: "s", message: { id: `m${i}`, role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: words }] } });
-    }
-    const dir = mkdtempSync(join(tmpdir(), "threads-swap-"));
-    const file = join(dir, "d.jsonl");
-    writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
-    // The file that replaces it: endInChunk2's, past 2 + 4 + 8 MiB.
-    const other = endInChunk2();
-    padTools(other, 21 * MiB);
-    const size = statSync(file).size;
-    // The first call after the cut one (a 4 MiB call from past the start): the file is
-    // replaced just before it reads.
-    let swapAt = -1;
-    H.extractHook = async (args) => {
-      const [o, n] = [Number(args[2]), Number(args[3])];
-      if (swapAt < 0 && o > 0 && o !== size - 2 * MiB && n === 4 * MiB && extractCalls.filter(([, k]) => k === 8 * MiB).length) {
-        swapAt = extractCalls.length - 1;
-        writeFileSync(file, readFileSync(other));
-      }
-      return null;
-    };
-    const { v, go } = await openingPane(file);
-    go(() => false);
-    await settle(v);
-    expect(swapAt).toBeGreaterThan(0);
-    const newSize = statSync(other).size;
-    expect(v.current().offset).toBe(newSize);
-    const before = extractCalls.slice(0, swapAt + 1).filter(([o, n]) => !(o === size - 2 * MiB && n === 2 * MiB));
-    expect(before.map(([, n]) => n / MiB)).toEqual([2, 4, 8, 4]);
-    // From the top of the new file: 2 MiB, then growing to 16 MiB, not held at the 4 MiB the
-    // cut file had come down to.
-    const after = extractCalls.slice(swapAt + 1).filter(([o, n]) => !(o === newSize - 2 * MiB && n === 2 * MiB));
-    expect(after[0]).toEqual([0, 2 * MiB]);
-    expect(after.map(([, n]) => n / MiB)).toEqual([2, 4, 8, 16]);
-  } finally { H.extractCalls = null; H.extractHook = null; }
-}, 60000);
 
 test("shaping: a turn whose expected cost would take the draw past its shaping time waits for the next draw, unless it is the draw's first", async () => {
   const { v } = await pane(fixture("--extra", "3"));
@@ -182,13 +52,24 @@ test("shaping: a turn whose expected cost would take the draw past its shaping t
     again();
     v.shapeSpent = 0;
     v.shapeLeft = 0;
-    const sh = v.shape(t);
+    // Its reshape takes 0.1 µs a character on a held clock (reshapeAt), so what it teaches is
+    // known however long the reshape really took.
+    const sh = reshapeAt(v, 1e-4, () => v.shape(t));
     expect(v.shapeStale).toBe(false);
     expect(v.shapeLeft).toBe(0);
     expect(sh).not.toBe(before);
-    // Shaping it taught the rate: here far under 1 µs a character, so it fell by a tenth.
-    expect(v.shapeRate).toBeLessThan(1e-3);
-    expect(v.shapeRate).toBeGreaterThanOrEqual(0.9e-3 - 1e-12);
+    // Shaping it taught the rate: under 1 µs a character, so it fell by a tenth.
+    expect(v.shapeRate).toBeCloseTo(0.9e-3, 12);
+    // At 1 µs a character the rate holds; past it, the rate rises to what the reshape took.
+    again();
+    v.shapeSpent = 0;
+    v.shapeRate = 1e-3;
+    reshapeAt(v, 1e-3, () => v.shape(t));
+    expect(v.shapeRate).toBeCloseTo(1e-3, 12);
+    again();
+    v.shapeSpent = 0;
+    reshapeAt(v, 2e-3, () => v.shape(t));
+    expect(v.shapeRate).toBeCloseTo(2e-3, 12);
     // A short turn still fits: its cost is its length at the same rate.
     const short = v.current().turns[0];
     again();

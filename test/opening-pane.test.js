@@ -15,6 +15,7 @@ import {
   endInChunk2,
   fixture,
   frame,
+  heldClock,
   H,
   keyEv,
   lastList,
@@ -565,26 +566,33 @@ test("the opening: the first session's stat and peek that come back after anothe
 });
 
 test("a later session still being read, with no loading state over it, shows no running turn before a later chunk has the turn's end", async () => {
-  let second = null;
-  const { v, cx, go } = await openingPane(busy(), (v) => second != null && v.current() === second && second.offset > 0);
-  v.opening.at -= 1000;
-  go((v) => second != null && v.current() === second && second.offset > 0);
-  await settle(v);
-  openFrames(v, cx);
-  expect(v.openActive()).toBe(false);
-  // A new session (a /clear) whose first turn ends in its second chunk, held after the first.
-  v.adopt({ kind: "found", id: "made-up-second", file: endInChunk2(), live: true }, cx);
-  second = v.current();
-  await until(() => second.offset > 0, "the second session's first chunk");
-  expect([Boolean(second.loaded), second.turns.length, second.turns[0].done]).toEqual([false, 1, false]);
-  expect(v.isLive(second, 1, 0)).toBe(false);
-  // Not the running turn: no live row, and no working card.
-  const rows = v.rows();
-  expect(rows.filter((r) => r.live || r.running).map((r) => r.kind)).toEqual([]);
-  expect(drawnText(frame(v, cx)).join("|")).not.toMatch(/No reply yet|Working/);
-  go(() => false);
-  await settle(v);
-  expect(second.turns[0].done).toBe(true);
+  // The rows on screen, as Herdr's list draws them: with every row of the busy fixture drawn
+  // in each frame, the frames to the end of the opening took 15 s, and over 30 s on CI.
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    let second = null;
+    const { v, cx, go } = await openingPane(busy(), (v) => second != null && v.current() === second && second.offset > 0);
+    v.opening.at -= 1000;
+    go((v) => second != null && v.current() === second && second.offset > 0);
+    await settle(v);
+    // On a held clock, the same frames on any machine: on the real one a busy machine needed
+    // more of them, as each slice of the rows did less.
+    heldClock(() => openFrames(v, cx));
+    expect(v.openActive()).toBe(false);
+    // A new session (a /clear) whose first turn ends in its second chunk, held after the first.
+    v.adopt({ kind: "found", id: "made-up-second", file: endInChunk2(), live: true }, cx);
+    second = v.current();
+    await until(() => second.offset > 0, "the second session's first chunk");
+    expect([Boolean(second.loaded), second.turns.length, second.turns[0].done]).toEqual([false, 1, false]);
+    expect(v.isLive(second, 1, 0)).toBe(false);
+    // Not the running turn: no live row, and no working card.
+    const rows = v.rows();
+    expect(rows.filter((r) => r.live || r.running).map((r) => r.kind)).toEqual([]);
+    expect(drawnText(frame(v, cx)).join("|")).not.toMatch(/No reply yet|Working/);
+    go(() => false);
+    await settle(v);
+    expect(second.turns[0].done).toBe(true);
+  } finally { H.listWindow = null; }
 }, 30000);
 
 test("the agent message counts follow a session's read ending: a running agent turn counted hidden while read is shown once it is", async () => {
