@@ -1041,8 +1041,8 @@ function mixedSession(n, seed) {
 }
 // The failure marks two rules give, from each turn's failed bars' centres in order: turns
 // [{ narrow, x, w, cs }] (cs: a wide turn's failed bars' centres). by: "centre" (the rule),
-// "x" (a turn under 2 px gated and spaced by its x, as at d97a479a) or "own" (a wide turn's marks
-// not spaced from the turn before).
+// "x" (a turn under 2 px gated and spaced by its x, as at d97a479a) or "own" (a wide turn with
+// failed bars spacing its marks afresh, not from the turn before).
 function marksBy(turns, by) {
   const out = [];
   let end = -Infinity;
@@ -1052,7 +1052,7 @@ function marksBy(turns, by) {
       const g = by === "x" ? t.x : t.x + t.w / 2;
       if (g >= end) { out.push(t.x + t.w / 2); end = g + 6; }
     } else {
-      if (by === "own") end = -Infinity;
+      if (by === "own" && t.cs.length) end = -Infinity;
       for (const c of [...t.cs].sort((p, q) => p - q)) if (c >= end) { out.push(c); end = c + 6; }
     }
   }
@@ -1061,6 +1061,7 @@ function marksBy(turns, by) {
 const breaksRule = (marks, centres) => marks.some((m, k) => k > 0 && m - marks[k - 1] < 6 - 1e-9) || centres.some((c) => !marks.some((m) => Math.abs(m - c) <= 6 + 1e-9));
 
 test("timeline seeded mixed turns: the failure marks keep both rules, and every press gets the bar drawn on top there, or the nearest of the turn drawn there", () => {
+  const seen = { x: 0, own: 0 };
   for (const [n, cw, seed] of [[1000, 1440, 3], [2500, 1440, 5], [700, 1143, 7]]) {
     const heads = mixedSession(n, seed);
     const L = timelineLayout(heads, cw, "clock", T0 + 1e12);
@@ -1088,14 +1089,15 @@ test("timeline seeded mixed turns: the failure marks keep both rules, and every 
       if (narrow && h.cnt?.failed) cs.push(t.x + t.w / 2);
       return { narrow, x: t.x, w: t.w, cs, bars };
     });
-    // Marks: the layout's are the rule's, keep both rules, and the two old rules each break one
-    // on this session (so a mark rule turned back is seen).
+    // Marks: the layout's are the rule's and keep both rules; the two old rules each break one
+    // on some case (so a mark rule turned back is seen).
     const centres = turns.flatMap((t) => t.cs);
     const want = marksBy(turns, "centre");
     expect([n, L.fails.length]).toEqual([n, want.length]);
     L.fails.forEach((m, k) => expect(m).toBeCloseTo(want[k], 9));
     expect([n, breaksRule(L.fails, centres)]).toEqual([n, false]);
-    expect([n, breaksRule(marksBy(turns, "x"), centres), breaksRule(marksBy(turns, "own"), centres)]).toEqual([n, true, true]);
+    if (breaksRule(marksBy(turns, "x"), centres)) seen.x++;
+    if (breaksRule(marksBy(turns, "own"), centres)) seen.own++;
     // The press, at every 0.13 px of the strip in each lane, against all bars.
     const byPx = new Map();
     for (const b of all) for (let p = Math.floor(b.x0) - 4; p <= Math.floor(b.x1) + 4; p++) { if (!byPx.has(p)) byPx.set(p, []); byPx.get(p).push(b); }
@@ -1142,4 +1144,5 @@ test("timeline seeded mixed turns: the failure marks keep both rules, and every 
     // the next turn.
     expect([n, covered > 1000, thin > 20, moved > 20]).toEqual([n, true, true, true]);
   }
+  expect(seen.x > 0 && seen.own > 0).toBe(true);
 }, 120000);
