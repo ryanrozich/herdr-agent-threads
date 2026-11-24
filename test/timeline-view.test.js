@@ -472,7 +472,7 @@ test("timeline view: a press above the half-height track gets the full bar there
   let pick = null;
   for (const r of b.ledgerRows().filter((x) => x.kind === "tr")) {
     const { box, lane } = barOf(b, r.key);
-    if (!box || box.track !== 1 || TL.TL_LANES[lane] !== "tools") continue;
+    if (box?.track !== 1 || TL.TL_LANES[lane] !== "tools") continue;
     const ti = M.L.index.get(b.turnOfRow(r.key));
     const h = M.heads[ti];
     const mid = (box.x0 + box.x1) / 2;
@@ -480,7 +480,7 @@ test("timeline view: a press above the half-height track gets the full bar there
     let full = null;
     h.stepRows.forEach((s, si) => {
       const o = TL.tlBar(M.L, M.heads, ti, si);
-      if (!o || o.track !== 0 || LEDGER_KINDS[s.lk]?.lane !== "tools" || o.x0 > mid || o.x1 < mid || !listed.has(s.key)) return;
+      if (o?.track !== 0 || LEDGER_KINDS[s.lk]?.lane !== "tools" || o.x0 > mid || o.x1 < mid || !listed.has(s.key)) return;
       const rank = LEDGER_KINDS[s.lk].ink === "failed" ? 2 : 0;
       const w = o.x1 - o.x0;
       if (!full || rank > full.rank || (rank === full.rank && w < full.w)) full = { key: s.key, rank, w };
