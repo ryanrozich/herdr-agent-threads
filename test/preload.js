@@ -144,7 +144,7 @@ afterAll(cleanup);
 // write back to its start before each test (the pins and settings records, the logs, the
 // panes). A global hook reaches every test file; one set by the harness would bind to a
 // single file.
-beforeEach(() => { globalThis.__threadsHarnessEachTest?.(); });
+beforeEach(() => globalThis.__threadsHarnessEachTest?.());
 for (const [sig, n] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGHUP", 1]]) {
   process.on(sig, () => { cleanup(); process.exit(128 + n); });
 }

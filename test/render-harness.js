@@ -252,8 +252,39 @@ export function setup() {
 setup();
 // Before every test, in every file: test/preload.js runs this hook (a hook registered here
 // would bind only to the file that loaded this module first).
-globalThis.__threadsHarnessEachTest = reset;
 export const { default: Threads } = await import("../mods/agent-threads/main.js");
+// The panes that saved or queued a pin save, so a save still in flight when its test ends can
+// be let finish, and a queued one dropped, before the next test (a late write would land in
+// that test's pins record).
+const pinPanes = new Set();
+for (const name of ["savePins", "pinChangedLater"]) {
+  const real = Threads.prototype[name];
+  Threads.prototype[name] = function (...args) { pinPanes.add(this); return real.apply(this, args); };
+}
+// Waits for every pin save in flight (the chain each pane keeps), not for the clock.
+export async function pinsIdle() {
+  const give = new Promise((r) => setTimeout(r, 2000)).then(() => { throw new Error("a pin save never ended"); });
+  const idle = (async () => {
+    for (let again = true; again;) {
+      again = false;
+      for (const v of pinPanes) {
+        const chain = v.pinChain;
+        await chain?.catch(() => {});
+        await new Promise((r) => setTimeout(r, 0)); // the pane's follow-up (pinSaving, readPins) runs
+        if (v.pinChain !== chain || v.pinSaving) again = true;
+      }
+    }
+  })();
+  await Promise.race([idle, give]);
+}
+// Before every test: the last test's panes finish their saves and drop their queued ones,
+// then everything goes back to its start.
+globalThis.__threadsHarnessEachTest = async () => {
+  for (const v of pinPanes) v.pinDueAt = null;
+  await pinsIdle();
+  pinPanes.clear();
+  reset();
+};
 export const { thumbSize, tileRow, bubbleMax, ROW, columnWidth, railLook, rowHeight, MD_MAX, alpha: alphaForTest, dayKey } = await import("../mods/agent-threads/ui.js");
 
 export function fixture(...flags) {
@@ -520,10 +551,10 @@ export const PINS = join(app, "data/agent-threads/pins.json");
 export async function pinPane(...flags) {
   delete recordFiles[PINS];
   const { v, cx } = await pane(fixture(...flags));
-  await new Promise((r) => setTimeout(r, 20)); // the first read of pins.json
+  await until(() => v.pinsRead, "the first read of pins.json");
   return { v, cx, keys: () => v.turnKeys(v.rows()) };
 }
-export const saved = async () => { await new Promise((r) => setTimeout(r, 30)); return JSON.parse(recordFiles[PINS] ?? "{}"); };
+export const saved = async () => { await pinsIdle(); return JSON.parse(recordFiles[PINS] ?? "{}"); };
 export const allPins = (j) => Object.values(j.sessions ?? {}).flatMap((x) => x.pins);
 export const toastText = (v) => v.toast?.text ?? null;
 // Pins the turns at these indexes, in this order, then shows the Pinned view in this pane.

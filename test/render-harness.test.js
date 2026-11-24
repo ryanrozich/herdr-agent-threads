@@ -104,3 +104,22 @@ test("leak check, part 2: the next test starts with no pins, no records and no s
   expect(H.keepSettings).toBe(false);
   expect(settingsWrites).toEqual([]);
 });
+
+// A save still in flight when its test ends: the pane's pin chain is held, then released
+// after the test has ended. The reset waits for it, so its write cannot reach the next test.
+test("leak check, part 3: a pin save still in flight when the test ends", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "3");
+  let release;
+  v.pinChain = new Promise((r) => { release = r; });
+  v.sel = keys()[0];
+  v.action("pin", cx);
+  setTimeout(release, 50);
+  expect(H.recordFiles[PINS]).toBeUndefined(); // not written yet
+});
+
+test("leak check, part 4: the save of the test before does not land in this one", async () => {
+  expect(H.recordFiles).toEqual({});
+  await new Promise((r) => setTimeout(r, 150));
+  expect(H.recordFiles).toEqual({});
+  expect(H.pinWrites).toBe(0);
+});
