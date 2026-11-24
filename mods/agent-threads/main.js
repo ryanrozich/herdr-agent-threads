@@ -4869,6 +4869,7 @@ export default class Threads extends View {
     if (stale) (this.codeDue ??= new Set()).add(key);
     const selecting = this.selecting === key && this.selEditor?.key === key && text;
     const linked = selecting ? null : this.linkedSegs(key, segs);
+    const pm = selecting ? null : this.partMemo(key, text);
     if (selecting) {
       const per = Math.max(8, Math.floor((this.inner() - 26) / SELECT_CHAR));
       const lines = wrappedLines(this.selEditor.text.slice(0, SELECT_CHARS), per);
@@ -4893,7 +4894,7 @@ export default class Threads extends View {
         // A table is an item of its own ("table"), so it can run wider than the reading line.
         const parts = mdChunks(md).flatMap((src) => splitTables(src));
         parts.forEach(({ text: src, table }, j) => {
-          const lk = parts.length === 1 && linked?.[i] && src === seg.text ? linked[i] : this.partLinks(src);
+          const lk = parts.length === 1 && linked?.[i] && src === seg.text ? linked[i] : this.partLinks(pm, src);
           const sub = parts.length === 1 ? `${i}` : `${i}.${j}`;
           push({ ...item, kind: "md", key: `md:${key}:${sub}`, md: lk.md, src, links: lk.links, ...(j ? { gap: this.paraGap() } : {}), ...(table ? { table: true } : {}) });
         });
@@ -5969,16 +5970,25 @@ export default class Threads extends View {
   linkCtx() { return { repo: this.remote.repo, owner: this.remote.owner, host: this.remote.host ?? null }; }
   repoSig() { return this.remote.repo ? `${this.remote.host ?? ""}/${this.remote.repo}` : ""; }
   linkOne(md) { return this.links.length ? linkify(md, this.links, this.linkCtx()) : { md, links: 0 }; }
-  // A part of an open reply with the link rules applied, kept per text until the rules or the
-  // repo change. Every part of a 200,000-character reply linked in one draw took longer than
-  // Herdr's time for a draw ("This view could not be re-rendered", interrupted), and each
-  // draw after that began them again. New parts share the reshaping time (SHAPE_MS) with the
-  // heights after them: past it a part shows as written, and the next frame links it.
-  partLinks(src) {
-    if (!this.links.length) return { md: src, links: 0 };
+  // The parts of an open reply with the link rules applied, kept per open turn until its reply,
+  // the rules or the repo change, and dropped once the turn is closed. Every part of a
+  // 200,000-character reply linked in one draw took longer than Herdr's time for a draw ("This
+  // view could not be re-rendered", interrupted), and each draw after that began them again.
+  // One memo for every open turn, emptied when full, did the same once the open cards held
+  // more parts than it kept. New parts share the reshaping time (SHAPE_MS) with the heights
+  // after them: past it a part shows as written, and the next frame links it.
+  partMemo(key, text) {
     const ver = `${this.linksVer}|${this.links.length}|${this.repoSig()}|${this.remote.owner ?? ""}`;
-    if (this.partLinked?.ver !== ver || this.partLinked.map.size > 400) this.partLinked = { ver, map: new Map() };
-    const known = this.partLinked.map.get(src);
+    if (this.partLinked?.ver !== ver) this.partLinked = { ver, turns: new Map() };
+    const turns = this.partLinked.turns;
+    if (turns.size > this.open.size) for (const k of turns.keys()) if (!this.open.has(k)) turns.delete(k);
+    let m = turns.get(key);
+    if (m?.text !== text) turns.set(key, (m = { text, map: new Map() }));
+    return m.map;
+  }
+  partLinks(memo, src) {
+    if (!this.links.length) return { md: src, links: 0 };
+    const known = memo.get(src);
     if (known) return known;
     if ((this.shapeSpent ?? 0) > this.shapeMax()) {
       this.shapeLeft = (this.shapeLeft ?? 0) + 1;
@@ -5987,10 +5997,11 @@ export default class Threads extends View {
     }
     const t0 = now();
     const lk = this.linkOne(src);
-    this.partLinked.map.set(src, lk);
+    memo.set(src, lk);
     this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
     return lk;
   }
+
 
   // Focuses the terminal this pane reads, by its pane id: pane.focus {terminal} prefers the
   // first layout block that shows the terminal, which can be another pane than the one
