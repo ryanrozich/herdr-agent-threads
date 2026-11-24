@@ -972,7 +972,8 @@ test("a reply coming in while a 2,000-turn tail is checked again, then a turn af
   // The reply came while the tail was part checked.
   expect(tail != null && tail.next < s.turns.length - 2).toBe(true);
   expect(counting(v)).toBe(false);
-  expect(want(v, "look again").keys.length).toBe(2006);
+  // 2,000 + 3 + the reply's turn + 1.
+  expect(want(v, "look again").keys.length).toBe(2005);
   expect(places(v)).toEqual(want(v, "look again"));
 }, 120000);
 
