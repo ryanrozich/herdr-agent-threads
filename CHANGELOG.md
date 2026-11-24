@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.2.0](https://github.com/ryanrozich/herdr-agent-threads/compare/v1.1.0...v1.2.0) (2026-11-24)
+
+
+### Features
+
+* **atif:** TRD-40 — keep the model's thinking in the export and run Harbor's own Claude and Codex cases against it ([#222](https://github.com/ryanrozich/herdr-agent-threads/issues/222)) ([87cdcf2](https://github.com/ryanrozich/herdr-agent-threads/commit/87cdcf206d7be8c1c6fd5a2b963c749fe4a0bdce))
+* **atif:** TRD-41 — failed calls, helper steps and raw inputs use Harbor's field names ([#232](https://github.com/ryanrozich/herdr-agent-threads/issues/232)) ([5f30763](https://github.com/ryanrozich/herdr-agent-threads/commit/5f3076306e565be55a1c8b07742a172c055c040f))
+* **search:** step through matches newest first with n and Shift n (TRD-37) ([#221](https://github.com/ryanrozich/herdr-agent-threads/issues/221)) ([715bd53](https://github.com/ryanrozich/herdr-agent-threads/commit/715bd53e19038efee94ff97d0df0fbaf82da7d5f))
+* **senders:** a Sender rules page, the mark on a matched message, and a refused Keep that keeps what was typed ([#135](https://github.com/ryanrozich/herdr-agent-threads/issues/135)) ([24e0ddf](https://github.com/ryanrozich/herdr-agent-threads/commit/24e0ddf4abb60b56e5842c177042855e06544db4))
+* **senders:** the rule editor says how many typed prompts the rule matches ([#245](https://github.com/ryanrozich/herdr-agent-threads/issues/245)) ([032356f](https://github.com/ryanrozich/herdr-agent-threads/commit/032356f6a5cd9e9357ceeddf465eda1871b1fdfc))
+* **senders:** the templates stay under the rules while a rule can be added ([#249](https://github.com/ryanrozich/herdr-agent-threads/issues/249)) ([27ac6b3](https://github.com/ryanrozich/herdr-agent-threads/commit/27ac6b39501bf796efa277a4c1ed49a05fefe429))
+* **settings:** Tab reaches every control on the settings card ([#124](https://github.com/ryanrozich/herdr-agent-threads/issues/124)) ([62b2e25](https://github.com/ryanrozich/herdr-agent-threads/commit/62b2e25b0b1ca233bab8c35e9a17e3fc889470bd))
+* **threads:** a resize re-wraps only when the column steps, and waits 1.2 s for the pane to be still ([#258](https://github.com/ryanrozich/herdr-agent-threads/issues/258)) ([3044ad1](https://github.com/ryanrozich/herdr-agent-threads/commit/3044ad143783030643a5936be7753de82cbd9813))
+* **threads:** agent messages are off the rail by default, and up and down follow the rail ([#247](https://github.com/ryanrozich/herdr-agent-threads/issues/247)) ([caa782e](https://github.com/ryanrozich/herdr-agent-threads/commit/caa782efda976c6c15bcdfa0a7cb3244545dad9b))
+* **threads:** open a session at its end, still, with a loading state while it reads ([#264](https://github.com/ryanrozich/herdr-agent-threads/issues/264)) ([9c07d8b](https://github.com/ryanrozich/herdr-agent-threads/commit/9c07d8b3a2798732cd83e6703ee2ea3461c047d7))
+* **threads:** unpin from the Pinned list in one click, and keep seven pins ([#281](https://github.com/ryanrozich/herdr-agent-threads/issues/281)) ([c3d589f](https://github.com/ryanrozich/herdr-agent-threads/commit/c3d589f0f3541dffcaa58c0657ba55d3a05ce772))
+* **trajectory:** TRD-22 the Trajectory ledger in its own pane beside the Chat ([#233](https://github.com/ryanrozich/herdr-agent-threads/issues/233)) ([f7a7a39](https://github.com/ryanrozich/herdr-agent-threads/commit/f7a7a39d29008892c0c13d234068f0c5a6d79e95))
+* **trajectory:** TRD-24 a Trajectory pane knows its dock (part 1 of 4, no visible change) ([#277](https://github.com/ryanrozich/herdr-agent-threads/issues/277)) ([d1ce235](https://github.com/ryanrozich/herdr-agent-threads/commit/d1ce23542990ace3fd30244ec933ef9ea3f67283))
+* **trajectory:** TRD-24 the bottom dock's layout (part 2 of 4, no move yet) ([#278](https://github.com/ryanrozich/herdr-agent-threads/issues/278)) ([0e21299](https://github.com/ryanrozich/herdr-agent-threads/commit/0e21299a689b9f52aa70f3360180d2e8c3538d51))
+
+
+### Bug Fixes
+
+* **atif:** Antigravity results say when a call failed and ended (TRD-97 part two) ([#275](https://github.com/ryanrozich/herdr-agent-threads/issues/275)) ([635967f](https://github.com/ryanrozich/herdr-agent-threads/commit/635967fe23ea716674d6d95174d34ac057ce4149))
+* **atif:** OpenCode results say whether the call failed and when it ended ([#266](https://github.com/ryanrozich/herdr-agent-threads/issues/266)) ([c76ce2e](https://github.com/ryanrozich/herdr-agent-threads/commit/c76ce2ee3275cc559640e98ca1f6fedc13469533))
+* **atif:** Pi results say whether the call failed and when it ended (TRD-97 part one) ([#274](https://github.com/ryanrozich/herdr-agent-threads/issues/274)) ([215f3bf](https://github.com/ryanrozich/herdr-agent-threads/commit/215f3bfc2f5518b1d4f3497fac900e8b98b8b2f0))
+* **atif:** TRD-51 — a Codex subagent rollout read alone starts at its own history ([#225](https://github.com/ryanrozich/herdr-agent-threads/issues/225)) ([b47a13b](https://github.com/ryanrozich/herdr-agent-threads/commit/b47a13b47a06057141742754adabbf80573aa9ee))
+* open turns break a long hyphenated token after a "-", not inside a word ([#122](https://github.com/ryanrozich/herdr-agent-threads/issues/122)) ([2b5d4d0](https://github.com/ryanrozich/herdr-agent-threads/commit/2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c))
+* **rules:** the Pattern and Finds hints wrap inside the card ([#250](https://github.com/ryanrozich/herdr-agent-threads/issues/250)) ([50b32b5](https://github.com/ryanrozich/herdr-agent-threads/commit/50b32b5ab47a77fe3d2abce2f53166ffa923c550))
+* **threads:** a press in a sender rule's field takes the ring, and closes the type picker ([#273](https://github.com/ryanrozich/herdr-agent-threads/issues/273)) ([efd7236](https://github.com/ryanrozich/herdr-agent-threads/commit/efd723600d867f79accf728b7ba7911169a7d589))
+* **threads:** the Chat, the Trajectory and the Pinned column size and drag by weights on Herdr 0.1.18 ([#301](https://github.com/ryanrozich/herdr-agent-threads/issues/301)) ([48e7d63](https://github.com/ryanrozich/herdr-agent-threads/commit/48e7d6332bdfc36faefbb8069ed94c78f9e809a5))
+* **threads:** the Threads pane drags by the edge you grab ([#244](https://github.com/ryanrozich/herdr-agent-threads/issues/244)) ([46d54fd](https://github.com/ryanrozich/herdr-agent-threads/commit/46d54fd5846145cd015c2527c0b34f5fb8a7fcb0))
+* **threads:** TRD-75 a compact Trajectory below 200 px ([#262](https://github.com/ryanrozich/herdr-agent-threads/issues/262)) ([72992c2](https://github.com/ryanrozich/herdr-agent-threads/commit/72992c2078519053fe08319f1b30a52d95f01e1a))
+* **threads:** TRD-75 the Chat and its Pinned column drag as a pair on weights ([#260](https://github.com/ryanrozich/herdr-agent-threads/issues/260)) ([81a4e6b](https://github.com/ryanrozich/herdr-agent-threads/commit/81a4e6b0f9bf9229cb6faad675dad155a4d5f42b))
+* **threads:** TRD-75 the Chat, the Trajectory and the Pinned column on weights together ([#261](https://github.com/ryanrozich/herdr-agent-threads/issues/261)) ([3ffa634](https://github.com/ryanrozich/herdr-agent-threads/commit/3ffa6340a308d81c7a01a2061d01a75a03f900ee))
+* **turns:** show the replies the agent writes after background-task notices ([#255](https://github.com/ryanrozich/herdr-agent-threads/issues/255)) ([79c9864](https://github.com/ryanrozich/herdr-agent-threads/commit/79c9864fb195ad3e467a3dc0a7041ed73995a68f))
+
+
+### Performance Improvements
+
+* **threads:** read a large session in growing calls, and keep shaping to the draw's time ([#280](https://github.com/ryanrozich/herdr-agent-threads/issues/280)) ([10f6362](https://github.com/ryanrozich/herdr-agent-threads/commit/10f6362ff196d987807112efb74638cb248f7885))
+
 ## [1.1.0](https://github.com/ryanrozich/herdr-agent-threads/compare/v1.0.0...v1.1.0) (2026-11-19)
 
 
