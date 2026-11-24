@@ -55,3 +55,32 @@ test("a full build Herdr stops between sizing a row and indexing it leaves no ro
   const parts = v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length;
   expect([hit, run.stops, indexed, parts > 0, v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i)]).toEqual([true, 1, true, true, true]);
 }, 60000);
+
+// Herdr can stop a draw after the rebuild of an opened turn's rows (spliceRows) has dropped
+// the turn's old rows from the index and before it has put the new ones in. A rebuild that
+// went on from there found the turn in no row, took it for one not shown, and gave up: the
+// card never drew. The build after such a stop is of every row, and a splice that runs to its
+// end leaves the next open or close to a splice again.
+test("a draw Herdr stops halfway through putting an opened card's rows in leaves no card half built: the next build is of every row, and the card draws", async () => {
+  const { v, cx, key, run } = await longReply(400);
+  settleRows(v, cx);
+  dropTimers(v, cx);
+  let armed = true;
+  // The splice that puts the new rows in, after the old ones' index entries are dropped.
+  const rows = v.baseRows;
+  rows.splice = function (...a) { if (a.length > 2 && armed) { armed = false; throw STOP; } return Array.prototype.splice.apply(this, a); };
+  v.toggle(key, cx);
+  for (let k = 0; k < 20; k++) { run.frame(); cx.flush?.(0); }
+  delete rows.splice;
+  const parts = v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length;
+  const agree = v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i);
+  // Closed again: a splice, which takes the card's rows out.
+  const made = [];
+  const spliceRows = v.spliceRows;
+  v.spliceRows = function (...a) { const out = spliceRows.apply(this, a); made.push(out); return out; };
+  v.toggle(key, cx);
+  settleRows(v, cx);
+  delete v.spliceRows;
+  const left = v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length;
+  expect([armed, run.stops, parts > 0, agree, made.includes(true), left, v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i)]).toEqual([false, 1, true, true, true, 0, true]);
+}, 60000);
