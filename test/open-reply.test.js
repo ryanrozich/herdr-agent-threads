@@ -577,6 +577,30 @@ test("an open card's rows put in by a splice leave no mark: the next card opened
   expect([made.length > 0 && made.every(Boolean), made.filter(Boolean).length >= 2, v.splicing, v.open.has(keys[0]) && v.open.has(keys[1])]).toEqual([true, true, false, true]);
 }, 60000);
 
+// A splice of two open turns, the second of them a turn its session no longer holds (its object
+// replaced, the session's version and length the same): the splice gives up before it changes
+// any row, so it leaves no mark and nothing half spliced, and a build of every row follows.
+test("a splice that finds an open turn missing from its session changes no row and leaves no mark", async () => {
+  const { v, cx, keys } = await openLong(["Short reply one.", "Short reply two."], true);
+  const s = v.sessions.at(-1);
+  const i0 = s.turns.findIndex((t) => `${v.sessions.length - 1}:${t.n}` === keys[0]);
+  const made = [];
+  const sr = v.spliceRows;
+  v.spliceRows = function (...a) { const before = this.baseRows.slice(); const out = sr.apply(this, a); made.push([out, this.splicing, before.length]); return out; };
+  s.turns[i0] = { ...s.turns[i0] };
+  v.toggle(keys[0], cx);
+  v.toggle(keys[1], cx);
+  draw(v, cx);
+  delete v.spliceRows;
+  const first = made[0];
+  settleRows(v, cx);
+  const got = v.baseRows.map((x) => x.key).join("\n");
+  const agree = v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i);
+  v.rowsKey = null;
+  settleRows(v, cx);
+  expect([first?.[0], first?.[1], agree, got === v.baseRows.map((x) => x.key).join("\n")]).toEqual([false, false, true, true]);
+}, 60000);
+
 // Herdr's stop is the script engine's interrupt, which falls at any call: a full build can be
 // stopped after it has sized a row and before it has put the row in its index. The build goes
 // on from its next row, so that row was in no index: here the open card's head, which every
