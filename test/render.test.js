@@ -20085,9 +20085,7 @@ async function leaveDuringDrain(go, pace = 16) {
     const aim = go(v, cx, key, step, host) ?? key;
     const frames = [];
     for (let k = 0, after = 0; (v.rowJob || v.staleRows?.length || after++ < 4) && k < 400; k++) {
-      // A scroll to a place waits SCROLL_WAIT_MS at most while rows are left, and a return waits
-      // 400 ms at most for its parts (the harness measures none): as if both had passed.
-      if (v.scrollTo) v.scrollWait = 1;
+      // A return waits 400 ms at most for its parts (the harness measures none): as if passed.
       if (v.scrollTo?.until) v.scrollTo.until = 1;
       // pace ms a frame for the timers too: a landing's scrolls and lift come over several frames.
       for (const x of cx.timers) x.ms -= pace;

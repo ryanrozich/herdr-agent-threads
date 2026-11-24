@@ -9199,7 +9199,10 @@ export default class Threads extends View {
     // rig showed a 79 px slip there, and a 15 px one on a short session's first frame shown).
     const partsDue = bottomHeld && (this.openActive() || this.openHold);
     if (this.openHold && !this.openUnsettled()) this.openHold = false;
-    if ((this.toBottom || this.scrollTo) && (unsettled || partsDue) && (bottomHeld || Date.now() - this.scrollWait < SCROLL_WAIT_MS)) {
+    // A jump during the opening's drain (openHold) does not wait for the rows to settle: the
+    // landing holds its place (openLand) while the rows above are reshaped. Elsewhere it waits
+    // up to SCROLL_WAIT_MS, as before.
+    if ((this.toBottom || this.scrollTo) && (unsettled || partsDue) && (bottomHeld || (!this.openHold && Date.now() - this.scrollWait < SCROLL_WAIT_MS))) {
       // A return's wait for the probe (until, below) starts once the rows are reshaped.
       if (this.scrollTo?.until) this.scrollTo.until = Math.max(this.scrollTo.until, Date.now() + 400);
       // To the end in this frame, every frame while they settle: rows reshaped above the view
