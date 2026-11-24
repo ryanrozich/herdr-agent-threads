@@ -7243,6 +7243,9 @@ test("a render Herdr stopped is asked for again, and counted even when the next 
   tick.fn(cx);
   expect(notes).toBe(0);
   v.renderAt -= 300;
+  // No poke yet counts from 0 on the clock, which a test run alone can reach the tick before
+  // 250 ms past: the last poke is put as far back as the draw.
+  v.cutPokeAt = v.renderAt;
   tick.fn(cx);
   tick.fn(cx);
   expect(notes).toBe(1);
