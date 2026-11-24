@@ -7260,6 +7260,11 @@ export default class Threads extends View {
       this.renderOpen = false;
       this.cutUntil = now() + CUT_MS;
       this.renderCuts = (this.renderCuts ?? 0) + 1;
+      // The marks for the next draw are cleared by the timers they asked for, which a stopped
+      // render may have lost: left set, they never asked again, and a rows build never went on.
+      this.buildNext = false;
+      this.shapeNext = false;
+      this.probeNext = false;
       // A scroll the stopped render took on (the jump to the newest turn, a return to a pin)
       // is asked for again: it was taken before the list was drawn.
       if (this.renderWant?.toBottom) this.toBottom = true;
