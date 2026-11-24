@@ -20065,7 +20065,7 @@ test("TRD-24: the Pinned pair with no terminal beside it and a Trajectory along 
   try {
     state.panes = state.panes.filter((p) => p.pane !== "p1");
     bottomMapped();
-    log = [];
+    H.log = [];
     t.w.pairBegin(t.w.me(), t.w.mainPane(), 722, 380, null, t.cxw);
     expect(resizes()).toEqual([{ id: "p2", weight: 722 }, { id: "p3", weight: 380 }]);
   } finally { t.restore(); }
@@ -20084,12 +20084,12 @@ test("TRD-24: with a Trajectory along the bottom the Chat makes no row of it, we
     expect(v.rowPanes()).toBe(null);
     expect(v.rowSibling(v.me())).toBe("p1");
     // y goes to it, as to one on the right, and the Trajectory button says so.
-    log = [];
+    H.log = [];
     v.key(keyEv("y"), cx);
     expect(log).toEqual([["run", "pane.focus", { pane: "p5" }]]);
     expect(v.floatButtons()[1].slice(2, 5)).toEqual(["Go to the Trajectory (y)", "trajectory", true]);
     // The Chat's own weight, as with nothing beside it.
-    log = [];
+    H.log = [];
     v.toWeight();
     expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
     // Its probe goes on past the next poll: a bottom pane does not stop it.
@@ -20098,7 +20098,7 @@ test("TRD-24: with a Trajectory along the bottom the Chat makes no row of it, we
     v.weighing = null;
     v.weightNow = 1;
     // The bottom pane closes: it took no width, so none comes back, and no weight follows.
-    log = [];
+    H.log = [];
     state.panes = state.panes.filter((p) => p.pane !== "p5");
     v.poll(cx);
     now += 1000;
@@ -20134,7 +20134,7 @@ test("TRD-24: a Trajectory pane opened along the bottom says so in its map entry
   b.report();
   expect(state.shared["threads.debug"]["t4:trajectory"].traj).toMatchObject({ pane: true, dock: "bottom" });
   // - and = do nothing here and pass on to Herdr.
-  log = [];
+  H.log = [];
   let stopped = 0;
   cb.stop_propagation = () => { stopped++; };
   b.key(keyEv("="), cb);
