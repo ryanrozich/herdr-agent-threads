@@ -1331,8 +1331,9 @@ test("an older step whose slice ends before it reaches a match goes on by itself
   expect(r.draws).toBeGreaterThan(0);
 }, 300000);
 
-// A step going on by itself is called off by a key, or by a new selection (a click on a turn):
-// the draws after it leave the selection where that put it.
+// A step going on by itself is called off by a key, here p (the selected turn pinned, the
+// selection left where it is), or by a new selection (a click on a turn): the draws after it
+// leave the selection where that put it.
 for (const how of ["a key", "a new selection"]) test(`an older step going on by itself is called off by ${how}, and the draws after it leave the selection there`, async () => {
   const z = await zebraTail();
   const { v, cx, base, last } = z;
@@ -1342,7 +1343,7 @@ for (const how of ["a key", "a new selection"]) test(`an older step going on by 
     zebraSearch(z);
     v.action("olderMatch", cx);
     r.stayed = v.sel === last;
-    if (how === "a key") v.action("newerMatch", cx);
+    if (how === "a key") v.action("pin", cx);
     else v.sel = `0:${base + 1200}`;
     r.sel = v.sel;
     for (let k = 0; k < 40; k++) drawOnce(v, cx);
