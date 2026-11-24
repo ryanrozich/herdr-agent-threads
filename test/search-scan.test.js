@@ -1317,6 +1317,10 @@ for (const seed of PLANTED) test(`a long piece read at once, a hidden match chec
     v.sel = `0:${s.turns.length}`;
     v.action("search:rename", cx);
     settleRows(v, cx);
+    // Counted before the piece comes, however long the real clock took: the piece is then a
+    // tail checked again after the scan is done.
+    for (let k = 0; k < 200 && counting(v); k++) { cx.flush(0); draw(v, cx); }
+    expect(counting(v)).toBe(false);
     X = 2;
     const draws = [];
     try {
