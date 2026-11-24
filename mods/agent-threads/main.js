@@ -6514,6 +6514,9 @@ export default class Threads extends View {
       case "newerMatch": {
         const h = this.hitsNow();
         if (h) {
+          // The tail's pop stopped between its writes leaves top - 1 with no entry: top goes
+          // down to it, the pop's last write (hitsNow finishes the pop first; this is a guard).
+          while (h.top > h.bot && !h.by.has(h.top - 1)) h.top--;
           const older = name === "olderMatch";
           const next = () => {
             const p = h.at.get(this.sel);
