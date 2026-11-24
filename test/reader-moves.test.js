@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cardKey, keyAction, ledgerKey, ringKey } from "../mods/agent-threads/ui.js";
 import { trajCompact } from "../mods/agent-threads/ledger.js";
-import { H, drawRange, fixture, keyEv, pane, pinsShown, root, settleRows, setup, state } from "./render-harness.js";
+import { H, draw, drawRange, fixture, keyEv, pane, pinsShown, root, settleRows, setup, simList, state } from "./render-harness.js";
 
 setup();
 
@@ -472,6 +472,32 @@ test("the pane's own scroll landing counts nothing: a scroll just asked for, and
     bar: step(() => { v.scrollBusyUntil = 0; v.stickCheck(rows, false, 2); }),
   };
   expect(got).toEqual({ asked: 0, landed: 0, bar: 1 });
+});
+
+// debugScroll stands for the reader's scroll in the still tests: it counts once, at the
+// command. Its landing, a frame or more later, moves the top row with no wheel and no busy
+// window (a person's scroll sets none), and must not count again. Followed through the frames
+// that take it, as Herdr's list does (simList), not only through command().
+test("debugScroll counts once, through the frames that land it", async () => {
+  const { v, cx } = await pane(fixture("--extra", "30"));
+  settleRows(v, cx);
+  v.listH = 300;
+  const sim = simList(v);
+  try {
+    v.follow = false;
+    v.toBottom = false;
+    v.pinningUntil = 0;
+    v.scrollBusyUntil = 0;
+    v.scrollTo = null;
+    for (let k = 0; k < 3; k++) { cx.flush(20); draw(v, cx); }
+    const keys = v.turnKeys(v.rows());
+    const top0 = sim.last().key;
+    const n0 = moves(v);
+    v.command(`debugScroll:${keys[Math.floor(keys.length / 2)]}`, cx);
+    const atCommand = moves(v) - n0;
+    for (let k = 0; k < 8; k++) { cx.flush(20); draw(v, cx); }
+    expect({ debug: v.debug, atCommand, moved: sim.last().key !== top0, asked: v.scrollTo, all: moves(v) - n0 }).toEqual({ debug: true, atCommand: 1, moved: true, asked: null, all: 1 });
+  } finally { H.listWindow = null; }
 });
 
 // The outline and the Pinned view scroll on the same list: a scroll it reports with no wheel
