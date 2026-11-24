@@ -628,11 +628,13 @@ test("a jump in the same frame as a pending scroll to the end lands on its turn"
 // characters (prompt and reply) at one rate, ms for a turn of the read's mean size, as the
 // estimate (shapeCost) assumes. liveMs: what the running turn's reshape costs, by its length.
 // With until the waited time counts as a rows build's (buildSpent), work the draw bounds; without
-// it base is fixed work, in the draw's fixed cost (frameBase). With stop the base and the stop
-// start at the move: the opening drains as it does without them.
+// it base is fixed work, in the draw's fixed cost (frameBase). base may be a function of the
+// frame after the move (0 the move's own). With stop the base and the stop start at the move:
+// the opening drains as it does without them. The clock goes on 16 ms a frame besides the
+// draw's own time, so the 5 s of plain draws after a stop end.
 const wheelUp = (v, _cx, host) => { host.off = Math.max(0, host.off - 30000 / v.zoom()); v.listWheel({ delta: { y: 30000 } }); };
 const STOP = new Error("stopped at 50 ms");
-async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, stop = false, stream = false, after = 0, liveMs = 0 } = {}) {
+async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, stop = false, stream = false, after = 0, liveMs = 0, ahead = false } = {}) {
   const realPerf = performance.now.bind(performance);
   let clock = 0;
   performance.now = () => (clock += 0.001);
@@ -666,12 +668,22 @@ async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, st
       if (past(this)) throw STOP;
       return reshape.apply(this, a);
     };
+    let fk = -1;
+    const baseAt = () => (typeof base === "function" ? base(fk) : base);
+    // With ahead the fixed work is done in every draw before the owed row (react, ahead of
+    // payOwed), not in the walk.
+    const react = v.react;
+    v.react = function (...a) {
+      if (ahead && this.renderOpen && (!stop || on)) clock += baseAt();
+      return react.apply(this, a);
+    };
     const walk = v.reshapeStale;
     v.reshapeStale = function (...a) {
-      if (this.renderOpen && (!stop || on)) {
+      if (!ahead && this.renderOpen && (!stop || on)) {
         // Work bounded from the render's start is a rows build's or a fill's, timed as such
         // (buildSpent), so not in the draw's fixed cost (frameBase); a fixed base is in it.
-        const w = until ? Math.max(0, this.renderAt + base - clock) : base;
+        const b = baseAt();
+        const w = until ? Math.max(0, this.renderAt + b - clock) : b;
         clock += w;
         if (until) this.buildSpent = (this.buildSpent ?? 0) + w;
       }
@@ -689,6 +701,7 @@ async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, st
     v.scroll = { scroll_to_bottom() { host.end = true; }, scroll_to_item(i) { host.want = i; } };
     let stopped = false;
     const step = () => {
+      clock += 16;
       for (const x of cx.timers) x.ms -= 16;
       cx.flush(16);
       starts = [];
@@ -721,6 +734,7 @@ async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, st
     if (move === wheelUp) expect(v.follow).toBe(false);
     const out = [];
     for (let k = 0; k < frames; k++) {
+      fk = k;
       if (stream) live.after.push(`More of the reply, line ${k}.`);
       const stale = new Set(v.staleRows);
       const s = step();
@@ -728,7 +742,7 @@ async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, st
       const off = v.rowsMemo[0]?.kind === "spacer" || v.rowsMemo[0]?.kind === "gap" ? 1 : 0;
       // Rows taken this frame from outside the rows drawn.
       const away = [...stale].filter((i) => !v.staleRows.includes(i) && (i + off < r.start || i + off >= r.end)).length;
-      out.push({ starts: s, seen, offLate, over, blank: blankInView(v), drawn: r.end - r.start, away, stopped, owed: v.owedPaid ?? 0 });
+      out.push({ starts: s, seen, offLate, over, blank: blankInView(v), drawn: r.end - r.start, away, stopped, owed: v.owedPaid ?? 0, owedAlone: v.owedAlone ?? 0, alone: v.aloneRun ?? 0 });
     }
     return { v, frames: out };
   } finally { H.listWindow = null; performance.now = realPerf; }
@@ -860,10 +874,11 @@ test("the opening: a draw that reaches its walk late starts no reshape expected 
 // The same with the work before the walk fixed (30, 38 or 44 ms that the draw does whatever
 // else it does, in its fixed cost, frameBase) and 2 ms after it: a reshape of c ms fits no draw
 // like these where c + 32, 40 or 46 and the margin pass 50 ms. Each such row alone fits a light
-// draw (the draws before the wheel, with no fixed work: lightBase), so it is refused and owed,
-// not run alone: no draw stopped, and the rows stay to reshape until a lighter draw comes (the
-// work is what to cut), counted as owed rows held (owedHeld): the reader sees them blank (five
-// rows on screen in every frame at 44 ms with rows of 8). Where it fits, the rows fill as
+// draw (the draws before the wheel, with no fixed work: lightBase), so in these 30 frames it is
+// refused and owed, not run alone: no draw stopped, the rows left to reshape, counted in the
+// draws that held an owed row (owedHeldDraws): the reader sees them blank (five rows on screen
+// in every frame at 44 ms with rows of 8). Past OWED_DRAWS (64) such a row runs alone: the test
+// after this one. Where it fits, the rows fill as
 // above. (At 44 with rows of 2 the drain had shaped the rows at the wheel's place before it:
 // none on screen is blank, so none is owed.) Per cell: draws stopped, reshapes that end past 50 ms, starts past 35 ms for a row off
 // screen, and where it fits frames from the sixth with a blank row on screen, else frames with
@@ -878,7 +893,7 @@ test("the opening: with fixed work around the walk, a row that fits only a light
     for (const ms of [2, 8, 20]) {
       const { v, frames } = await costlyWheel(ms, base, 30, wheelUp, { stop: true, after: 2 });
       const fits = base + 2 + ms * 1.1 + 3 <= 50;
-      got.push([base, ms, fits, frames.filter((f) => f.stopped).length, frames.reduce((n, f) => n + f.over, 0), frames.reduce((n, f) => n + f.offLate, 0), fits ? frames.slice(5).filter((f) => f.blank > 0).length : frames.filter((f) => f.seen).length, fits || !frames.some((f) => f.blank > 0) || (v.owedHeld ?? 0) > 0, v.aloneRun ?? 0]);
+      got.push([base, ms, fits, frames.filter((f) => f.stopped).length, frames.reduce((n, f) => n + f.over, 0), frames.reduce((n, f) => n + f.offLate, 0), fits ? frames.slice(5).filter((f) => f.blank > 0).length : frames.filter((f) => f.seen).length, fits || !frames.some((f) => f.blank > 0) || (v.owedHeldDraws ?? 0) > 0, v.aloneRun ?? 0]);
       want.push([base, ms, fits, 0, 0, 0, 0, true, 0]);
     }
   }
@@ -887,8 +902,58 @@ test("the opening: with fixed work around the walk, a row that fits only a light
   const { v, frames } = await costlyWheel(80, 30, 30, wheelUp, { stop: true, after: 2 });
   // (Before the wheel, with no stop modelled, the drain ran such rows alone too: alone counts
   // those; the frames after it are what is checked.)
-  const marked = v.sessions.flatMap((s) => s.turns).filter((x) => x.aloneMark);
+  const marked = v.sessions.flatMap((s) => s.turns).filter((x) => x.shapeMark);
   expect([frames.filter((f) => f.stopped).length, frames.reduce((n, f) => n + f.starts.length, 0), frames.reduce((n, f) => n + f.over, 0), marked.length]).toEqual([1, 1, 1, 1]);
+}, 300000);
+
+// The 44/8 cell run on, on a clock that ends the 5 s of plain draws after a stop: 44 ms of fixed
+// work in the walk, 2 after it, rows of 8 ms. Each row on screen fits only a lighter draw than
+// these, so it is refused and owed. At the 64th draw two rules meet: the lightest of the last 64
+// draws is now one of these (lightBase), so the rows can never fit, and the owed row has been
+// refused 63 (OWED_DRAWS is 64). It runs alone, as the draw's first unit, at its start; its
+// shape is kept, and the draw is stopped once its work is done (8 + 44 + 2 > 50). The plain
+// draws after the stop bring lightBase down again, so the row left on screen fits a light draw
+// once more; its count (64) runs it alone as the first draw after those 5 s (about 311 frames)
+// begins: a second stop, and then no row on screen is blank. (On the frozen clock the 5 s never
+// ended and that row stayed blank. Without the count the same draw runs it too, as the fit
+// check judges it by the plain draws' frameBase: this cell cannot tell the two apart, and the
+// next test can.)
+test("the opening: a row on screen refused 64 draws runs alone once, as its draw's first unit, at one stop a row, and the rows on screen fill", async () => {
+  const { v, frames } = await costlyWheel(8, 44, 450, wheelUp, { stop: true, after: 2 });
+  const stops = frames.flatMap((f, k) => (f.stopped ? [k] : []));
+  expect(stops[0]).toBe(64);
+  expect(stops.length).toBe(2);
+  expect(stops[1] - stops[0]).toBeGreaterThan(5000 / 16 - 10);
+  // Blank rows on screen in every frame before the first; after the second none.
+  expect(frames.slice(0, 64).filter((f) => f.blank === 0)).toEqual([]);
+  expect(frames.slice(stops[1]).filter((f) => f.blank > 0)).toEqual([]);
+  // Each stopped draw started one reshape, at its start: the owed row, alone.
+  expect(stops.map((k) => frames[k].starts)).toEqual([[0], [0]]);
+  expect([v.aloneRun, v.owedAlone, v.aloneCut ?? 0, frames.reduce((n, f) => n + f.over, 0)]).toEqual([2, 1, 0, 0]);
+}, 300000);
+
+// 44 ms of fixed work in every draw ahead of the owed row (ahead: in react, before payOwed, as
+// on this branch applyStick, fitColumn and react are), with one draw in every 40 of 2 ms: that
+// light draw keeps lightBase low, so a row is never judged one that can never fit, and the
+// light draw is judged by the heavy draw before it (fitsHost on its frameBase), so it refuses
+// the row too. Before, the rows on screen stayed blank for as long as that went on. Now a row
+// refused 64 draws runs alone once, whatever lightBase says. Rows of 4 ms end before 50 ms
+// (44 + 4), so they are kept with no stop, and from the frame after the constant none is
+// blank. Rows of 8 cannot end in such a draw (44 + 8 > 50): each one's run alone is cut at
+// 50 ms, one stop, and it is held for its text, blank: one stop a row, about 5 s apart.
+test("the opening: with one light draw in every 40, a row on screen refused 64 draws still runs alone once, whatever the lightest draw says", async () => {
+  const mixed = (k) => (k % 40 === 39 ? 2 : 44);
+  let { v, frames } = await costlyWheel(4, mixed, 120, wheelUp, { stop: true, after: 2, ahead: true });
+  expect(v.lightBase()).toBeLessThan(6);
+  expect(frames.slice(0, 64).filter((f) => f.blank === 0)).toEqual([]);
+  expect(frames.slice(68).filter((f) => f.blank > 0)).toEqual([]);
+  expect([frames.filter((f) => f.stopped).length, v.owedAlone > 0, v.aloneCut ?? 0]).toEqual([0, true, 0]);
+  ({ v, frames } = await costlyWheel(8, mixed, 800, wheelUp, { stop: true, after: 2, ahead: true }));
+  const stops = frames.flatMap((f, k) => (f.stopped ? [k] : []));
+  expect(stops.length).toBe(3);
+  expect(stops[0]).toBeGreaterThanOrEqual(64);
+  expect(stops[1] - stops[0]).toBeGreaterThan(5000 / 16 - 10);
+  expect([v.owedAlone, v.aloneCut, frames.reduce((n, f) => n + f.over, 0), frames.at(-1).blank > 0]).toEqual([3, 3, 3, true]);
 }, 300000);
 
 // Two jumps 60 ms apart, in different frames, during the drain: each one's 130 ms timer is for
@@ -989,7 +1054,8 @@ test("the opening: a row the line refused is reshaped first next frame only whil
 // after ms of work after its rows, and frames are 16 ms apart. Herdr's stop is modelled as
 // Herdr does it, on the draw's total: a reshape that runs past 50 ms from the render's start
 // is interrupted (nothing of it kept), a draw whose work ends past it is stopped once that
-// work is done (what it set is kept), and the render is left open. restale(turn, chars) makes
+// work is done (what it set is kept), and the render is left open. charge(turn, ms) adds ms to
+// that turn's reshapes, a cost its estimate does not see. restale(turn, chars) makes
 // a turn chars longer and leaves its row to reshape; step() gives the frame's reshapes, in
 // order ({ turn, at, cost }), and whether it was stopped.
 async function pricedDrain({ n = 120, rate = 0.001, after = 10 } = {}) {
@@ -1004,9 +1070,10 @@ async function pricedDrain({ n = 120, rate = 0.001, after = 10 } = {}) {
   v.listH = 600;
   let on = false;
   let log = [];
+  const extra = new Map();
   const reshape = v.reshape;
   v.reshape = function (...a) {
-    const cost = on ? (a[0].prompt.length + (a[5] ?? "").length) * rate : 0;
+    const cost = on ? (a[0].prompt.length + (a[5] ?? "").length) * rate + (extra.get(a[0]) ?? 0) : 0;
     if (this.renderOpen) log.push({ turn: a[0], at: clock - this.renderAt, cost });
     clock += cost;
     if (on && this.renderOpen && clock - this.renderAt > 50) throw STOP;
@@ -1054,7 +1121,7 @@ async function pricedDrain({ n = 120, rate = 0.001, after = 10 } = {}) {
   const end = () => { performance.now = realPerf; };
   // A new chunk of the session read (its version), as an agent writing its reply makes.
   const grow = () => { v.sessions[0].version++; };
-  return { v, cx, step, turns: v.sessions[0].turns, restale, begin, end, grow, setBuild: (x) => { build = x; } };
+  return { v, cx, step, turns: v.sessions[0].turns, restale, begin, end, grow, setBuild: (x) => { build = x; }, charge: (turn, ms) => extra.set(turn, ms) };
 }
 // Frames until nothing is left to reshape and the light frames after a stop are over.
 function untilDone(v, step, max = 900) {
@@ -1087,7 +1154,7 @@ test("shaping: a turn that can never fit runs alone as its draw's first unit, pa
     expect([p.v.staleRows.length, big.shapeKey != null, (p.v.aloneRun ?? 0) - alone0]).toEqual([0, true, 1]);
     for (const t of near) expect(frames.some((f) => f.log.some((x) => x.turn === t))).toBe(true);
     // A run that ended leaves no mark: after a new width it is run alone once more.
-    expect(big.aloneMark ?? null).toBe(null);
+    expect(big.shapeMark ?? null).toBe(null);
     p.v.width -= 40;
     const again = untilDone(p.v, p.step);
     expect(again.filter((f) => f.log.some((x) => x.turn === big)).length).toBe(1);
@@ -1185,7 +1252,7 @@ test("shaping: a turn whose run alone was cut by Herdr's stop is not run again f
     const row = () => p.v.baseRows.find((r) => r.turn === big);
     let frames = untilDone(p.v, p.step, 2000);
     const runs = (fs) => fs.filter((f) => f.log.some((x) => x.turn === big)).length;
-    expect([runs(frames), frames.filter((f) => f.stopped).length, big.aloneMark?.cut]).toEqual([1, 1, true]);
+    expect([runs(frames), frames.filter((f) => f.stopped).length, big.shapeMark?.cut]).toEqual([1, 1, true]);
     expect([row().shape === before, big.shapeMemo === before]).toEqual([true, true]);
     p.v.report();
     const d = () => state.shared["threads.debug"][p.v.terminal];
@@ -1193,13 +1260,114 @@ test("shaping: a turn whose run alone was cut by Herdr's stop is not run again f
     // A new width: every row reshaped, the cut turn still not run.
     p.v.width -= 40;
     frames = untilDone(p.v, p.step, 2000);
-    expect([runs(frames), frames.filter((f) => f.stopped).length, big.aloneMark?.cut]).toEqual([0, 0, true]);
+    expect([runs(frames), frames.filter((f) => f.stopped).length, big.shapeMark?.cut]).toEqual([0, 0, true]);
     // New text: run alone once more (and cut once more).
     p.restale(big, 20);
     frames = untilDone(p.v, p.step, 2000);
     expect([runs(frames), frames.filter((f) => f.stopped).length]).toEqual([1, 1]);
     p.v.report();
     expect([d().alone, d().aloneCut]).toEqual([2, 2]);
+  } finally { p.end(); }
+}, 300000);
+
+// A turn whose estimate fits a draw (about 31 ms, with the 10 ms after it and the margin within
+// 50) but whose reshape costs 60 ms more than that: a turn unlike the long turns the rate was
+// learned on. Before, only a run alone was marked, and a cut teaches the rate nothing: it was
+// run and cut every 5 s for good (7 runs and 7 stops in 32 s). Now its first run, not alone, is
+// cut and leaves its mark; it next runs alone, as a draw's first unit; that run is cut too, and
+// it is held for that text: two runs and two stops in 2,000 frames (32 s), and it keeps its
+// last shape.
+test("shaping: a turn that costs more than its estimate is cut once with others, once alone, and is then held for that text", async () => {
+  const p = await pricedDrain();
+  try {
+    const big = p.turns.at(-3);
+    p.begin();
+    const before = big.shapeMemo;
+    p.restale(big, 30000);
+    p.charge(big, 60);
+    expect(p.v.neverFits(p.v.hostCost(big, p.v.replyText(big)))).toBe(false);
+    const alone = [];
+    const reshape = p.v.reshape;
+    p.v.reshape = function (...a) { if (a[0] === big && this.renderOpen) alone.push(Boolean(this.unitAlone)); return reshape.apply(this, a); };
+    const frames = untilDone(p.v, p.step, 2000);
+    expect([alone, frames.filter((f) => f.stopped).length]).toEqual([[false, true], 2]);
+    expect([big.shapeMark?.alone, big.shapeMark?.cut, big.shapeKey ?? null, p.v.baseRows.find((r) => r.turn === big).shape === before]).toEqual([true, true, null, true]);
+    p.v.report();
+    const d = state.shared["threads.debug"][p.v.terminal];
+    expect([d.sharedCut, d.aloneCut, d.cutHeld > 0]).toEqual([1, 1, true]);
+  } finally { p.end(); }
+}, 300000);
+
+// A turn cut after another turn in its draw overran: the first, expected at about 5 ms, costs
+// 30; the second, expected at about 2, starts at 30 ms as its estimate fits what is left, costs
+// 22, and is cut at 50 ms. Its mark says only that it was cut once, perhaps by a neighbour, so
+// it is not held: it runs alone as the first draw after the 5 s of plain draws begins, ahead of
+// a third turn left to reshape that the same draw would have shaped with it, and its shape is
+// kept, with no further stop.
+test("shaping: a turn cut after a neighbour overran in its draw runs alone next, is shaped, and is not held", async () => {
+  const p = await pricedDrain({ after: 0 });
+  try {
+    const [first, cut, third] = [p.turns.at(-4), p.turns.at(-3), p.turns.at(-2)];
+    p.begin();
+    p.v.shapeBudget = 60;
+    p.restale(first, 5000);
+    p.charge(first, 25);
+    p.restale(cut, 2000);
+    p.charge(cut, 20);
+    p.restale(third);
+    const frames = untilDone(p.v, p.step, 2000);
+    const with_ = (t) => frames.flatMap((f, k) => (f.log.some((x) => x.turn === t) ? [k] : []));
+    const [a, b] = with_(cut);
+    expect(with_(cut).length).toBe(2);
+    expect([frames[a].log.map((x) => x.turn), frames[a].stopped]).toEqual([[first, cut], true]);
+    expect([frames[b].log.map((x) => x.turn), frames[b].stopped]).toEqual([[cut], false]);
+    expect(with_(third)[0]).toBeGreaterThan(b);
+    expect([frames.filter((f) => f.stopped).length, cut.shapeKey != null, cut.shapeMark ?? null, p.v.staleRows.length]).toEqual([1, true, null, 0]);
+    expect([p.v.sharedCut, p.v.aloneCut ?? 0]).toEqual([1, 0]);
+  } finally { p.end(); }
+}, 300000);
+
+// Herdr's stop landing after a turn's reshape has ended but before its shape is stored (here
+// in shapeLearn, as if the stop came there): nothing of the run is kept, so it counts as a cut.
+// The mark comes off only once the shape is stored, so the turn is held for that text: one
+// run, one stop, in 2,000 frames.
+test("shaping: a stop that lands after a turn's reshape but before its shape is stored counts as a cut", async () => {
+  const p = await pricedDrain();
+  try {
+    const big = p.turns.at(-3);
+    p.begin();
+    p.restale(big, 44000);
+    const learn = p.v.shapeLearn;
+    p.v.shapeLearn = function (...a) { if (a[0] === big && this.renderOpen) throw STOP; return learn.apply(this, a); };
+    const frames = untilDone(p.v, p.step, 2000);
+    expect([frames.filter((f) => f.log.some((x) => x.turn === big)).length, frames.filter((f) => f.stopped).length]).toEqual([1, 1]);
+    expect([big.shapeMark?.alone, big.shapeMark?.cut, big.shapeKey ?? null]).toEqual([true, true, null]);
+  } finally { p.end(); }
+}, 300000);
+
+// A plain error thrown inside a turn's run alone (a reshape that fails on that text): the draw
+// throws once, the mark stays as for a cut, and the turn is held for that text, so the error
+// shows once, not at each draw after. New text runs it alone again: once more.
+test("shaping: a plain error thrown inside a turn's run alone shows once, and the turn is held for that text", async () => {
+  const p = await pricedDrain();
+  try {
+    const big = p.turns.at(-3);
+    p.begin();
+    p.restale(big, 44000);
+    const BOOM = new Error("a made-up failure in a reshape");
+    let runs = 0;
+    let thrown = 0;
+    const reshape = p.v.reshape;
+    p.v.reshape = function (...a) {
+      if (a[0] === big && this.renderOpen) { runs++; if (this.unitAlone) throw BOOM; }
+      return reshape.apply(this, a);
+    };
+    const step = () => { try { p.step(); } catch (e) { if (e !== BOOM) throw e; thrown++; H.rec = null; } };
+    for (let k = 0; k < 600; k++) step();
+    expect([runs, thrown, big.shapeMark?.alone, big.shapeMark?.cut, big.shapeKey ?? null]).toEqual([1, 1, true, true, null]);
+    p.restale(big, 20);
+    for (let k = 0; k < 600; k++) step();
+    expect([runs, thrown]).toEqual([2, 2]);
   } finally { p.end(); }
 }, 300000);
 
@@ -1220,13 +1388,13 @@ test("shaping: a turn never shaped whose run alone was cut shows the pane's unsh
   } finally { p.end(); }
 }, 300000);
 
-// The mark is set only by the check inside shape() that is followed by its reshape in the same
-// call: every reshape of a turn run alone starts with the turn marked, and a draw that is not
-// stopped leaves no turn marked. Several turns that can never fit, in view and off it, through
+// The mark is set only as a reshape in a draw starts, in shape() just before it: every reshape
+// in a draw starts with its turn marked, as run alone or not, and a draw that is not stopped
+// leaves no turn marked. Several turns that can never fit, in view and off it, through
 // a new width (every row left to reshape, the walk ending early each draw) and a wheel up. The
 // draw's 8 ms after its rows stop the draws that ran one alone once its reshape has ended: no
 // run is cut, so no mark is left and no cut is counted.
-test("shaping: a turn run alone is marked only as its reshape starts, and a draw not stopped leaves no mark", async () => {
+test("shaping: a reshape in a draw is marked as it starts, run alone or not, and a draw not stopped leaves no mark", async () => {
   const p = await pricedDrain({ after: 8 });
   try {
     const big = [p.turns.at(-2), p.turns.at(-5), p.turns.at(-40), p.turns.at(-90)];
@@ -1234,8 +1402,12 @@ test("shaping: a turn run alone is marked only as its reshape starts, and a draw
     for (const t of big) p.restale(t, 44000);
     const at = [];
     const reshape = p.v.reshape;
-    p.v.reshape = function (...a) { if (this.unitAlone) at.push(Boolean(a[0].aloneMark)); return reshape.apply(this, a); };
-    const marked = () => p.turns.filter((t) => t.aloneMark).length;
+    let alone = 0;
+    p.v.reshape = function (...a) {
+      if (this.renderOpen) { at.push(a[0].shapeMark?.alone === Boolean(this.unitAlone)); if (this.unitAlone) alone++; }
+      return reshape.apply(this, a);
+    };
+    const marked = () => p.turns.filter((t) => t.shapeMark).length;
     const check = (frames) => { for (const f of frames) if (!f.stopped) expect(marked()).toBe(0); };
     const each = (n) => { const fs = []; for (let k = 0; k < n; k++) { fs.push(p.step()); check(fs.slice(-1)); } return fs; };
     // Each run alone here stops its draw, and the 5 s after a stop (312 frames) shape nothing.
@@ -1245,7 +1417,7 @@ test("shaping: a turn run alone is marked only as its reshape starts, and a draw
     p.v.wheelN = (p.v.wheelN ?? 0) + 1;
     p.v.follow = false;
     frames = frames.concat(each(400));
-    expect(at.length).toBeGreaterThanOrEqual(8);
+    expect([alone >= 8, at.length > alone]).toEqual([true, true]);
     expect(at.every(Boolean)).toBe(true);
     expect([frames.filter((f) => f.stopped).length > 0, marked(), p.v.aloneCut ?? 0]).toEqual([true, 0, 0]);
   } finally { p.end(); }
