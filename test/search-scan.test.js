@@ -1162,8 +1162,9 @@ test("a reply coming in while a 2,000-turn tail is checked again, then a turn af
 
 // A step from a selected match in a tail being checked again: the match has no place until its
 // turn is checked again, and n or Shift n from it goes by turn order to the nearest match older
-// or newer than it, not to the newest found. The count keeps its "+" meanwhile, and the place
-// comes back once the tail is checked.
+// or newer than it, not to the newest found. An older step checks the tail's next slice first,
+// so it does not skip the tail's matches not yet checked again. The count keeps its "+"
+// meanwhile, and the place comes back once the tail is checked.
 test("a step from a match in a long tail being checked again goes the way it is asked, and its place comes back once the tail is checked", async () => {
   const { v, cx, s } = await longPane(5600);
   tailMore(s, 2000);
@@ -1187,12 +1188,14 @@ test("a step from a match in a long tail being checked again goes the way it is 
     tailMore(s, 1);
     const h = v.hitsNow();
     r.placed = h.at.has(from);
-    // The nearest match each way among the places found: newer, none yet (the tail is
-    // checked again oldest first), so Shift n stays; older, the newest place before it.
+    // Newer: no place newer than it yet (the tail is checked again oldest first), so Shift n
+    // stays. Older: the nearest match before it by turn order, among all the matches, though
+    // the newest place before it is further back (the tail's matches not checked again).
     const found = [];
     for (let p = h.bot; p < h.top; p++) found.push(h.by.get(p));
     const newer = found.find((k) => n(k) > n(from)) ?? from;
-    const older = found.findLast((k) => n(k) < n(from));
+    const older = direct(v, "please look").find((k) => n(k) < n(from));
+    r.gap = n(older) > n(found.findLast((k) => n(k) < n(from)));
     v.action("newerMatch", cx);
     r.newer = v.sel === newer && newer === from;
     v.sel = from;
@@ -1202,7 +1205,7 @@ test("a step from a match in a long tail being checked again goes the way it is 
     for (let k = 0; k < 80 && counting(v); k++) drawOnce(v, cx);
     r.back = v.matchPlace().at > 0;
   });
-  expect(r).toEqual({ from: true, settled: "3 of 5360 · newest first", texts: [], placed: false, newer: true, older: true, back: true });
+  expect(r).toEqual({ from: true, settled: "3 of 5360 · newest first", texts: [], placed: false, gap: true, newer: true, older: true, back: true });
   expect(fieldText(v)).toBe(finalWords(v, "please look"));
   expect(places(v)).toEqual(want(v, "please look"));
 }, 120000);
