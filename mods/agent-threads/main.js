@@ -453,10 +453,15 @@ const DRAG_SLOP = 4; // design px a press may move and still be a click, not a t
 // reply's words from one beside them.
 const OPEN_WAIT_MS = 300;
 const FULL_REPLY_CHARS = 200000; // of an open reply; a note under it says what is left out
-// An open reply's part longer than this is a run with no place to split it (a word longer than
-// MD_MAX: no space, line break, or Japanese or Chinese sentence or clause mark), past what Herdr
-// draws as one Markdown view: it shows as plain text, this many characters of its start, under
-// a dim line saying so (mdlong).
+// What one of Herdr's Markdown views holds, in characters: it draws nothing for a block over
+// 4,096 (ui.js, at MD_MAX: on 0.1.14 a block of 4,090 drew and one of 4,099 measured 0 px tall;
+// 4,096 is taken from that gap, not measured to the character). A part drawn at no height is
+// caught by the probe and shown whole as plain text (mdBroken), as on main.
+const MD_VIEW_CHARS = 4096;
+// An open reply's part whose Markdown would not fit one view (MD_VIEW_CHARS) is a run with no
+// place to split it (a word longer than MD_MAX: no space, line break, or Japanese or Chinese
+// sentence or clause mark): it shows as plain text, this many characters of its start, under a
+// dim line saying so (mdlong).
 const LONG_SHOWN = 4000;
 const VIEWER_PROMPT = 8000; // characters of the prompt in the image viewer's panel
 const LONG_REPLY = 1600; // characters past which an open reply ends in a Collapse (Esc) row
@@ -6162,8 +6167,17 @@ export default class Threads extends View {
   // height, which has nothing to cut. A part with no height worked out gets null, and it and
   // the parts after it wait in an mdrest row.
   partRow(pm, item, key, src, table, j, whole) {
-    if (!table && src.length > LONG_SHOWN) return this.longPart(pm, item, key, src, j);
-    const lk = whole ?? this.partLinks(pm, src);
+    // Past what one Markdown view holds, as written: plain text (longPart). The link rules only
+    // lengthen a part, so such a part is not linked. A part longer than a view is one word (the
+    // split's pieces are within MD_MAX bytes, a word longer than that a piece of its own), so it
+    // is past without a look at its pieces: a look at a 200,000-character word costs as much as
+    // the split's read of it.
+    if (!table && (src.length > MD_VIEW_CHARS || !this.partFits(pm, src))) return this.longPart(pm, item, key, src, j);
+    let lk = whole ?? this.partLinks(pm, src);
+    // A part that fits as written but not with its links (a long URL with a ticket key in it)
+    // is drawn as written, without them: whole and selectable, where linked it would draw
+    // nothing.
+    if (!table && lk.md !== src && !this.partFits(pm, lk.md)) lk = { md: src, links: 0 };
     const gap = j ? this.paraGap() : undefined;
     const old = pm.rows.get(key);
     const same = old && old.src === src && Boolean(old.table) === Boolean(table) && old.gap === gap && this.sameItem(old, item);
@@ -6186,12 +6200,13 @@ export default class Threads extends View {
     const spent = this.shapeSpent ?? 0;
     const left = this.shapeLeft ?? 0;
     const t0 = now();
-    // A light draw's time for the row is its height's too (mdHeight reads shapeMax), for a part
-    // of at most MD_MAX characters only. The height checks the time only before it starts, and
-    // costs by the text's length: a longer part (a run with no place to split it) of 200,000
-    // characters, sized in a light draw at twice the price, ran past Herdr's time in every one.
-    // It gets a rough height there instead, and is sized in a full draw.
-    this.lightRoom = this.light && src.length <= MD_MAX ? SHAPE_MIN_MS : null;
+    // A light draw's time for the row is its height's too (mdHeight reads shapeMax). The height
+    // checks the time only before it starts, and costs by the text's length, so a part sized
+    // whole in a light draw is at most one view's (MD_VIEW_CHARS), about 0.8 ms at twice the
+    // price: a longer one is plain text (longPart). Kept out of light draws, a part of 3,501 to
+    // 4,096 characters caught by a stop waited behind its placeholder for the whole light window
+    // (5,153 ms for 3,800 characters, against 137 ms for 3,400).
+    this.lightRoom = this.light ? SHAPE_MIN_MS : null;
     const h = this.height(row);
     this.lightRoom = null;
     this.shapeSpent = spent + (now() - t0);
@@ -6201,12 +6216,12 @@ export default class Threads extends View {
     pm.rows.set(key, row);
     return rough ? null : row;
   }
-  // A part longer than LONG_SHOWN (a run with no place to split it) as plain text: its start
-  // under a dim line that gives its length (longNote). The line says it has no place to break
-  // it, not that it has no space: it can be prose, in a script written with no space and none of
-  // the marks the split breaks after (Thai and its neighbours). Its height is counted from the
-  // length shown, at no cost, until the probe measures it, and it has no link rules. As
-  // Markdown, at twice the price, sizing one of 200,000 characters ran past Herdr's time in
+  // A part one Markdown view cannot hold (a run with no place to split it) as plain text: its
+  // start under a dim line that gives its length (longNote). The line says it has no place to
+  // break it, not that it has no space: it can be prose, in a script written with no space and
+  // none of the marks the split breaks after (Thai and its neighbours). Its height is counted
+  // from the length shown, at no cost, until the probe measures it, and it has no link rules.
+  // As Markdown, at twice the price, sizing one of 200,000 characters ran past Herdr's time in
   // every draw.
   longPart(pm, item, key, src, j) {
     const gap = j ? this.paraGap() : undefined;
@@ -6258,6 +6273,18 @@ export default class Threads extends View {
     const { line } = this.rt();
     const k = Math.max(1, n);
     return (Math.ceil((chars * this.charW(MD_CHAR)) / Math.max(this.prose(), 1)) + k) * line + (k - 1) * this.paraGap();
+  }
+  // Whether a part's Markdown fits Herdr's view (MD_VIEW_CHARS) in every piece its views draw
+  // (partViews: the dollar escape, then pieces of at most MD_MAX bytes). Only a run with no
+  // place to split it makes a piece longer than MD_MAX, and a text no longer than a view with
+  // no "$" fits as it is, at the cost of one scan. Asked only of a part of at most a view and of
+  // that part with its links, so a look is a few KB. Kept per open turn (m), by text.
+  partFits(m, md) {
+    if (md.length <= MD_VIEW_CHARS && !md.includes("$")) return true;
+    const fit = (m.fit ??= new Map());
+    let ok = fit.get(md);
+    if (ok == null) fit.set(md, (ok = mdChunks(escapeDollars(md)).every((p) => p.length <= MD_VIEW_CHARS)));
+    return ok;
   }
   partLinks(m, src) {
     if (!this.links.length) return { md: src, links: 0 };
