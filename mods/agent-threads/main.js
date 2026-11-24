@@ -4997,7 +4997,8 @@ export default class Threads extends View {
           return true;
         };
         // The rows of the parts split so far first, then the split (in a light draw in its own
-        // time), then the new parts' rows.
+        // time), then the new parts' rows. The split first took a full draw's whole reshaping
+        // time, and no part of a split that ran over several draws showed until it finished.
         const all = rowsOn();
         this.splitOn(job);
         if (all) rowsOn();
@@ -6134,9 +6135,9 @@ export default class Threads extends View {
   // a read of SPLIT_LINES lines and SPLIT_UNITS characters at a time.
   segsOn(job) { this.readsOn(job, (x) => this.segsSome(x)); }
   // Reads of an open reply's split or segments in this draw's reshaping time. A light draw
-  // gives them SHAPE_MIN_MS of their own (splitSpent), apart from the parts' rows' (partRow),
-  // which are made first: in one draw's 2 ms the split left no time for a row, and the card
-  // showed none of the parts it had.
+  // gives them SHAPE_MIN_MS of their own (splitSpent), apart from the parts' rows' (partRow):
+  // in one shared 2 ms the split left no time for a row, and the card showed none of the parts
+  // it had.
   readsOn(job, read) {
     const light = this.light;
     const max = light ? SHAPE_MIN_MS : this.partMax();

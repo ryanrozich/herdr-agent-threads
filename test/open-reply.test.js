@@ -314,6 +314,22 @@ test("a reply of one 200,000-character word shows its start as plain text under 
   }
 }, 60000);
 
+// In a full draw the rows of the parts split in the draws before are made first, then the split
+// goes on: the other way round the split took the draw's whole reshaping time, and no part of a
+// split that ran over several draws was shown until it had finished (at twice the price, none
+// in the first five draws of a capped reply).
+test("while an open reply's split runs over several draws, each draw shows the parts split in the draws before", async () => {
+  for (const scale of PRICE_SCALES) {
+    const { v, cx, keys } = await openLong(shortParas(4000));
+    v.probeDue = function () { this.probeLeft = 0; return []; };
+    const seen = [];
+    const r = costedFrames(v, cx, 400, await cardDone(v, keys), { scale, onFrame: () => seen.push([v.light, splitCount(v), partsShown(v, keys)]) });
+    costLog(`capped, parts shown while it splits, at ${scale}x`, { ...r, seen: seen.slice(0, 6) });
+    const total = splitCount(v);
+    expect([scale, r.stops, seen[1][0], seen[1][1] < total, seen[1][2] > 0, seen[2][2] > seen[1][2]]).toEqual([scale, 0, false, true, true, true]);
+  }
+}, 60000);
+
 // Stopped inside the rebuild the shape timer asked for (againOpen), as it builds the card: the
 // request stands, and the light draw after it builds the card again and splits on. With the
 // request given up before the build, the shape timer asks again only at the window's end.
