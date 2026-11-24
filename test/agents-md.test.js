@@ -55,7 +55,7 @@ test("verify-a-change lists CI's own checks, in CI's order", () => {
   const skill = readFileSync(join(root, ".claude", "skills", "verify-a-change", "SKILL.md"), "utf8");
   // The table's command column, with the escaped pipe back to a plain one.
   const cmds = [...skill.matchAll(/^\| [^|]+ \| `(.+?)` \| /gm)].map((m) => m[1].replace(/\\\|/g, "|"));
-  expect(cmds).toHaveLength(4);
+  expect(cmds).toHaveLength(5);
   // Each is a whole CI line (CI's test line adds only the JUnit report for the upload), so a
   // flag CI gains is a difference too.
   const lines = ci.split("\n").map((l) => l.trim().replace(/^run: /, "").replace(/ --reporter=junit --reporter-outfile=junit\.xml$/, ""));
