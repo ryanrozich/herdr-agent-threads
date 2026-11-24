@@ -4893,7 +4893,7 @@ export default class Threads extends View {
         // A table is an item of its own ("table"), so it can run wider than the reading line.
         const parts = mdChunks(md).flatMap((src) => splitTables(src));
         parts.forEach(({ text: src, table }, j) => {
-          const lk = parts.length === 1 && linked?.[i] && src === seg.text ? linked[i] : this.linkOne(src);
+          const lk = parts.length === 1 && linked?.[i] && src === seg.text ? linked[i] : this.partLinks(src);
           const sub = parts.length === 1 ? `${i}` : `${i}.${j}`;
           push({ ...item, kind: "md", key: `md:${key}:${sub}`, md: lk.md, src, links: lk.links, ...(j ? { gap: this.paraGap() } : {}), ...(table ? { table: true } : {}) });
         });
@@ -5969,6 +5969,28 @@ export default class Threads extends View {
   linkCtx() { return { repo: this.remote.repo, owner: this.remote.owner, host: this.remote.host ?? null }; }
   repoSig() { return this.remote.repo ? `${this.remote.host ?? ""}/${this.remote.repo}` : ""; }
   linkOne(md) { return this.links.length ? linkify(md, this.links, this.linkCtx()) : { md, links: 0 }; }
+  // A part of an open reply with the link rules applied, kept per text until the rules or the
+  // repo change. Every part of a 200,000-character reply linked in one draw took longer than
+  // Herdr's time for a draw ("This view could not be re-rendered", interrupted), and each
+  // draw after that began them again. New parts share the reshaping time (SHAPE_MS) with the
+  // heights after them: past it a part shows as written, and the next frame links it.
+  partLinks(src) {
+    if (!this.links.length) return { md: src, links: 0 };
+    const ver = `${this.linksVer}|${this.links.length}|${this.repoSig()}|${this.remote.owner ?? ""}`;
+    if (this.partLinked?.ver !== ver || this.partLinked.map.size > 400) this.partLinked = { ver, map: new Map() };
+    const known = this.partLinked.map.get(src);
+    if (known) return known;
+    if ((this.shapeSpent ?? 0) > this.shapeMax()) {
+      this.shapeLeft = (this.shapeLeft ?? 0) + 1;
+      this.otherLeft = (this.otherLeft ?? 0) + 1;
+      return { md: src, links: 0 };
+    }
+    const t0 = now();
+    const lk = this.linkOne(src);
+    this.partLinked.map.set(src, lk);
+    this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
+    return lk;
+  }
 
   // Focuses the terminal this pane reads, by its pane id: pane.focus {terminal} prefers the
   // first layout block that shows the terminal, which can be another pane than the one
