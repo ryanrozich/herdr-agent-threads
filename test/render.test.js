@@ -6684,9 +6684,12 @@ test("a reply longer than Herdr draws in one Markdown view opens whole: list ite
 // - call and char, a wrapped text worked out for a height; rest, the rest of a draw: mixed
 //   Markdown of 16 to 96 KB drew in 20 to 38.5 ms on main.
 // On the rig 26 parts of short paragraphs never drew: 67 of 73 stopped draws died in the link
-// pass. Past stop ms Herdr stops a draw (costedFrames).
+// pass. Past stop ms Herdr stops a draw (costedFrames). The tests that bound a draw run at these
+// prices and at twice them (PRICE_SCALES): at twice, the bounds on frames double and a draw
+// after the first need only stay under the stop, as the fixed part of a draw doubles too.
 const P121 = { line: 0.033, unit: 0.00005, row: 0.009, call: 0.004, char: 0.0001, rest: 8, stop: 50 };
 const SPLIT_PER_CHAR = 1.72;
+const PRICE_SCALES = [1, 2];
 const shortParas = (n) => Array.from({ length: n }, (_, i) => `Paragraph ${i + 1}: the cart total rounds per line, see ACME-${i + 1}.`).join("\n\n");
 const mixedReply = (kb) => { const one = readFileSync(join(root, "test/fixtures/long-reply.md"), "utf8").trim(); const out = []; for (let i = 1; out.join("\n\n").length < kb * 1024; i++) out.push(one, `Copy ${i} is filed as ACME-${i}.`); return out.join("\n\n"); };
 // One reply, or several on the last turns, every one opened (unless shut).
@@ -6810,38 +6813,38 @@ function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0, scale = 1, onF
     delete v.linkOne; delete v.wrapped; delete v.splitSome; delete v.height; delete v.expanded;
   }
   const ok = frames.filter((x) => x.ok);
-  return { stops: frames.length - ok.length, first: frames.findIndex((x) => x.ok) + 1, settled, settledMs, linked, splits, readMost: Math.round(readMost * 100) / 100, most: Math.max(0, ...ok.map((x) => x.ms)), later: Math.max(0, ...ok.slice(1).map((x) => x.ms)), frames };
+  return { stops: frames.length - ok.length, first: frames.findIndex((x) => x.ok) + 1, open: frames[0]?.ms ?? 0, settled, settledMs, linked, splits, readMost: Math.round(readMost * 100) / 100, most: Math.max(0, ...ok.map((x) => x.ms)), later: Math.max(0, ...ok.slice(1).map((x) => x.ms)), frames };
 }
 
 const costLog = (what, r) => { if (process.env.THREADS_COST_LOG) console.log(`${what}: ${JSON.stringify({ ...r, frames: r.frames.slice(0, 14).map((x) => (x.ok ? x.ms : `stop ${x.ms}`)) })}`); };
 
 test("opening a reply of 26, 35 or 58 parts of short paragraphs draws at once and no draw runs past Herdr's time; no part is linked twice", async () => {
-  for (const [n, parts] of [[1400, 26], [1900, 35], [4000, 58]]) {
+  for (const scale of PRICE_SCALES) for (const [n, parts] of [[1400, 26], [1900, 35], [4000, 58]]) {
     const { v, cx, key } = await openLong(shortParas(n));
-    const r = costedFrames(v, cx, 40, await cardDone(v, key));
-    costLog(`${parts} parts`, r);
-    expect([r.stops, r.first]).toEqual([0, 1]);
+    const r = costedFrames(v, cx, 40 * scale, await cardDone(v, key), { scale });
+    costLog(`${parts} parts, at ${scale}x`, r);
+    expect([scale, r.stops, r.first]).toEqual([scale, 0, 1]);
     expect(r.most).toBeLessThan(P121.stop);
     // Work left for the next draw goes on from there: the reply split once, each part linked
     // once, and the frames after the first within the draw's aim (FRAME_AIM_MS, 30 ms).
     expect([v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length, r.linked, r.splits]).toEqual([parts, parts, 1]);
-    expect(r.later).toBeLessThanOrEqual(30);
+    if (scale === 1) expect(r.later).toBeLessThanOrEqual(30);
   }
 }, 60000);
 
 test("an open reply of 18 or 58 parts, or one with a code fence between long prose runs, has every part linked and at its worked-out height within 18 frames", async () => {
-  for (const [text, parts, splits] of [[shortParas(980), 18, 1], [shortParas(4000), 58, 1], [fencedReply(), 54, 2]]) {
+  for (const scale of PRICE_SCALES) for (const [text, parts, splits] of [[shortParas(980), 18, 1], [shortParas(4000), 58, 1], [fencedReply(), 54, 2]]) {
     const { v, cx, key } = await openLong(text);
-    const r = costedFrames(v, cx, 40, await cardDone(v, key));
-    costLog(`${parts} parts, heights`, r);
-    expect([v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length, r.splits]).toEqual([parts, splits]);
+    const r = costedFrames(v, cx, 40 * scale, await cardDone(v, key), { scale });
+    costLog(`${parts} parts, heights, at ${scale}x`, r);
+    expect([scale, v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length, r.splits]).toEqual([scale, parts, splits]);
     expect(r.settled).toBeGreaterThan(0);
-    // 18: at the rig's prices a capped reply's split takes about 64 ms and its links about
-    // 104 ms, in draws of 12 ms of reshaping: 58 parts settle at frame 16.
-    expect(r.settled).toBeLessThanOrEqual(18);
+    // 18: at the rig's prices a capped reply's split takes about 34 ms and its links about
+    // 132 ms, in draws of 12 ms of reshaping: 58 parts settle at frame 14 (25 at twice).
+    expect(r.settled).toBeLessThanOrEqual(18 * scale);
     // After the first, a draw of short paragraphs is the rest of a draw and its reshaping time
     // (SHAPE_MS), which the split, the links and the parts' rows share, and one part past it.
-    if (splits === 1) expect(r.later).toBeLessThanOrEqual(P121.rest + 12 + 3);
+    if (splits === 1) expect(r.later).toBeLessThanOrEqual(scale * (P121.rest + 3) + 12);
     // New rules link every part again, the same way, with the split and the heights kept:
     // till a part is linked again it shows as it was, at its height, and nothing moves.
     const { parseLinks } = await import("../mods/agent-threads/settings.js");
@@ -6850,9 +6853,9 @@ test("an open reply of 18 or 58 parts, or one with a code fence between long pro
     v.setLinks(l.rules, l.list, 1);
     const done = await cardDone(v, key);
     let moved = 0;
-    const again = costedFrames(v, cx, 40, () => { if (v.baseSizes.length !== sizes.length || v.baseSizes.some((h, i) => h !== sizes[i])) moved++; return done(); });
-    costLog(`${parts} parts, new rules`, again);
-    expect([again.stops, again.linked, again.splits, again.settled > 0 && again.settled <= 12, moved]).toEqual([0, parts, 0, true, 0]);
+    const again = costedFrames(v, cx, 40 * scale, () => { if (v.baseSizes.length !== sizes.length || v.baseSizes.some((h, i) => h !== sizes[i])) moved++; return done(); }, { scale });
+    costLog(`${parts} parts, new rules, at ${scale}x`, again);
+    expect([again.stops, again.linked, again.splits, again.settled > 0 && again.settled <= 12 * scale, moved]).toEqual([0, parts, 0, true, 0]);
     expect(v.baseRows.find((x) => x.key.startsWith(`md:${key}:`)).md).toContain("tickets.example.com/1)");
   }
 }, 60000);
@@ -6995,15 +6998,17 @@ test("held parts of a reply of two long lines link after a draw stopped in its s
 }, 60000);
 
 test("two capped replies open: no frame passes Herdr's time while both settle, and each is split once", async () => {
-  const { v, cx, keys } = await openLong([0, 1].map((j) => shortParas(4000).replaceAll("Paragraph", `Card ${j}, paragraph`)), true);
-  const runs = [];
-  for (const k of keys) {
-    v.toggle(k, cx);
-    runs.push(costedFrames(v, cx, 30, await cardDone(v, keys.slice(0, runs.length + 1))));
-    costLog(`card ${runs.length} of 2`, runs.at(-1));
+  for (const scale of PRICE_SCALES) {
+    const { v, cx, keys } = await openLong([0, 1].map((j) => shortParas(4000).replaceAll("Paragraph", `Card ${j}, paragraph`)), true);
+    const runs = [];
+    for (const k of keys) {
+      v.toggle(k, cx);
+      runs.push(costedFrames(v, cx, 30 * scale, await cardDone(v, keys.slice(0, runs.length + 1)), { scale }));
+      costLog(`card ${runs.length} of 2, at ${scale}x`, runs.at(-1));
+    }
+    expect(runs.map((r) => [scale, r.stops, r.splits, r.settled > 0 && r.settled <= 18 * scale])).toEqual([[scale, 0, 1, true], [scale, 0, 1, true]]);
+    expect(Math.max(...runs.map((r) => r.most))).toBeLessThan(P121.stop);
   }
-  expect(runs.map((r) => [r.stops, r.splits, r.settled > 0 && r.settled <= 18])).toEqual([[0, 1, true], [0, 1, true]]);
-  expect(Math.max(...runs.map((r) => r.most))).toBeLessThan(P121.stop);
 }, 60000);
 
 test("an open reply's links follow a change of the repository or its owner", async () => {
@@ -7050,37 +7055,39 @@ test("an open reply whose text changes keeps the links of the parts it still has
 }, 60000);
 
 test("eight replies of 58 parts each opened one after another, 464 parts in all, draw in time and link and split each once", async () => {
-  const { v, cx, keys } = await openLong(Array.from({ length: 8 }, (_, j) => shortParas(4000).replaceAll("Paragraph", `Turn ${j}, paragraph`)), true);
-  const all = { stops: 0, linked: 0, splits: 0, most: 0, settled: [] };
-  for (const k of keys) {
-    v.toggle(k, cx);
-    const r = costedFrames(v, cx, 30, await cardDone(v, keys.slice(0, keys.indexOf(k) + 1)));
-    for (const n of ["stops", "linked", "splits"]) all[n] += r[n];
-    all.most = Math.max(all.most, r.most);
-    all.settled.push(r.settled);
+  for (const scale of PRICE_SCALES) {
+    const { v, cx, keys } = await openLong(Array.from({ length: 8 }, (_, j) => shortParas(4000).replaceAll("Paragraph", `Turn ${j}, paragraph`)), true);
+    const all = { stops: 0, linked: 0, splits: 0, most: 0, settled: [] };
+    for (const k of keys) {
+      v.toggle(k, cx);
+      const r = costedFrames(v, cx, 30 * scale, await cardDone(v, keys.slice(0, keys.indexOf(k) + 1)), { scale });
+      for (const n of ["stops", "linked", "splits"]) all[n] += r[n];
+      all.most = Math.max(all.most, r.most);
+      all.settled.push(r.settled);
+    }
+    costLog(`8 x 58 parts, at ${scale}x`, { ...all, frames: [] });
+    const parts = v.baseRows.filter((x) => x.kind === "md" && keys.some((k) => x.key.startsWith(`md:${k}:`))).length;
+    expect(parts).toBeGreaterThan(400);
+    expect([all.stops, all.linked, all.splits]).toEqual([0, parts, 8]);
+    expect(all.most).toBeLessThan(P121.stop);
+    expect([scale, all.settled.every((n) => n > 0 && n <= 18 * scale)]).toEqual([scale, true]);
+    // Settled, a frame that builds the open turns again links nothing.
+    v.againOpen = true;
+    v.rowsKey = "again";
+    expect(costedFrames(v, cx, 2, () => true).linked).toBe(0);
+    // Kept: the open turns' parts of their replies as they are now. Closed turns go at the next
+    // build of an open one.
+    for (const k of keys.slice(1)) v.toggle(k, cx);
+    costedFrames(v, cx, 1, () => true);
+    v.againOpen = true;
+    v.rowsKey = "again";
+    costedFrames(v, cx, 1, () => true);
+    expect([...v.partTurns.keys()]).toEqual([keys[0]]);
+    const kept = v.partMemo(keys[0], v.replyText(v.findTurn(keys[0])));
+    expect([kept.links.size, kept.split.size]).toEqual([parts / 8, 1]);
+    const re = v.partMemo(keys[0], "Rewritten.");
+    expect([re.links.size, re.split.size]).toEqual([0, 0]);
   }
-  costLog("8 x 58 parts", { ...all, frames: [] });
-  const parts = v.baseRows.filter((x) => x.kind === "md" && keys.some((k) => x.key.startsWith(`md:${k}:`))).length;
-  expect(parts).toBeGreaterThan(400);
-  expect([all.stops, all.linked, all.splits]).toEqual([0, parts, 8]);
-  expect(all.most).toBeLessThan(P121.stop);
-  expect(all.settled.every((n) => n > 0 && n <= 18)).toBe(true);
-  // Settled, a frame that builds the open turns again links nothing.
-  v.againOpen = true;
-  v.rowsKey = "again";
-  expect(costedFrames(v, cx, 2, () => true).linked).toBe(0);
-  // Kept: the open turns' parts of their replies as they are now. Closed turns go at the next
-  // build of an open one.
-  for (const k of keys.slice(1)) v.toggle(k, cx);
-  costedFrames(v, cx, 1, () => true);
-  v.againOpen = true;
-  v.rowsKey = "again";
-  costedFrames(v, cx, 1, () => true);
-  expect([...v.partTurns.keys()]).toEqual([keys[0]]);
-  const kept = v.partMemo(keys[0], v.replyText(v.findTurn(keys[0])));
-  expect([kept.links.size, kept.split.size]).toEqual([parts / 8, 1]);
-  const re = v.partMemo(keys[0], "Rewritten.");
-  expect([re.links.size, re.split.size]).toEqual([0, 0]);
 }, 60000);
 
 // The open card as rows (kind, key, text, links, height), and the same card made again by one
@@ -7112,77 +7119,83 @@ const fencedReply = () => `${shortParas(1400)}\n\n\`\`\`js\nconst total = lines.
 const pairsReply = () => Array.from({ length: 1040 }, (_, i) => `Order ${i + 1}\n\n| Ticket | Total | Due |\n|---|---|---|\n| ACME-${i + 1} | ${i + 1} | Mo |`).join("\n\n");
 
 test("an open mixed Markdown reply of 16 to 96 KB, or one with a code fence between long prose runs, settles to the card one unbounded build makes: the same rows, text, links and heights", async () => {
-  for (const [name, text, linked] of [["mixed 16 KB", mixedReply(16), 2], ["mixed 48 KB", mixedReply(48), 6], ["mixed 96 KB", mixedReply(96), 12], ["fenced", fencedReply(), 40]]) {
-    const { v, cx, key } = await openLong(text);
-    const r = costedFrames(v, cx, 60, await cardDone(v, key));
-    costLog(name, r);
-    expect([r.stops, r.settled > 0]).toEqual([0, true]);
-    const settled = openCard(v, key);
-    expect(settled.filter((x) => x[0] === "md" && x[4] > 0).length).toBeGreaterThan(linked);
-    expect(settled.filter((x) => x[0] === "md").map((x) => x[3])).toEqual(await splitOf(text));
-    expect(unboundedCard(v, key)).toEqual(settled);
-    // With no rules there is nothing to link, and no part waits for a later frame for it.
-    v.setLinks([], [], 0);
-    v.rows();
-    v.shapeBudget = -1;
-    v.againOpen = true;
-    v.rowsKey = "again";
-    v.rows();
-    expect([v.otherLeft, v.baseRows.find((x) => x.key.startsWith(`md:${key}:`)).links]).toEqual([0, 0]);
+  for (const scale of PRICE_SCALES) {
+    for (const [name, text, linked] of [["mixed 16 KB", mixedReply(16), 2], ["mixed 48 KB", mixedReply(48), 6], ["mixed 96 KB", mixedReply(96), 12], ["fenced", fencedReply(), 40]]) {
+      const { v, cx, key } = await openLong(text);
+      const r = costedFrames(v, cx, 60 * scale, await cardDone(v, key), { scale });
+      costLog(`${name}, at ${scale}x`, r);
+      expect([scale, r.stops, r.first, r.settled > 0]).toEqual([scale, 0, 1, true]);
+      const settled = openCard(v, key);
+      expect(settled.filter((x) => x[0] === "md" && x[4] > 0).length).toBeGreaterThan(linked);
+      expect(settled.filter((x) => x[0] === "md").map((x) => x[3])).toEqual(await splitOf(text));
+      expect(unboundedCard(v, key)).toEqual(settled);
+      // With no rules there is nothing to link, and no part waits for a later frame for it.
+      v.setLinks([], [], 0);
+      v.rows();
+      v.shapeBudget = -1;
+      v.againOpen = true;
+      v.rowsKey = "again";
+      v.rows();
+      expect([v.otherLeft, v.baseRows.find((x) => x.key.startsWith(`md:${key}:`)).links]).toEqual([0, 0]);
+    }
   }
 }, 60000);
 
 // On the rig this reply never drew, on main or with the link pass bounded: 205 stopped draws,
 // each cut while it built and sized the card's 2,086 rows.
 test("an open reply of 2,080 parts, short paragraphs each with a one-row table, draws in time and settles to the card one unbounded build makes", async () => {
-  const text = pairsReply();
-  expect(Math.round(text.length / 1024)).toBe(76);
-  const { v, cx, key } = await openLong(text);
-  const r = costedFrames(v, cx, 400, await cardDone(v, key));
-  costLog("2,080 parts", r);
-  expect([r.stops, r.first, r.settled > 0]).toEqual([0, 1, true]);
-  expect(r.most).toBeLessThan(P121.stop);
-  // Within the draw's aim (FRAME_AIM_MS) after the first: a build sizes only the new parts.
-  expect(r.later).toBeLessThanOrEqual(30);
-  const settled = openCard(v, key);
-  const md = settled.filter((x) => x[0] === "md");
-  expect([md.length, md.filter((x) => x[1] && /\|/.test(x[3])).length]).toEqual([2080, 1040]);
-  expect(md.map((x) => x[3])).toEqual(await splitOf(text));
-  expect(unboundedCard(v, key)).toEqual(settled);
+  for (const scale of PRICE_SCALES) {
+    const text = pairsReply();
+    expect(Math.round(text.length / 1024)).toBe(76);
+    const { v, cx, key } = await openLong(text);
+    const r = costedFrames(v, cx, 400, await cardDone(v, key), { scale });
+    costLog(`2,080 parts, at ${scale}x`, r);
+    expect([scale, r.stops, r.first, r.settled > 0]).toEqual([scale, 0, 1, true]);
+    expect(r.most).toBeLessThan(P121.stop);
+    // Within the draw's aim (FRAME_AIM_MS) after the first: a build sizes only the new parts.
+    if (scale === 1) expect(r.later).toBeLessThanOrEqual(30);
+    const settled = openCard(v, key);
+    const md = settled.filter((x) => x[0] === "md");
+    expect([md.length, md.filter((x) => x[1] && /\|/.test(x[3])).length]).toEqual([2080, 1040]);
+    expect(md.map((x) => x[3])).toEqual(await splitOf(text));
+    expect(unboundedCard(v, key)).toEqual(settled);
+  }
 }, 120000);
 
 // The parts come in below the ones shown, so a reader in the reply stays where they are: a
 // part shown keeps its place in the list (the list keeps its offset in px). A jump to the
 // newest turn's end holds to the end while they come in, and asks for it again once all are in.
 test("while an open capped reply's parts come in, the parts shown keep their place, and a jump to the end lands on the end of the whole reply", async () => {
-  const { v, cx, key } = await openLong(shortParas(4000));
-  const ends = [];
-  v.scroll = { scroll_to_bottom() { ends.push(v.baseRows.some((x) => x.kind === "mdrest")); }, scroll_to_item() {} };
-  // Latest, while the open card's own scroll still waits for it to settle. The command builds
-  // the rows off the priced clock, so with no reshaping time for it.
-  expect(v.scrollTo?.key).toBe(key);
-  v.shapeBudget = -1;
-  v.action("latest", cx);
-  v.shapeBudget = null;
-  const tops = new Map();
-  let moved = 0, came = 0;
-  const done = await cardDone(v, key);
-  const r = costedFrames(v, cx, 60, () => {
-    let top = 0;
-    v.baseRows.forEach((x, i) => {
-      if (x.kind === "md" && x.key.startsWith(`md:${key}:`)) {
-        if (!tops.has(x.key)) came++;
-        else if (tops.get(x.key) !== top) moved++;
-        tops.set(x.key, top);
-      }
-      top += v.baseSizes[i];
-    });
-    return done();
-  });
-  costLog("58 parts, place", r);
-  expect([r.stops, r.settled > 1, came, moved]).toEqual([0, true, 58, 0]);
-  cx.flush(16);
-  expect([v.toBottom, ends.length > 1, ends.at(-1)]).toEqual([false, true, false]);
+  for (const scale of PRICE_SCALES) {
+    const { v, cx, key } = await openLong(shortParas(4000));
+    const ends = [];
+    v.scroll = { scroll_to_bottom() { ends.push(v.baseRows.some((x) => x.kind === "mdrest")); }, scroll_to_item() {} };
+    // Latest, while the open card's own scroll still waits for it to settle. The command builds
+    // the rows off the priced clock, so with no reshaping time for it.
+    expect(v.scrollTo?.key).toBe(key);
+    v.shapeBudget = -1;
+    v.action("latest", cx);
+    v.shapeBudget = null;
+    const tops = new Map();
+    let moved = 0, came = 0;
+    const done = await cardDone(v, key);
+    const r = costedFrames(v, cx, 60 * scale, () => {
+      let top = 0;
+      v.baseRows.forEach((x, i) => {
+        if (x.kind === "md" && x.key.startsWith(`md:${key}:`)) {
+          if (!tops.has(x.key)) came++;
+          else if (tops.get(x.key) !== top) moved++;
+          tops.set(x.key, top);
+        }
+        top += v.baseSizes[i];
+      });
+      return done();
+    }, { scale });
+    costLog(`58 parts, place, at ${scale}x`, r);
+    expect([scale, r.stops, r.settled > 1, came, moved]).toEqual([scale, 0, true, 58, 0]);
+    cx.flush(16);
+    expect([v.toBottom, ends.length > 1, ends.at(-1)]).toEqual([false, true, false]);
+  }
 }, 60000);
 
 // A synthetic reply of about 10,000 words in prose, lists and a table, with no code fence.
