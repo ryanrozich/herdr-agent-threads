@@ -622,11 +622,11 @@ test("timeline press in the gap between two bars out of order: no step, only the
   expect([later.lk, earlier.lk]).toEqual(["text", "text"]);
   const at = (x, lane) => timelineHit(L, [h], x, lane, T0 + 1e7);
   const drawn = (x) => L.spans.get("model|model|0").some(([a, b]) => a <= x && x <= b);
-  // Within 4 px of a bar, its step; at more than 4 px from both, in the model lane or in
-  // none, the turn's heading, and no drawn span covers the press either.
+  // The 4 px rule: under 4 px from a bar, its step; at 4 px or more from both, in the model
+  // lane or in none, the turn's heading, and no drawn span covers the press either.
   expect(at(246, "model")).toEqual({ turn: h.key, key: earlier.key });
   expect(at(717, "model")).toEqual({ turn: h.key, key: later.key });
-  for (const x of [247.5, 300, 400, 480, 600, 715.5]) {
+  for (const x of [247, 247.5, 300, 400, 480, 600, 715.5, 716]) {
     expect(at(x, "model")).toEqual({ turn: h.key, key: h.key });
     expect(at(x, null)).toEqual({ turn: h.key, key: h.key });
     expect(drawn(x)).toBe(false);
