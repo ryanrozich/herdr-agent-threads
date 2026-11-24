@@ -12,7 +12,7 @@ import * as TL from "../mods/agent-threads/timeline.js";
 
 const {
   TL_LANES, TL_ROOM_MIN, TL_ROOM_GROW, liveRoom, timelineGeo, timelineLayout, timelineHit, itemBox, tlMaxZoom, tlClamp, tlZoomAt, tlBox, bandRows,
-  tornPoints, polyRows, timelineModel, tlGrow, tlStep, tlLen, tlRow, TL_MADE,
+  tornPoints, polyRows, timelineModel, tlGrow, tlStep, tlLen, tlRow, tlTracks, TL_MADE,
 } = TL;
 
 const T0 = Date.parse("2026-11-01T09:00:00Z");
@@ -304,6 +304,23 @@ test("timeline tracks: a call that starts as the last one ends stays on the firs
   const h = head(turn(1, [[["Read", "a", 2000, 3000], ["Grep", "b", 3000, 4000], ["Bash", "c", 3500, 5000]]]));
   const tools = stepsOf(h).filter((it) => it.lane === "tools");
   expect(tools.map((it) => [it.a, it.b, it.track])).toEqual([[2000, 3000, 0], [3000, 4000, 0], [3500, 5000, 1]]);
+});
+
+test("timeline tracks: in clock order, not the ledger's: a call listed after another but run before it, apart from it, stays on the first track; at equal starts the one listed first keeps it", () => {
+  const tracksOf = (h) => stepsOf(h).filter((it) => it.lane === "tools").map((it) => [it.a, it.track]);
+  // Read from 30 to 31 s, then a Grep listed after it from 5 to 6 s: they never overlap.
+  const a = head(turn(1, [[["Read", "a", 30000, 31000]], [["Grep", "b", 5000, 6000]]]));
+  expect(tracksOf(a)).toEqual([[30000, 0], [5000, 0]]);
+  expect(tlTracks(a)).toBe(null);
+  // Listed Read (30 to 40 s), Grep (5 to 6 s) and Bash (35 to 36 s): only Bash starts while
+  // another runs.
+  const b = head(turn(1, [[["Read", "a", 30000, 40000]], [["Grep", "b", 5000, 6000]], [["Bash", "c", 35000, 36000]]]));
+  expect(tracksOf(b)).toEqual([[30000, 0], [5000, 0], [35000, 1]]);
+  // Equal starts: the one listed first holds the first track, in either order.
+  const c = head(turn(1, [[["Read", "a", 10000, 20000], ["Grep", "b", 10000, 12000]]]));
+  expect(tracksOf(c)).toEqual([[10000, 0], [10000, 1]]);
+  const d = head(turn(1, [[["Grep", "b", 10000, 12000], ["Read", "a", 10000, 20000]]]));
+  expect(tracksOf(d)).toEqual([[10000, 0], [10000, 1]]);
 });
 
 test("timeline tracks: a call with no result holds the first track to the turn's end, so a later call goes on the second", () => {
@@ -637,22 +654,27 @@ test("timeline press in the gap between two bars out of order: no step, only the
 });
 
 test("timeline spans out of order: an unfinished call's torn end is kept, apart from a bar left of it or joined with one that reaches it", () => {
-  // Read from 30 s to 31 s on the first track; Bash at 20 s with no result, so on the second
-  // track from 480 px to the turn's end, torn; then a Grep listed after it but earlier on the
-  // clock, also on the second track (it starts before the Read ends).
-  const mk = (n, at, rt) => head(turn(n, [[["Read", "a", 30000, 31000]], [["Bash", "sleep", 20000, null]], [["Grep", "b", at, rt]]], { interrupted: true, reply: null, end: T0 + 60000 }));
   const lay = (h) => timelineLayout([h], 1440, "clock", T0 + 1e7);
-  // Grep from 5 s to 6 s, at 120 to 144 px: a gap before the torn bar.
-  const a = mk(1, 5000, 6000);
+  const end = { interrupted: true, reply: null, end: T0 + 60000 };
+  // To a thousandth of a px (31 s of 60 across 1,440 px is 744 with a float's last bit).
+  const r3 = (list) => list.map((sp) => sp.map((v) => Math.round(v * 1000) / 1000));
+  // Listed Read (30 to 31 s), Bash (20 s, no result, so torn to the turn's end) and Grep (5 to
+  // 6 s). In clock order Grep runs alone, then Bash holds the first track to the end, so Read
+  // goes on the second; Grep's bar at 120 to 144 px is apart from the torn bar.
+  const a = head(turn(1, [[["Read", "a", 30000, 31000]], [["Bash", "sleep", 20000, null]], [["Grep", "b", 5000, 6000]]], end));
   const A = lay(a);
   expect(A.turns[0]).toMatchObject({ x: 0, w: 1440 });
-  expect(rawBars(A, a, 0, "tools").slice(1)).toEqual([[480, 1440], [120, 144]]);
-  expect(A.spans.get("tools|tools|1")).toEqual([[120, 144], [480, 1440, 1]]);
-  // Grep from 15 s to 22.5 s, at 360 to 540 px: it reaches the torn bar, so one span, still torn.
-  const b = mk(2, 15000, 22500);
+  expect(r3(rawBars(A, a, 0, "tools"))).toEqual([[720, 744], [480, 1440], [120, 144]]);
+  expect(r3(A.spans.get("tools|tools|0"))).toEqual([[120, 144], [480, 1440, 1]]);
+  expect(r3(A.spans.get("tools|tools|1"))).toEqual([[720, 744]]);
+  // Read from 10 s to 50 s on the first track; Bash at 20 s with no result and a Grep listed
+  // after it but started at 15 s, both while Read runs, so both on the second track: Grep at
+  // 360 to 540 px reaches the torn bar, so one span, still torn.
+  const b = head(turn(2, [[["Read", "a", 10000, 50000]], [["Bash", "sleep", 20000, null]], [["Grep", "b", 15000, 22500]]], end));
   const B = lay(b);
-  expect(rawBars(B, b, 0, "tools").slice(1)).toEqual([[480, 1440], [360, 540]]);
-  expect(B.spans.get("tools|tools|1")).toEqual([[360, 1440, 1]]);
+  expect(r3(rawBars(B, b, 0, "tools"))).toEqual([[240, 1200], [480, 1440], [360, 540]]);
+  expect(r3(B.spans.get("tools|tools|0"))).toEqual([[240, 1200]]);
+  expect(r3(B.spans.get("tools|tools|1"))).toEqual([[360, 1440, 1]]);
 });
 
 test("timeline span join (tlJoin): spans touch within half a pixel on either side; a span in any order goes in its place and joins what it reaches", () => {
