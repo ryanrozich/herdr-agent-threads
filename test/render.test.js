@@ -6546,7 +6546,11 @@ test("an open reply past 200,000 characters stops there and says how much is lef
   turn.shapeKey = null;
   v.sel = key;
   v.toggle(key, cx);
+  // The whole card in one build, whatever the machine's load: this is about the cap, and the
+  // open reply's split and rows otherwise share the build's reshaping time, read off the clock.
+  v.shapeBudget = Infinity;
   const rows = v.rows();
+  v.shapeBudget = null;
   const shown = rows.filter((r) => r.kind === "md" && r.key.startsWith(`md:${key}:`)).reduce((n, r) => n + r.src.length, 0);
   expect(shown).toBeLessThanOrEqual(200005);
   expect(shown).toBeGreaterThan(199000);

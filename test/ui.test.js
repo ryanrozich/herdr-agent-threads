@@ -10,7 +10,7 @@ import {
   isShown, visible, countLabel, focusTarget, contrast, ratio, mix, labelColor, matchFill, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, cutPath, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, trajColumn, trajFit, TERM_KEEP, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
-  mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX, cardKey, cardMarks, cardScroll, CARD_LINE, CARD_MARK,
+  mdPreview, fitWidth, mdChunks, mdSplit, mdSplitOn, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX, cardKey, cardMarks, cardScroll, CARD_LINE, CARD_MARK,
   keySheet, fitHints, hintWidth, agentState, htmlLine, htmlChunks, promptParts, pinPromptText, outlineText,
 } from "../mods/agent-threads/ui.js";
 
@@ -913,6 +913,95 @@ test("mdChunks: Markdown over Herdr's limit splits at paragraphs, never inside f
   expect(lp.join("")).toBe(long);
 });
 
+// The split as a job that stops and goes on (an open reply's, a few lines a draw): read a few
+// lines at a time it makes the parts one whole split makes, with each chunk's tables apart.
+test("mdSplit: read a few lines at a time, the same parts as one whole split, and none from a read that was stopped", () => {
+  const para = (i) => `Paragraph ${i}: the cart total rounds per line, see ACME-${i}.`;
+  const texts = [
+    Array.from({ length: 300 }, (_, i) => para(i)).join("\n\n"),
+    Array.from({ length: 120 }, (_, i) => `Order ${i}\n\n| Ticket | Total |\n|---|---|\n| ACME-${i} | ${i} |`).join("\n\n"),
+    `${para(1)}\n\n\`\`\`sh\n${"echo one\n\necho two\n".repeat(200)}\`\`\`\n\n${para(2)}`,
+    "naïve café … ".repeat(900).trim(),
+    "short",
+  ];
+  for (const md of texts) {
+    const whole = mdChunks(md, 1000);
+    for (const lines of [1, 3, 128]) {
+      const job = mdSplit(md, 1000, true);
+      for (let n = 0; !job.done && n < 1e5; n++) {
+        mdSplitOn(job, lines);
+        // A read Herdr stopped wrote its parts but not the job's count: the next read drops them.
+        if (!job.done) job.parts.push({ text: "from a stopped read", table: false });
+      }
+      expect(job.parts).toEqual(whole.flatMap((c) => splitTables(c)));
+    }
+  }
+});
+
+test("mdSplit: a read does at most its work whatever the text's shape: long lines and words, a block over the limit with no blank line, a long table", () => {
+  const texts = [
+    `${"word ".repeat(3000)}\n\n${"next ".repeat(3000)}`,
+    "z".repeat(9000),
+    `  ${"lead ".repeat(2000)}`,
+    Array.from({ length: 400 }, (_, i) => `Line ${i} of a reply with no blank line.`).join("\n"),
+    `| a | b |\n|---|---|\n${Array.from({ length: 600 }, (_, i) => `| row ${i} | ${"x".repeat(i % 40)} |`).join("\n")}`,
+    `Before\n\`\`\`js\n${"const a = 1;\n".repeat(500)}\`\`\`\nafter, in the same block\n| t | u |\n|---|---|\n${"| 1 | 2 |\n".repeat(300)}tail`,
+    `${"é".repeat(2000)}\n${"😀".repeat(1200)}`,
+  ];
+  for (const md of texts) {
+    const whole = mdChunks(md, 1000).flatMap((c) => splitTables(c));
+    for (const units of [300, 4096]) {
+      const job = mdSplit(md, 1000, true);
+      let reads = 0;
+      while (!job.done && reads < 1e5) {
+        const w = job.work;
+        const n0 = job.n;
+        mdSplitOn(job, Infinity, units);
+        reads++;
+        // Past its work by at most a line's or word's look and one chunk made, with its tables
+        // split out and the block it closes (a word longer than the limit is a chunk of its own).
+        const chunk = Math.max(1000, ...job.parts.slice(n0).map((p) => p.text.length));
+        expect(job.work - w).toBeLessThanOrEqual(units + 2 * 16 + 256 + 6 * chunk);
+      }
+      expect(job.parts).toEqual(whole);
+      // Not all in one read: a long line, word or block goes on over several.
+      expect(reads).toBeGreaterThan(1);
+    }
+  }
+});
+
+// A split's work counted from the text by the rule (mdSplitOn's LINE_UNITS, 16): the harness
+// prices a read by the count the split keeps, so a count that drifts from the work would price
+// itself. Short paragraphs: each line read 16, each character measured, each block joined and
+// each part made by its characters. A block over the limit with no blank line, as well: each of
+// its lines looked at for a table or fence (16, and once more at its end) and packed (16).
+test("mdSplit: the work counted for known texts is the rule's, line by line and character by character", () => {
+  const paras = Array.from({ length: 200 }, (_, i) => `Paragraph ${i + 1}: the cart total rounds per line.`);
+  const block = Array.from({ length: 300 }, (_, i) => `Line ${i} of a reply with no blank line.`);
+  const chars = (ls) => ls.reduce((k, l) => k + l.length, 0);
+  const run = (md) => { const job = mdSplit(md, MD_MAX, true); mdSplitOn(job, Infinity, Infinity); return [job.done, job.work, chars(job.parts.map((p) => p.text))]; };
+  const [d1, w1, made1] = run(paras.join("\n\n"));
+  expect([d1, w1]).toEqual([true, (2 * paras.length - 1) * 16 + 2 * chars(paras) + made1]);
+  const [d2, w2, made2] = run(block.join("\n"));
+  expect([d2, w2]).toEqual([true, block.length * 16 + chars(block) + (block.length + 1) * 16 + block.length * 16 + made2]);
+});
+
+// The work a split counts is the text's, however it is read: a mark looked for in a word over
+// a view is counted up to the mark found, not for the whole slice looked in, so a read of the
+// whole word in one go counted more than reads a step at a time.
+test("mdSplit: the work counted for a word over a view with marks is the same in one read, in reads of 2,000 units and a step at a time", () => {
+  const texts = [`${"a".repeat(5000)}\u3002`.repeat(3), prose(["\u4eca\u65e5\u306f\u914d\u9001\u30eb\u30fc\u30c8\u306e\u78ba\u8a8d\u3092\u671d\u306e\u3046\u3061\u306b\u7d42\u3048\u307e\u3057\u305f\u3002"], 9600).slice(0, 9600), `${"b".repeat(6000)}\u3002${"c".repeat(100)}`];
+  const work = (md, units) => {
+    const job = mdSplit(md, MD_MAX, true);
+    for (let k = 0; k < 1e6 && !job.done; k++) mdSplitOn(job, Infinity, units);
+    return job.work;
+  };
+  for (const md of texts) {
+    const w = [Infinity, 2000, 1].map((u) => work(md, u));
+    expect([md.length, ...w]).toEqual([md.length, w[2], w[2], w[2]]);
+  }
+});
+
 // mdChunks as it was before its pieces' lengths were kept as they grew: the same chunks, found
 // by measuring each whole chunk again for every piece.
 function mdChunksBefore(md, max = MD_MAX) {
@@ -970,6 +1059,77 @@ test("mdChunks: each piece of a long table starts with its header rows, each pie
   expect(fenced.flatMap((f) => f.split("\n").filter((l) => l.startsWith("const total")))).toEqual(code);
   // Room too small for the header twice: split as other text.
   expect(mdChunks(`${head}\n${rows.slice(0, 4).join("\n")}`, 60).some((p) => p.startsWith("| checkout"))).toBe(true);
+});
+
+// Japanese and Chinese prose has no space between words: a line of it over the limit splits
+// after its sentence and clause marks, the full-width forms only (。！？；，、：), as English
+// splits at spaces. Each piece is within the limit, the pieces join back to the text, and each
+// but the last ends at a mark or a space. Made-up prose.
+const CJK_MARKS = "\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A";
+const prose = (clauses, n) => { let out = ""; for (let i = 0; out.length < n; i++) out += clauses[i % clauses.length]; return out; };
+const splitAtMarks = (md, max) => {
+  const parts = mdChunks(md, max);
+  const ends = parts.slice(0, -1).every((p) => CJK_MARKS.includes(p.at(-1)) || /\s$/.test(p));
+  return [parts.length > 1, parts.every((p) => Buffer.byteLength(p) <= max), parts.join("") === md, ends];
+};
+test("mdChunks: a paragraph of Japanese or Chinese prose with no space splits after its sentence and clause marks, within the limit", () => {
+  const stops = prose(["今日は配送ルートの確認を朝のうちに終えました。", "在庫は数え直しますか？", "明天的路线表会在中午之前发出！"], 5000);
+  // On commas alone, no full stop: a long list of clauses.
+  const commas = prose(["倉庫の在庫を午後に数え直し、", "仓库的订单按线路分配给司机，", "明天的路线表在中午之前发出，"], 5000);
+  // Every mark, and a line that starts with marks.
+  const every = `。、${prose(["一つ目の項目；", "二つ目：", "三つ目、", "四つ目，", "五つ目！", "六つ目？", "七つ目。"], 5000)}`;
+  const texts = [stops, commas, every];
+  expect([texts.map((md) => [md.length > 4000, /\s/.test(md)]), /[。！？]/.test(commas)]).toEqual([texts.map(() => [true, false]), false]);
+  expect(texts.map((md) => splitAtMarks(md, MD_MAX))).toEqual(texts.map(() => [true, true, true, true]));
+});
+
+test("mdChunks: a paragraph of Japanese or Chinese prose with ASCII words and spaces splits within the limit, at marks and spaces, its ASCII words whole", () => {
+  const cjk = prose(["今日は配送ルートの確認を朝のうちに終えました。", "仓库的订单按线路分配给每一位司机，"], 4500);
+  const md = `Release v2.1 notes: ${cjk} see ACME-12 and ACME-13 for the routes ${cjk}ACME-14の件は済みました。 Done.`;
+  expect(splitAtMarks(md, MD_MAX)).toEqual([true, true, true, true]);
+  const parts = mdChunks(md, MD_MAX);
+  expect(["v2.1", "ACME-12", "ACME-13", "ACME-14の件は済みました。"].every((w) => parts.some((p) => p.includes(w)))).toBe(true);
+});
+
+// The split packs by UTF-8 bytes (MD_MAX), and a Japanese or Chinese character is three, so a
+// paragraph of it over about 1,166 characters is longer than the room. Main kept one that one
+// view holds (4,096 characters, MD_VIEW_CHARS) as one piece, and so does this: it breaks after
+// its marks only when it would not fit one view. Breaking it sooner drew a paragraph gap inside
+// it, where a drag cannot select across.
+test("mdChunks: a paragraph of Japanese or Chinese prose that one view holds stays one piece, as on main; past a view it splits after its marks", () => {
+  const para = (n) => prose(["今日は配送ルートの確認を朝のうちに終えました。", "仓库的订单按线路分配给每一位司机，"], n).slice(0, n);
+  const seen = [1200, 4096, 4097].map((n) => { const md = para(n); const parts = mdChunks(md, MD_MAX); return [n, parts.length, parts.join("") === md, parts.length > 1 && parts.every((p) => Buffer.byteLength(p) <= MD_MAX)]; });
+  expect(seen).toEqual([[1200, 1, true, false], [4096, 1, true, false], [4097, 4, true, true]]);
+});
+
+// A word over a view is looked at for a mark in slices as it is measured, all of it: a word
+// whose first mark comes late (a long list with no mark, then a sentence) splits there too, in
+// one read and a step at a time.
+test("mdChunks: a word over a view whose only mark is in its last 256 characters splits after that mark", () => {
+  const md = `${"a".repeat(6000)}\u3002${"c".repeat(100)}`;
+  const job = mdSplit(md, MD_MAX);
+  for (let k = 0; k < 1e6 && !job.done; k++) mdSplitOn(job, 1, 1);
+  const lens = (parts) => parts.map((p) => (p.text ?? p).length);
+  expect([md.length - md.indexOf("\u3002") <= 256, lens(mdChunks(md, MD_MAX)), lens(job.parts)]).toEqual([true, [6001, 100], [6001, 100]]);
+});
+
+// A word over a view that starts with a mark: the mark goes with the text after it. Alone, it
+// was a part of one character, a paragraph gap above the rest.
+test("mdChunks: a word over a view that starts with a mark keeps the mark with it, not as a part of its own", () => {
+  const md = `\u3002${"a".repeat(6000)}`;
+  expect(mdChunks(md, MD_MAX).map((p) => p.length)).toEqual([6001]);
+});
+
+// With none of the seven marks, text splits as before at spaces alone (mdChunksBefore, the old
+// rule), the half-width , . : ; ! ? included: a word made of them is still one word.
+test("mdChunks: text with none of the full-width marks splits as before, half-width punctuation included", () => {
+  const texts = [
+    "The cart total rounds per line; see ACME-12, then ACME-13: done! Or not? ".repeat(400),
+    `${"a,b.c:d;e!f?g".repeat(600)} tail, after the long word.`,
+    "日本 ".repeat(3000),
+    `Intro.\n\n${"word, ".repeat(2000)}\n${"z.".repeat(3000)}`,
+  ];
+  for (const md of texts) for (const max of [MD_MAX, 500]) expect(mdChunks(md, max)).toEqual(mdChunksBefore(md, max));
 });
 
 test("escapeDollars: prices outside code are escaped, code and escaped ones are not", () => {

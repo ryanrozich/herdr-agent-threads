@@ -841,8 +841,10 @@ export function shortModel(m) {
   return parts.length ? `${name} ${parts.join(".")}` : name;
 }
 
-// Markdown split into prose and fenced code blocks, in order.
+// Markdown split into prose and fenced code blocks, in order. With no fence anywhere it is one
+// prose segment, found without the pass over every line (an open turn's build of a long reply).
 export function segments(md) {
+  if (!md.includes("```") && !md.includes("~~~")) { const t = md.trim(); return t ? [{ kind: "md", text: t }] : []; }
   const out = [];
   const lines = md.split("\n");
   let prose = [];
@@ -863,6 +865,59 @@ export function segments(md) {
   if (code) out.push({ kind: "code", lang: code.lang, text: code.lines.join("\n") });
   if (prose.join("\n").trim()) out.push({ kind: "md", text: prose.join("\n").trim() });
   return out;
+}
+
+// segments() as a job, read at most `lines` lines and about `chars` characters at a time
+// (segmentsOn), so an open turn's build of a long reply with a fence goes on over draws. Its
+// result once done (out) is segments(md)'s. Its state is written back once, at the end of a
+// read; segments pushed by a read Herdr stopped are dropped by the next (n).
+export function segmentsJob(md) {
+  if (!md.includes("```") && !md.includes("~~~")) { const out = segments(md); return { done: true, out, n: out.length }; }
+  return { md, at: 0, out: [], n: 0, prose: -1, proseEnd: 0, fence: null, lang: "", codeStart: -1, codeEnd: 0, done: false };
+}
+// A fence at a line's start, as segments() finds one, without leaving the line.
+const FENCE_AT = /[^\S\n]*(```+|~~~+)[^\S\n]*([\w+#.-]*)/y;
+export function segmentsOn(job, lines, chars) {
+  if (job.done) return job;
+  const { md, out } = job;
+  out.length = job.n;
+  let { at, prose, proseEnd, fence, lang, codeStart, codeEnd } = job;
+  const end = at + chars;
+  for (let k = 0; k < lines && at <= md.length && (k === 0 || at < end); k++) {
+    let le = md.indexOf("\n", at);
+    if (le < 0) le = md.length;
+    FENCE_AT.lastIndex = at;
+    const f = FENCE_AT.exec(md);
+    if (fence != null) {
+      const t = f ? md.slice(at, le).trim() : "";
+      if (f && t.startsWith(fence) && t.replace(/[`~]/g, "") === "") {
+        out.push({ kind: "code", lang, text: codeStart < 0 ? "" : md.slice(codeStart, codeEnd) });
+        fence = null;
+      } else {
+        if (codeStart < 0) codeStart = at;
+        codeEnd = le;
+      }
+    } else if (f) {
+      const t = prose < 0 ? "" : md.slice(prose, proseEnd).trim();
+      if (t) out.push({ kind: "md", text: t });
+      prose = -1;
+      fence = f[1];
+      lang = f[2] || "";
+      codeStart = -1;
+    } else {
+      if (prose < 0) prose = at;
+      proseEnd = le;
+    }
+    at = le + 1;
+  }
+  const done = at > md.length;
+  if (done) {
+    if (fence != null) out.push({ kind: "code", lang, text: codeStart < 0 ? "" : md.slice(codeStart, codeEnd) });
+    const t = prose < 0 ? "" : md.slice(prose, proseEnd).trim();
+    if (t) out.push({ kind: "md", text: t });
+  }
+  Object.assign(job, { at, prose, proseEnd, fence, lang, codeStart, codeEnd, n: out.length, done });
+  return job;
 }
 
 // First non-empty line, without markdown decoration.

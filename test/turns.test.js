@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, appendFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, replaced, reply, updatesText, stats, segments, shortModel, fmtDuration, fmtTokens, fmtTime, cachePct, fmtPct, cacheLine, commandParts, senderOf, matches, sessionStats } from "../mods/agent-threads/core/turns.js";
+import { newSession, apply, parseChunk, nextChunk, replaced, reply, updatesText, stats, segments, segmentsJob, segmentsOn, shortModel, fmtDuration, fmtTokens, fmtTime, cachePct, fmtPct, cacheLine, commandParts, senderOf, matches, sessionStats } from "../mods/agent-threads/core/turns.js";
 
 const root = join(import.meta.dir, "..");
 const extractor = join(root, "mods/agent-threads/core/extract.sh");
@@ -105,6 +105,10 @@ test("formatting", () => {
   expect(fmtTokens(950)).toBe("950");
   expect(fmtDuration(102000)).toBe("1m 42s");
   expect(segments("a\n```\nx\n```").map((s) => s.kind)).toEqual(["md", "code"]);
+  // With no fence, one prose segment, trimmed, as the pass over each line gives it.
+  expect(segments("  a\n\n  b ``c`` ~~d~~\n\n")).toEqual([{ kind: "md", text: "a\n\n  b ``c`` ~~d~~" }]);
+  expect([segments(""), segments(" \n\n ")]).toEqual([[], []]);
+  expect(segments("a\n  ~~~\nx")).toEqual([{ kind: "md", text: "a" }, { kind: "code", lang: "", text: "x" }]);
 });
 
 // ---- fixtures made on the fly by make-fixture.js ----
@@ -821,4 +825,23 @@ test("sessionStats: the status line's sums over a session, and nothing for what 
   expect(sessionStats([])).toEqual({ tools: 0, tokens: null, cachePct: null, context: null, contextPct: null });
   // A turn with no usage after one with usage leaves the context at the last response.
   expect(sessionStats([b, { tools: 0, usage: {} }]).context).toBe(1620);
+});
+
+// segments() as a job read a few lines at a time (an open turn's build): once done, the same
+// segments, for every way of reading it, and a read Herdr stopped part way adds nothing twice.
+test("the segments job, read a few lines at a time, ends with what segments() gives", () => {
+  const kinds = ["prose a", "", "  ", "```js", "```", "~~~", "  ```py  ", "````", "``` x", "~~~~ sh", "code ``` mid", "\r", "last\r", "ACME-1 ~~ not a fence"];
+  let seed = 7;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  const texts = ["", "\n", "a", "a\n", "```", "```\n", "a\n```\nb", "a\n```js\nx\n```\nb\n", "~~~\nx\n```\ny\n~~~", "````\nx\n```\n````\nz", "a\r\n```\r\nb\r\n```\r\n"];
+  for (let i = 0; i < 400; i++) texts.push(Array.from({ length: 1 + rnd(30) }, () => kinds[rnd(kinds.length)]).join("\n") + (rnd(2) ? "\n" : ""));
+  for (const md of texts) for (const [lines, chars] of [[1, 1e9], [2, 1e9], [7, 1e9], [128, 3], [128, 8192]]) {
+    const job = segmentsJob(md);
+    for (let k = 0; !job.done; k++) {
+      segmentsOn(job, lines, chars);
+      // A read stopped after it pushed a segment: its pushes are not the job's.
+      if (!job.done && k % 3 === 0) job.out.push({ kind: "md", text: "stopped" });
+    }
+    expect([md, lines, job.out]).toEqual([md, lines, segments(md)]);
+  }
 });
