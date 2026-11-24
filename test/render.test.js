@@ -36,6 +36,7 @@ import {
   H,
   handlerAfterId,
   hcBy,
+  heldClock,
   herdrSettings,
   herdrVersion,
   hostPlatform,
@@ -79,6 +80,7 @@ import {
   settleRows,
   setup,
   simList,
+  sliced,
   stamp,
   state,
   stillAt,
@@ -90,6 +92,7 @@ import {
   tileRow,
   toastText,
   tooltips,
+  unsliced,
   until,
   views,
   work,
@@ -2624,7 +2627,8 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   // The busy fixture (6.7 MB), or a longer one of THREADS_S1_BUSY turns for S1b.
   const file = process.env.THREADS_S1_BUSY ? fixture("--busy", process.env.THREADS_S1_BUSY) : busy();
   const r = await paneWith(file, (cx, view) => {
-    v = view;
+    // It times the read's stretches and the draws: the pane's own slices.
+    v = sliced(view);
     H.marks = [];
     cx.sleepHook = () => { stamp("out"); return new Promise((res) => setTimeout(() => { stamp("in"); res(); }, 0)); };
     // The read's last notify (in its finally) closes its last stretch.
@@ -3097,6 +3101,9 @@ test("V3b: reply, latest and YOU TextViews never scroll; a message over 420 px i
   v.prefs = { ...v.prefs, bubbleColor: "plain", agentBubbleColor: "plain" }; // Markdown in the message: the plain look
   v.open = new Set(v.current().turns.map((t) => `0:${t.n}`));
   v.full = new Set(v.current().turns.flatMap((t) => [`0:${t.n}`, `l:0:${t.n}`]));
+  // Every row built first: the build is cut into slices by the clock, so one frame on a busy
+  // machine drew only some of them, and the press below found no part to open.
+  settleRows(v, cx);
   views.length = 0;
   frame(v, cx);
   const md = views.filter((x) => /^(th-probe-)?th-(md|lmd)-/.test(x.id));
@@ -3117,6 +3124,7 @@ test("V3b: reply, latest and YOU TextViews never scroll; a message over 420 px i
   const h0 = v.estimate(capped);
   // A press on the bubble (the list's item click) opens the rest in place; another closes it.
   v.click(capped.key, cx);
+  settleRows(v, cx);
   const open = v.rows().find((r) => r.key === capped.key);
   expect(open.all).toBe(true);
   const y = v.youMd(open);
@@ -3127,6 +3135,7 @@ test("V3b: reply, latest and YOU TextViews never scroll; a message over 420 px i
   expect(d.some(([n, a]) => n === "h" && a === 420)).toBe(false);
   expect(d.some(([n, a]) => n === "child" && a === "Show less")).toBe(true);
   v.click(capped.key, cx);
+  settleRows(v, cx);
   expect(v.youMd(v.rows().find((r) => r.key === capped.key)).capped).toBe(true);
 });
 
@@ -3136,6 +3145,11 @@ test("V3b: the first-frame estimate is never under the reading-line reference, a
   v.open = new Set(v.current().turns.map((t) => `0:${t.n}`));
   for (const w of [240, 380, 640]) {
     v.forcedWidth = w; v.width = w; v.meas = new Map();
+    // Every row built first: the build is cut into slices by the clock, and rows() outside a
+    // draw takes no further slice, so on a busy machine it listed only some of them. The draws
+    // measure nothing: the estimates are still the first frame's.
+    settleRows(v, cx);
+    expect(v.meas.size).toBe(0);
     let n = 0;
     for (const r of v.rows().filter((x) => x.kind === "md")) {
       const blocks = r.src.split(/\n{2,}/);
@@ -7210,6 +7224,9 @@ test("a render Herdr stopped is asked for again, and counted even when the next 
   tick.fn(cx);
   expect(notes).toBe(0);
   v.renderAt -= 300;
+  // No poke yet counts from 0 on the clock, which a test run alone can reach the tick before
+  // 250 ms past: the last poke is put as far back as the draw.
+  v.cutPokeAt = v.renderAt;
   tick.fn(cx);
   tick.fn(cx);
   expect(notes).toBe(1);
@@ -7225,7 +7242,8 @@ test("a render Herdr stopped is asked for again, and counted even when the next 
 });
 
 test("one reshaping budget a draw, and less of it when the rest of the draw is slow", async () => {
-  const { v, cx } = await pane(fixture("--extra", "2"));
+  // About the budgets themselves: the pane's own slices.
+  const { v, cx } = await pane(fixture("--extra", "2"), { sliced: true });
   v.render(cx);
   // A quick draw leaves the whole budget for reshaping and for a slice of a rows build; a
   // slow one splits what is left of 30 ms between them, each down to its floor.
@@ -7348,7 +7366,9 @@ test("the jump to the newest turn goes to the end every frame while the rows set
 const rowSig = (v) => v.baseRows.map((r, i) => `${r.kind}|${r.key}|${r.count ?? ""}|${v.baseSizes[i]}`);
 
 test("a long session's rows are built over several frames, the old rows shown till then, and come out as one build would make them", async () => {
+  // About the slices themselves: the pane's own.
   const { v, cx } = await longSession(450);
+  sliced(v);
   v.debug = false;
   v.width = 545;
   settleRows(v, cx);
@@ -7670,7 +7690,9 @@ test("a measure taken for a width the pane has left is used when the pane comes 
 });
 
 test("a rebuild sizes its rows inside the slice's time too, and the rows on screen stay until every new row has its height", async () => {
+  // About the slices themselves: the pane's own.
   const { v, cx } = await longSession(450);
+  sliced(v);
   v.debug = false;
   v.width = 545;
   settleRows(v, cx);
@@ -7712,7 +7734,7 @@ test("a long session whose read ends while its first rows still build selects th
   let fake = 0;
   performance.now = () => (fake += 2);
   let p;
-  try { p = await pane(fixture("--extra", "300")); } finally { performance.now = realPerf; }
+  try { p = await pane(fixture("--extra", "300"), { sliced: true }); } finally { performance.now = realPerf; }
   const { v, cx } = p;
   expect(v.rowJob).not.toBe(null);
   expect(v.sel).toBe(null);
@@ -8579,7 +8601,8 @@ test("the outline marks pins, keeps working narrow, has its own footer, gives wa
 // draw reshapes for at most SHAPE_MS, rows in view first, and the next frames go on.
 test("a settings change in a long session reshapes rows over several frames, the ones in view first", async () => {
   // Agent messages with no reply of their own: hidden, and never shaped, till the toggle below.
-  const { v, cx } = await paneWith(fixture("--busy", "130", "--quiet"), null, 1000);
+  // About the slices themselves: the pane's own.
+  const { v, cx } = await paneWith(fixture("--busy", "130", "--quiet"), (_cx, view) => sliced(view), 1000);
   v.width = 545;
   v.prefs = { ...v.prefs, truncate: true }; // so Reply lines changes the rows
   draw(v, cx);
@@ -20519,26 +20542,33 @@ test("the opening: the first session's stat and peek that come back after anothe
 });
 
 test("a later session still being read, with no loading state over it, shows no running turn before a later chunk has the turn's end", async () => {
-  let second = null;
-  const { v, cx, go } = await openingPane(busy(), (v) => second != null && v.current() === second && second.offset > 0);
-  v.opening.at -= 1000;
-  go((v) => second != null && v.current() === second && second.offset > 0);
-  await settle(v);
-  openFrames(v, cx);
-  expect(v.openActive()).toBe(false);
-  // A new session (a /clear) whose first turn ends in its second chunk, held after the first.
-  v.adopt({ kind: "found", id: "made-up-second", file: endInChunk2(), live: true }, cx);
-  second = v.current();
-  await until(() => second.offset > 0, "the second session's first chunk");
-  expect([Boolean(second.loaded), second.turns.length, second.turns[0].done]).toEqual([false, 1, false]);
-  expect(v.isLive(second, 1, 0)).toBe(false);
-  // Not the running turn: no live row, and no working card.
-  const rows = v.rows();
-  expect(rows.filter((r) => r.live || r.running).map((r) => r.kind)).toEqual([]);
-  expect(drawnText(frame(v, cx)).join("|")).not.toMatch(/No reply yet|Working/);
-  go(() => false);
-  await settle(v);
-  expect(second.turns[0].done).toBe(true);
+  // The rows on screen, as Herdr's list draws them: with every row of the busy fixture drawn
+  // in each frame, the frames to the end of the opening took 15 s, and over 30 s on CI.
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    let second = null;
+    const { v, cx, go } = await openingPane(busy(), (v) => second != null && v.current() === second && second.offset > 0);
+    v.opening.at -= 1000;
+    go((v) => second != null && v.current() === second && second.offset > 0);
+    await settle(v);
+    // On a held clock, the same frames on any machine: on the real one a busy machine needed
+    // more of them, as each slice of the rows did less.
+    heldClock(() => openFrames(v, cx));
+    expect(v.openActive()).toBe(false);
+    // A new session (a /clear) whose first turn ends in its second chunk, held after the first.
+    v.adopt({ kind: "found", id: "made-up-second", file: endInChunk2(), live: true }, cx);
+    second = v.current();
+    await until(() => second.offset > 0, "the second session's first chunk");
+    expect([Boolean(second.loaded), second.turns.length, second.turns[0].done]).toEqual([false, 1, false]);
+    expect(v.isLive(second, 1, 0)).toBe(false);
+    // Not the running turn: no live row, and no working card.
+    const rows = v.rows();
+    expect(rows.filter((r) => r.live || r.running).map((r) => r.kind)).toEqual([]);
+    expect(drawnText(frame(v, cx)).join("|")).not.toMatch(/No reply yet|Working/);
+    go(() => false);
+    await settle(v);
+    expect(second.turns[0].done).toBe(true);
+  } finally { H.listWindow = null; }
 }, 30000);
 
 test("the agent message counts follow a session's read ending: a running agent turn counted hidden while read is shown once it is", async () => {
