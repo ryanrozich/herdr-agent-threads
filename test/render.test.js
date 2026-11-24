@@ -20733,6 +20733,87 @@ test("shaping: a turn whose expected cost would take the draw past its shaping t
   } finally { v.shapeBudget = null; v.shapeRate = undefined; }
 });
 
+test("shaping: a turn left for its cost ends the pass that met it, so a draw never looks at every row still to reshape", async () => {
+  const at = (k) => new Date(Date.UTC(2026, 9, 1, 8) + k * 60000).toISOString();
+  const lines = [];
+  for (let k = 0; k < 1500; k++) lines.push(
+    { type: "user", uuid: `u${k}`, timestamp: at(2 * k), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: `Turn ${k + 1}: zerb kazo quil` } },
+    { type: "assistant", uuid: `a${k}`, timestamp: at(2 * k + 1), sessionId: "s", message: { id: `m${k}`, role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "The cart **total** agrees with `sum()`." }] } });
+  const file = join(mkdtempSync(join(tmpdir(), "threads-cost-")), "c.jsonl");
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const { v, cx } = await pane(file);
+  v.debug = false;
+  // The shaping clock counts 1 ms a reshape and nothing else, 12 ms a draw, and every turn is
+  // expected to cost 1.5 ms: with 11 ms spent, a draw's 12th turn waits for its cost.
+  for (const [name, ms] of [["reshape", 1], ["stepLinks", 0], ["mdHeight", 0]]) {
+    const f = v[name];
+    v[name] = function (...a) {
+      const s0 = this.shapeSpent ?? 0;
+      const t0 = performance.now();
+      const r = f.apply(this, a);
+      if (name === "reshape") this.shapeSpent = s0 + ms - (performance.now() - t0);
+      else if ((this.shapeSpent ?? 0) !== s0) this.shapeSpent = s0 + ms;
+      return r;
+    };
+  }
+  const t = v.current().turns[700];
+  v.shapeBudget = 12;
+  v.shapeRate = 1.5 / (t.prompt.length + v.replyText(t).length);
+  // shape() calls made by a pass's own walk (not shapeInView's), the rows it reshaped, and the
+  // rows it counted as left (shapeLeft past what shapeInView counted).
+  let calls = 0;
+  let inView = false;
+  let viewLeft = 0;
+  const shape = v.shape;
+  v.shape = function (...a) { if (!inView) calls++; return shape.apply(this, a); };
+  const siv = v.shapeInView;
+  v.shapeInView = function (...a) { inView = true; try { return siv.apply(this, a); } finally { inView = false; viewLeft = this.shapeLeft; } };
+  const passes = [];
+  const rs = v.reshapeStale;
+  v.reshapeStale = function (...a) { const c0 = calls; const s0 = this.staleRows.length; const r = rs.apply(this, a); passes.push([calls - c0, s0 - this.staleRows.length, s0, this.shapeLeft - viewLeft, this.staleRows.length]); return r; };
+  listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    v.width -= 40;
+    for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || !passes.length); k++) { cx.flush(16); v.render(cx); }
+    expect(v.staleRows).toEqual([]);
+    expect(passes[0][2]).toBeGreaterThan(1000);
+    // None was dropped: every row has its turn's shape at the new width.
+    const look = v.shapeLook();
+    expect(v.baseRows.filter((r) => r.kind === "turn" && !(r.shape === r.turn.shapeMemo && r.turn.shapeFast?.look === look)).length).toBe(0);
+    // Each pass looks at the rows it reshapes and the one it leaves for its cost, however many
+    // wait after it, and counts each row it leaves once; all drain at about 11 a draw.
+    for (const [n, d, , counted, left] of passes) {
+      expect(n).toBeLessThanOrEqual(d + 1);
+      expect(counted).toBe(left);
+    }
+    expect(passes.length).toBeLessThanOrEqual(Math.ceil(passes[0][2] / 10) + 5);
+  } finally { v.shapeBudget = null; v.shapeRate = undefined; listWindow = null; }
+}, 30000);
+
+test("shaping: a stale turn over the budget waits while the running turn reshapes first in every draw, and is shaped in the first draw after", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.debug = false;
+  const t = v.current().turns[0];
+  // A pasted prompt of 20,000 characters, at 1 µs a character: 20 ms expected, past the 12.
+  t.prompt = "kaz vel orin tam ".repeat(1250);
+  v.shapeBudget = 12;
+  v.shapeRate = 1e-3;
+  v.staleRows = [v.baseIndex.get("0:1")];
+  // The running turn reshaped before anything else in each draw (shapeInView), at 1 ms.
+  let running = 10;
+  const siv = v.shapeInView;
+  v.shapeInView = function (...a) { if (running > 0) { running--; this.shapeSpent = (this.shapeSpent ?? 0) + 1; } return siv.apply(this, a); };
+  const frames = [];
+  try {
+    for (let k = 0; k < 20 && v.staleRows.length; k++) { cx.flush(16); v.render(cx); frames.push(running); }
+    expect(v.staleRows).toEqual([]);
+    // Held back for the 10 draws the running turn reshaped first, then shaped in the next.
+    expect(frames.length).toBe(12);
+    expect(v.baseRows[v.baseIndex.get("0:1")].shape).toBe(t.shapeMemo);
+    expect(t.shapeFast.p).toBe(t.prompt.length);
+  } finally { v.shapeBudget = null; v.shapeRate = undefined; }
+});
+
 test("shaping: the rate is learned from long turns, rising at once and falling back by a tenth a turn", async () => {
   const { v } = await pane(fixture("--extra", "3"));
   // What the pane's own first draw taught it, forgotten.

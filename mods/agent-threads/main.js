@@ -2952,7 +2952,10 @@ export default class Threads extends View {
       const r = this.baseRows[i];
       if (r?.kind !== "turn" || !r.turn) continue;
       const sh = this.shape(r.turn);
-      if (this.shapeStale) { left.push(i); continue; }
+      // Left for its expected cost (shapeCost) or out of time: the rest wait too, unlooked at.
+      // Going on past a turn left for its cost, with the time not yet spent, called shape() for
+      // every row still to reshape in that one draw: 5,500 of them, 40 to 50 ms, on the rig.
+      if (this.shapeStale) { this.shapeLeft += order.length - k - 1; for (; k < order.length; k++) left.push(order[k]); break; }
       if (sh === r.shape) continue;
       if (Boolean(sh.thumbs) !== Boolean(r.shape?.thumbs)) return false;
       const nr = { ...r, shape: sh };
