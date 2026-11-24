@@ -7087,6 +7087,21 @@ test("the light draw after a stopped draw reshapes for SHAPE_MIN_MS, not a full 
   expect([ms.length > 0, ms.every((x) => x <= P121.rest + 2 + 2)]).toEqual([true, true]);
 }, 60000);
 
+// A light draw measures no part, so through the light window after a stopped draw the pane does
+// not draw again and again for the parts left to measure: only when something asks for work a
+// light draw can do (the draw after the stop, the pane's poke, a scroll's limit) and at the
+// window's end. With the measures on (no size comes back here), a capped card opened with its
+// first draw stopped drew every 24 ms through the window: 210 draws in 5 s.
+test("through the light window after a stopped draw the pane draws only a few times, not every frame", async () => {
+  const { v, cx } = await openLong(shortParas(4000));
+  const light = [];
+  const r = costedFrames(v, cx, 3000, () => false, { stopAfter: 1, secs: 7, onFrame: (ms) => light.push([Math.round(ms), v.light]) });
+  const inLight = light.filter(([, l]) => l).map(([ms]) => ms);
+  costLog("capped, the light window's draws", { ...r, light: inLight });
+  // And the window's end brings the next draw that does the work.
+  expect([inLight.length <= 10, light.some(([ms, l]) => !l && ms >= 5000)]).toEqual([true, true]);
+}, 60000);
+
 // Parts held through the light window after a stopped draw go on in the draw after it: a
 // timer asks for the open turns to be built again (againOpen), for the work left in them
 // (otherLeft). Herdr stops that draw inside the rebuild (stopAt, once, in the first draw after
