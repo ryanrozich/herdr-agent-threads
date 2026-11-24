@@ -5227,6 +5227,8 @@ export default class Threads extends View {
     // list's, which Herdr scales by zoom.
     this.listOff = (this.listOff ?? 0) - dy / this.zoom();
     this.wheelN = (this.wheelN ?? 0) + 1;
+    // The reader has taken the view: the open's scroll of a card is dropped.
+    if (this.scrollTo?.how === "card") this.scrollTo = null;
     if (this.view === "pinned") return;
     this.scrolledBy(dy, Date.now());
     this.scrollSeenAt = Date.now();
@@ -6088,6 +6090,22 @@ export default class Threads extends View {
   // The time a draw gives an open reply's split and its parts' rows: its reshaping time, or
   // SHAPE_MIN_MS of a light draw.
   partMax() { return this.light ? SHAPE_MIN_MS : this.shapeMax(); }
+  // Whether the open's scroll of a card (toggle) can land now, before every row has settled:
+  // nothing at or above the card's head is still to be built, reshaped or laid out (rowJob,
+  // staleRows, an mdrest row), and the card is taller than the pane, so it lands with its head
+  // at the top whatever its own parts' heights come to. A card that may fit waits for them, to
+  // land wholly on screen; so does any card while the pane's height is not known yet.
+  cardLands(rows, slots) {
+    const key = this.scrollTo.key;
+    const i = rows.findIndex((x) => x.key === key);
+    if (i < 0 || this.rowJob || !(this.listH > 0)) return false;
+    const b = this.baseRows.findIndex((x) => x.key === key);
+    if (this.staleRows?.some((k) => k <= b)) return false;
+    for (let k = 0; k < i; k++) if (rows[k].kind === "mdrest") return false;
+    let h = slots[i] ?? 0;
+    for (let k = i + 1; k < rows.length && CARD.has(rows[k].kind) && rows[k].kind !== "head"; k++) h += slots[k] ?? 0;
+    return h > this.listH;
+  }
   // A part row's height worked out for this layout (partRow), or null. Never a rough one.
   partH(r) {
     const e = this.partHs?.get(r);
@@ -9212,12 +9230,20 @@ export default class Threads extends View {
     // A reader at the end through a re-wrap stays at the end: in this frame, every frame, until
     // the place is let go (holdDone).
     if (this.anchor?.end && rows.length && !this.scrollTo) { this.pinningUntil = Date.now() + 1000; this.askEnd(); }
-    const unsettled = this.shapeLeft > 0 || this.staleRows?.length || this.rowJob;
+    // The open's scroll of a card (toggle) waits only while the card may still move: see
+    // cardLands. Every other scroll waits for every row.
+    const unsettled = (this.shapeLeft > 0 || this.staleRows?.length || this.rowJob) && !(this.scrollTo?.how === "card" && this.cardLands(rows, slots));
     if (!(this.toBottom || this.scrollTo) || !unsettled) this.scrollWait = 0;
     else if (!this.scrollWait) this.scrollWait = Date.now();
     // A scroll to a place waits 2 s at most: while renders keep being stopped the rows never
-    // settle. The end is held to in every frame while they do (below).
+    // settle. The end is held to in every frame while they do (below). A frame is asked for at
+    // the limit: in a pane that asks for none (the light window after a stopped draw) the
+    // scroll waited until the next one, 5 s or more.
     const bottomHeld = this.toBottom && !this.scrollTo;
+    if (this.scrollTo && unsettled && !this.scrollLimitNext) {
+      this.scrollLimitNext = true;
+      cx.timer.after(Math.max(0, this.scrollWait + SCROLL_WAIT_MS - Date.now()) + 1, (cx) => { this.scrollLimitNext = false; cx.notify(); });
+    }
     if ((this.toBottom || this.scrollTo) && unsettled && (bottomHeld || Date.now() - this.scrollWait < SCROLL_WAIT_MS)) {
       // A return's wait for the probe (until, below) starts once the rows are reshaped.
       if (this.scrollTo?.until) this.scrollTo.until = Math.max(this.scrollTo.until, Date.now() + 400);
@@ -9289,8 +9315,13 @@ export default class Threads extends View {
         let top = lead(i);
         if (rows[top - 1]?.key === `visit:${rows[i].key}`) top -= 1;
         if (rows[top - 1]?.kind === "pday") top -= 1; // a pin's day header comes with it
-        cx.timer.after(16, (cx) => { this.askScroll(j, "top"); cx.notify(); });
-        cx.timer.after(48, (cx) => { this.askScroll(top, "top"); cx.notify(); });
+        // Asked by key, as the rows can change in between (a card above coming in), and not
+        // at all once the reader has turned the wheel.
+        const wheels = this.wheelN ?? 0;
+        const ask = (k) => { if ((this.wheelN ?? 0) !== wheels) return; const at = this.rowsMemo?.findIndex((x) => x.key === k) ?? -1; if (at >= 0) this.askScroll(at, "top"); };
+        const last = rows[j].key, head = rows[top].key;
+        cx.timer.after(16, (cx) => { ask(last); cx.notify(); });
+        cx.timer.after(48, (cx) => { ask(head); cx.notify(); });
       } else if (i >= 0 && how === "land") {
         // scroll_to_item only brings an item to the nearest edge, so a place below the view
         // would land at the bottom. An item a pane further down first, then the place, which
