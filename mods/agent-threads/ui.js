@@ -2672,7 +2672,10 @@ export class RowWindow {
   start(list, i, dir) {
     const { rows } = list;
     const n = rows.length;
-    const starts = (j) => j <= 0 || j >= n || LEADS.has(rows[j].kind) || (rows[j].turn != null && rows[j].turn !== rows[j - 1].turn && !LEADS.has(rows[j - 1].kind));
+    // A day band leads the turn after it, and so does the note over a turn a search hides,
+    // which a pin's return shows (visit:, buildRows), under the band if there is one.
+    const lead = (r) => LEADS.has(r.kind) || r.key.startsWith("visit:");
+    const starts = (j) => j <= 0 || j >= n || LEADS.has(rows[j].kind) || (lead(rows[j]) && !lead(rows[j - 1])) || (rows[j].turn != null && rows[j].turn !== rows[j - 1].turn && !lead(rows[j - 1]));
     let j = Math.max(0, Math.min(n, i));
     while (!starts(j)) j += dir;
     return j;

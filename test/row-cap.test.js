@@ -1678,3 +1678,42 @@ test("a window that ends with Show later has the Jump to latest pill's room unde
     expect(v.sizesMemo.at(-1)).toBe(36);
   } finally { H.listWindow = null; }
 });
+
+test("RowWindow: the note over a turn a search hides, which a pin's return shows, leads its turn: a window never starts or ends between them", () => {
+  // n turns of one row, turn 20 hidden by the search and visited: its note, then its row; and
+  // with day, a day band over the note.
+  const make = (n, day = false) => {
+    const rows = [];
+    for (let t = 1; t <= n; t++) {
+      const turn = { n: t };
+      if (t === 20 && day) rows.push({ kind: "day", key: "day:0:2026-11-2" });
+      if (t === 20) rows.push({ kind: "note", key: "visit:0:20", text: "Pinned, not in this search" });
+      rows.push({ kind: "turn", key: `0:${t}`, si: 0, turn });
+    }
+    return { rows, index: new Map(rows.map((r, i) => [r.key, i])) };
+  };
+  const w = new RowWindow({ slide: 10, block: 3, stop: 12 });
+  let list = make(26);
+  const note = list.index.get("visit:0:20");
+  const head = list.index.get("0:20");
+  expect(head).toBe(note + 1);
+  // The turn's first row is the note's: back from the row to the note, on past it to the next turn.
+  expect(w.start(list, head, -1)).toBe(note);
+  expect(w.start(list, note, 1)).toBe(note);
+  expect(w.start(list, head, 1)).toBe(head + 1);
+  expect(w.turnRow(list, "0:20")).toBe(note);
+  // Tail, with slide - block rows back from the end falling on the turn's row.
+  expect(list.rows.length - 7).toBe(head);
+  let at = w.place(list, { tail: true });
+  expect(list.rows[at.a].key).not.toBe("0:20");
+  // A jump to the turn keeps the note in the range.
+  at = w.place(list, { want: head });
+  expect(at.a).toBeLessThanOrEqual(note);
+  expect(at.z).toBeGreaterThan(head);
+  // With a day band over the note, the band leads them both.
+  list = make(26, true);
+  expect(w.start(list, list.index.get("0:20"), -1)).toBe(list.index.get("day:0:2026-11-2"));
+  expect(w.start(list, list.index.get("visit:0:20"), -1)).toBe(list.index.get("day:0:2026-11-2"));
+  // A turn without a note keeps the day-band rule as before.
+  expect(w.start(list, list.index.get("0:21"), -1)).toBe(list.index.get("0:21"));
+});
