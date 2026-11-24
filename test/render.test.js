@@ -20693,7 +20693,20 @@ test("TRD-24: along the bottom a turn's heading drops its figures by the list's 
 });
 
 const trajLayoutOf = (w, open) => { const L = trajLayout(w, "bottom", open); return { side: L.side, detailW: L.detailW, listW: L.listW }; };
-test("TRD-24: along the bottom a 1 px size change across any layout threshold counts: the side detail, the start and bar columns, and a heading's figures; one across none waits, and the right dock's rule is unchanged", async () => {
+// A pane at from px told it is to px: whether paneW takes it, and the layout after.
+async function onePx(dock, from, to, open, counts) {
+  const { b, cb } = await bottomPane(from, 400, dock);
+  b.tdetail = open;
+  const before = b.trajReport().layout;
+  const c = frame(b, cb);
+  handlerAfterId(c, "threads-root", "on_size_change")({ width: to, height: 400 }, cb);
+  expect([dock, from, to, open, b.paneW]).toEqual([dock, from, to, open, counts ? to : from]);
+  if (counts && dock === "bottom") expect(b.trajReport().layout).toEqual(trajLayoutOf(to, b.detailOpen()));
+  else if (dock === "bottom") expect(b.trajReport().layout).toEqual(before);
+  if (dock === "right") expect(b.trajReport().cols).toEqual(trajLayout(counts ? to : from, "right", b.detailOpen()).cols);
+  if (dock === "bottom") expect(b.footerHints().some(([k]) => k === "↵")).toBe(b.paneW >= 700);
+}
+test("TRD-24: along the bottom a 1 px size change across any layout threshold counts: the side detail, the start and bar columns, and a heading's figures; one across none waits", async () => {
   // [dock, from px, to px, detail as the person left it, counts]
   for (const [dock, from, to, open, counts] of [
     ["bottom", 699, 700, undefined, true], ["bottom", 700, 699, undefined, true],
@@ -20707,22 +20720,18 @@ test("TRD-24: along the bottom a 1 px size change across any layout threshold co
     ["bottom", 779, 780, false, false], ["bottom", 419, 420, false, true],
     ["bottom", 699, 700, false, true], ["bottom", 700, 699, false, true],
     ["bottom", 800, 801, undefined, false], ["bottom", 1459, 1460, undefined, false],
-    // On the right only the compact widths (200 px with the 2 px frame) and the heading's icon
-    // count, as before this change: its own thresholds (900, 420, 500) wait like any 1 px change,
-    // an older gap kept for a change of its own.
-    ["right", 899, 900, undefined, false], ["right", 699, 700, undefined, false], ["right", 419, 420, undefined, false],
-    ["right", 197, 198, undefined, true],
-  ]) {
-    const { b, cb } = await bottomPane(from, 400, dock);
-    b.tdetail = open;
-    const before = b.trajReport().layout;
-    const c = frame(b, cb);
-    handlerAfterId(c, "threads-root", "on_size_change")({ width: to, height: 400 }, cb);
-    expect([dock, from, to, open, b.paneW]).toEqual([dock, from, to, open, counts ? to : from]);
-    if (counts && dock === "bottom") expect(b.trajReport().layout).toEqual(trajLayoutOf(to, b.detailOpen()));
-    else if (dock === "bottom") expect(b.trajReport().layout).toEqual(before);
-    if (dock === "bottom") expect(b.footerHints().some(([k]) => k === "↵")).toBe(b.paneW >= 700);
-  }
+  ]) await onePx(dock, from, to, open, counts);
+});
+// On the right each of its layout's thresholds counts too, both ways, each in a test of its own:
+// the detail's side (900 px), the start and bar columns (420, 500) and the filter bar (540).
+for (const [px, what] of [[900, "the detail's side"], [420, "the start column"], [500, "the bar column"], [540, "the filter bar"]]) {
+  test(`TRD-24: on the right a 1 px size change across ${px} px (${what}) counts, both ways`, async () => {
+    await onePx("right", px - 1, px, undefined, true);
+    await onePx("right", px, px - 1, undefined, true);
+  });
+}
+test("TRD-24: on the right a 1 px size change across none of its thresholds waits, and one across the compact width counts", async () => {
+  for (const [from, to, counts] of [[699, 700, false], [800, 801, false], [197, 198, true]]) await onePx("right", from, to, undefined, counts);
 });
 
 // ---- the opening (TRD-94): the pane's first session opens at its end, still ----
