@@ -163,11 +163,11 @@ describe("the reading place", () => {
 
 describe("keys", () => {
   const k = (key, m = {}) => ({ key, modifiers: m });
-  test("p, u and 1 to 5 act; chords and 6 do not", () => {
+  test("p, u and 1 to 7 act; chords and 8 do not", () => {
     expect(keyAction(k("p"))).toBe("pin");
     expect(keyAction(k("u"))).toBe("undoUnpin");
-    for (const d of [1, 2, 3, 4, 5]) expect(keyAction(k(String(d)))).toBe(`go:${d}`);
-    expect(keyAction(k("6"))).toBe(null);
+    for (const d of [1, 2, 3, 4, 5, 6, 7]) expect(keyAction(k(String(d)))).toBe(`go:${d}`);
+    expect(keyAction(k("8"))).toBe(null);
     expect(keyAction(k("p", { platform: true }))).toBe(null);
     expect(keyAction(k("1", { control: true }))).toBe(null);
   });
