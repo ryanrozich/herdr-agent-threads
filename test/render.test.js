@@ -6912,7 +6912,7 @@ test("replies of long lines, long paragraphs or no blank line draw in time at th
 test("an open reply's split goes on in the light window after a stopped draw, in the light draw's time", async () => {
   const { v, cx, keys } = await openLong(shortParas(4000));
   v.probeDue = function () { this.probeLeft = 0; return []; };
-  const split = () => { let n = 0; for (const m of v.partTurns?.values() ?? []) for (const job of m.split.values()) n += job.n; return n; };
+  const split = (w = v) => { let n = 0; for (const m of w.partTurns?.values() ?? []) for (const job of m.split.values()) n += job.n; return n; };
   // The parts split and shown by the end of each frame, and whether it was light.
   const seen = [];
   const shown = () => v.baseRows.filter((x) => x.kind === "md" && x.key.startsWith(`md:${keys}:`)).length;
@@ -6920,6 +6920,16 @@ test("an open reply's split goes on in the light window after a stopped draw, in
   costLog("capped, the split in light frames", { ...r, seen: seen.slice(0, 4) });
   const i = seen.findIndex(([light]) => light);
   expect([r.frames[0].ok, i, seen[1][1] > seen[0][1], seen[1][2] > 0, r.frames[1].ok && r.frames[1].ms < 25, r.settled > 0]).toEqual([false, 1, true, true, true, true]);
+  // Stopped inside the rebuild the shape timer asked for (againOpen), as it builds the card: the
+  // request stands, and the light draw after it builds the card again and splits on.
+  const o = await openLong(shortParas(4000));
+  o.v.probeDue = v.probeDue;
+  const seen2 = [];
+  let once = false;
+  const stopAt = (where) => where === "expanded" && seen2.length === 1 && !once && (once = true);
+  const r2 = costedFrames(o.v, o.cx, 400, await cardDone(o.v, o.keys), { stopAt, onFrame: () => seen2.push([o.v.light, split(o.v)]) });
+  costLog("stopped in the asked rebuild", { ...r2, seen: seen2.slice(0, 5) });
+  expect([once, seen2[1][0], seen2[2][0], seen2[2][1] > seen2[0][1]]).toEqual([true, false, true, true]);
 }, 60000);
 
 // A part is shown only at its worked-out height: where there is no time to work it out (a
