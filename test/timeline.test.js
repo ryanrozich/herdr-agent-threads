@@ -1231,3 +1231,73 @@ test("timeline span join (tlJoin): spans touch within half a pixel on either sid
   expect(run([[100, 110]], [50, 60, true])).toEqual([[50, 60, 1], [100, 110]]);
   expect(run([[100, 110, 1]], [50, 60])).toEqual([[50, 60], [100, 110, 1]]);
 });
+
+// Each failed bar's centre as drawn, at Fit: a turn under 2 px is one span per lane from its x,
+// its mark at x + w/2; a wider turn's failed bars are their own boxes (itemBox).
+function failCentres(L, heads) {
+  const out = [];
+  L.turns.forEach((t, ti) => {
+    const h = heads[ti];
+    if (t.w < 2) { if (h.cnt?.failed) out.push(t.x + t.w / 2); return; }
+    for (const st of stepsOf(h)) {
+      if (!st.failed) continue;
+      const b = itemBox(st.a ?? Number.NaN, st.b ?? Number.NaN, 0, st.i, t.x, t.w, L.geo.walls[ti], "clock", tlLen(h));
+      if (b) out.push((b.x0 + b.x1) / 2);
+    }
+  });
+  return out;
+}
+
+test("timeline failure marks: a failed bar inside another with the same centre gives one mark, not two on the same px", () => {
+  // 60 s across 600 px: a failed Bash from 2 to 40 s (20 to 400 px) and a failed Read from 10
+  // to 32 s (100 to 320 px) on the half track inside it. Both are centred at 210 px.
+  const h = head(turn(1, [[["Bash", "x", 2000, 40000, true]], [["Read", "a", 10000, 32000, true]]]));
+  const L = timelineLayout([h], 600, "clock", T0 + 1e7);
+  expect(failCentres(L, [h])).toEqual([210, 210]);
+  expect(L.fails).toEqual([210]);
+});
+
+test("timeline failure marks: across turns too, the marks are 6 px or more apart, spaced by the centres they are drawn at", () => {
+  // Sessions where a wide turn's last failed call ends at its end and short turns after it
+  // (under 2 px from a few hundred turns, one span a lane) have failed calls of their own.
+  let close = 0;
+  for (const n of [40, 90, 150, 240, 330, 420, 560, 700]) {
+    const heads = Array.from({ length: n }, (_, i) => {
+      const kind = i % 7;
+      const calls = kind === 0 ? [["Bash", "x", 57000, 60000, true]] : kind === 3 ? [["Read", "a", 0, 400, true]] : kind === 5 ? [["Grep", "b", 200, 900, true]] : [["Glob", "c", 100, 300]];
+      const end = kind === 0 ? 60000 : kind === 3 ? 4000 : 1000 + (i % 5) * 700;
+      return { ...head(turn(i + 1, ["a", calls], { end: T0 + end })), t0: T0 + i * 120000 };
+    });
+    for (const cw of [1370, 1143]) {
+      const L = timelineLayout(heads, cw, "clock", T0 + 1e9);
+      const f = L.fails;
+      for (let k = 1; k < f.length; k++) {
+        expect([n, cw, f[k] - f[k - 1] >= 6 - 1e-9]).toEqual([n, cw, true]);
+      }
+      // Each failed bar has a mark within 6 px of its centre.
+      for (const c of failCentres(L, heads)) {
+        if (f.some((m) => Math.abs(m - c) < 6)) continue;
+        expect([n, cw, c, "no mark within 6 px"]).toEqual([n, cw, c, null]);
+      }
+      const narrow = L.turns.filter((t) => t.w < 2).length;
+      if (narrow && narrow < L.turns.length) close++;
+    }
+  }
+  // Both kinds of turn come up side by side, as at Fit from a few hundred turns.
+  expect(close).toBeGreaterThan(4);
+});
+
+test("timeline failure marks: every failed bar has a mark within 6 px of its centre; the marks go left to right by centre", () => {
+  const marks = (h) => timelineLayout([h], 600, "clock", T0 + 1e7).fails.map((x) => Math.round(x * 1000) / 1000);
+  // A failed Read from 0 to 0.4 s (0 to 4 px, centre 2) and a failed Bash from 0.5 to 5.5 s
+  // (5 to 55 px, centre 30): the Bash starts under 6 px from the Read but is centred 28 px
+  // from it, so it has a mark of its own.
+  const a = head(turn(1, [[["Read", "a", 0, 400, true]], [["Bash", "x", 500, 5500, true]]]));
+  expect(marks(a)).toEqual([2, 30]);
+  // A failed Bash from 0 to 10 s (0 to 100 px, centre 50) and a failed Read from 1 to 1.4 s
+  // (10 to 14 px, centre 12) inside it: by start the Bash comes first, by centre the Read.
+  // Both marks, left to right.
+  const b = head(turn(2, [[["Bash", "x", 0, 10000, true]], [["Read", "a", 1000, 1400, true]]]));
+  expect(marks(b)).toEqual([12, 50]);
+});
+
