@@ -136,6 +136,20 @@ test("timeline: a call with no result in a turn that is not running runs flat to
   expect(big.fails.length).toBeLessThanOrEqual(500 / 6 + 1);
 });
 
+test("timeline failure marks: spaced left to right as drawn, not in the order the ledger lists the calls", () => {
+  const marks = (h) => timelineLayout([h], 600, "clock", T0 + 1e7).fails.map((x) => Math.round(x * 1000) / 1000);
+  // 60 s across 600 px: a failed Bash at 30 s (300 to 310 px), then a failed Read listed after
+  // it but run at 10 s (100 to 110 px), 200 px to its left: both marks.
+  const a = head(turn(1, [[["Bash", "x", 30000, 31000, true]], [["Read", "a", 10000, 11000, true]]]));
+  expect(timelineLayout([a], 600, "clock", T0 + 1e7).turns[0]).toMatchObject({ x: 0, w: 600 });
+  expect(marks(a)).toEqual([105, 305]);
+  // Failed calls under 6 px apart: one mark, the leftmost bar's, whichever is listed first.
+  const b = head(turn(2, [[["Bash", "x", 30400, 31000, true]], [["Read", "a", 30000, 31000, true]]]));
+  expect(marks(b)).toEqual([305]);
+  const c = head(turn(3, [[["Read", "a", 30000, 31000, true]], [["Bash", "x", 30400, 31000, true]]]));
+  expect(marks(c)).toEqual([305]);
+});
+
 // Round 7 decisions, section 2: an unfinished call is mark 1, the torn end.
 test("torn end: 3 teeth 4 px tall and 5 px deep; 3 px deep under 12 px wide; a half-height bar 2 teeth 3 px deep; left corners cut 1 px", () => {
   const right = (pts) => pts.filter(([x]) => x === 100);
