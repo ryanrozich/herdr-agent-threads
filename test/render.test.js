@@ -7088,8 +7088,7 @@ test("the light draw after a stopped draw reshapes for SHAPE_MIN_MS, not a full 
 }, 60000);
 
 // A light draw measures no part, so through the light window after a stopped draw the pane does
-// not draw again and again for the parts left to measure: only when something asks for work a
-// light draw can do (the draw after the stop, the pane's poke, a scroll's limit) and at the
+// not draw again and again to measure: only when something asks for work a light draw can do (the draw after the stop, the pane's poke, a scroll's limit) and at the
 // window's end. With the measures on (no size comes back here), a capped card opened with its
 // first draw stopped drew every 24 ms through the window: 210 draws in 5 s.
 test("through the light window after a stopped draw the pane draws only a few times, not every frame", async () => {
