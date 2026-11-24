@@ -1001,7 +1001,7 @@ test("the opening: a row's refused draws count for its text: a released row cut 
   let fresh = null;
   const runs = [];
   let cur = -1;
-  const { frames } = await costlyWheel(8, 44, 900, (v, cx, host) => {
+  const { frames } = await costlyWheel(8, 44, 2600, (v, cx, host) => {
     wheelUp(v, cx, host);
     const reshape = v.reshape;
     v.reshape = function (...a) {
@@ -1031,6 +1031,9 @@ test("the opening: a row's refused draws count for its text: a released row cut 
   expect(fresh).toBeLessThanOrEqual(24);
   // Its next run, if any here: not before a second 64 draws refused on the new text.
   expect(runs.slice(1).filter((k) => k < changed + 5000 / 16 + 2 * 64 - 4)).toEqual([]);
+  // And on the new text it is released in its turn: the other rows on screen run first, one
+  // after each 5 s of plain draws, and then it does, alone, once.
+  expect(runs.length).toBe(2);
   expect(frames.filter((f) => f.stopped).length).toBeGreaterThanOrEqual(1);
 }, 300000);
 
