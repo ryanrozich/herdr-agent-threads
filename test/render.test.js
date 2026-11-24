@@ -6969,9 +6969,13 @@ test("an open card's held parts are not dropped by a reshape of closed rows aske
 // the light window stopped in a read of the split as it builds the card again. The pane must
 // not go quiet with the card on its placeholder.
 test("held parts of a reply of two long lines link after a draw stopped in its split as it builds the card again", async () => {
-  const { r, hit, linkedParts } = await heldThenStopped(longLines(), (where) => where === "split");
+  // Each word names a ticket, so every part has links (two lines of about 98 KB).
+  const line = (w) => Array.from({ length: 7200 }, (_, i) => `${w} ACME-${i + 1}`).join(" ");
+  const text = `${line("see")}\n\n${line("and")}`;
+  const { r, hit, linkedParts } = await heldThenStopped(text, (where) => where === "split");
   costLog("two 100 KB lines, stopped in its split", r);
-  expect([hit, r.stops, r.settled > 0, linkedParts.map((n) => n > 0)]).toEqual([1, 2, true, [true]]);
+  const parts = (await splitOf(text)).length;
+  expect([hit, r.stops, r.settled > 0, linkedParts]).toEqual([1, 2, true, [parts]]);
 }, 60000);
 
 test("two capped replies open: no frame passes Herdr's time while both settle, and each is split once", async () => {
