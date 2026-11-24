@@ -912,11 +912,12 @@ for (const x of [1, 2]) test(`with 100 turns after the last one with a reply and
   expect(fieldText(v)).toBe("No matches");
 }, 120000);
 
-// The limit: a tail longer than one slice of the scan can check (about 1,500 turns at the
-// test's price), changing before every draw, is checked again from its start at each change
-// and is not done while it changes. The field says it is counting meanwhile, and the count
-// ends within a few draws of the last change. The figures, from the harness: the draws counted
-// while it changes, and the draws after the last change until counted.
+// The limit: a tail too long for the scan's share of a draw, changing before every draw, is
+// checked again from its start at each change and leaves the turns before it little or no
+// time, so the count is not done while it changes. On this harness, 5,600 turns and a turn
+// every draw: a tail of 1,100 turns is counted at draw 34 and one of 1,200 not at all; at 2x
+// the prices, 450 at draw 30 and 550 not at all. The field says it is counting meanwhile, and
+// the count ends within a few draws of the last change.
 for (const x of [1, 2]) test(`with 2,000 turns after the last one with a reply and a turn coming in before every draw, the field says it is counting, and the count ends within 20 draws of the last${x === 1 ? "" : `, at ${x}x the prices`}`, async () => {
   const { v, cx, s } = await longPane(5600);
   tailMore(s, 2000);
