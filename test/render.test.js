@@ -6,7 +6,7 @@ import { test, expect, mock, setSystemTime, spyOn } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest, ruleSender } from "../mods/agent-threads/core/turns.js";
+import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest, ruleSender, newSession as newSessionForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
 import { pinRowHeight, PIN_ROW, pinRowShape, pinPromptText, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS, weightHerdr as weightHerdrOf } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
@@ -116,6 +116,8 @@ mock.module("herdr", () => ({
   exec: async (cmd, args) => {
     // A link the pane opens is logged, never opened.
     if (cmd === "open") { log.push(["open", ...args]); return { code: 0, stdout: "", stderr: "" }; }
+    // A test's stand-in for the extractor: its answer, or null to run it.
+    if (extractHook && String(args?.[0] ?? "").endsWith("core/extract.sh")) { const r = await extractHook(args); if (r) return r; }
     stamp("out");
     try { return execReal(cmd, args); } finally { stamp("in"); }
   },
@@ -123,6 +125,7 @@ mock.module("herdr", () => ({
   ...herdrRest(),
 }));
 let pinWrites = 0;
+let extractHook = null;
 // What the pane wrote to settings.json (the viewer keeps its panel choice there). With
 // keepSettings set, a write is also what the next read finds, as on disk.
 const settingsWrites = [];
@@ -2908,6 +2911,9 @@ test("S1: before the first chunk the header says Reading… with no percentage, 
   const { v, cx } = await paneWith(busy(), (cx) => { cx.sleepHook = never; }, 0);
   await until(() => v.current(), "a session");
   expect(v.headerText()).toBe("Reading…");
+  // The first draw arms the opening, which paints the background alone in its quiet time.
+  v.render(cx);
+  v.opening.at -= 1000;
   rec = [];
   v.render(cx);
   const widths = rec.filter(([n]) => n === "w").map(([, x]) => x);
@@ -16053,6 +16059,209 @@ test("card keys: on Sender rules the ring follows a press the way it does on Lin
   } finally { done(v); }
 });
 
+// TRD-100: on a kept rule, Change opens the two type rows above Name and pushes the fields
+// down, so a press aimed at Starts with can land in Name. A press reaches the mod as the
+// field's focus event; the ring stayed on the type row, the rows stayed open, and Tab stepped
+// from the type row. The rule here is a Duplicate copy, kept, opened again after the page was
+// left, with the rows open by Change and the ring on its own type's row.
+async function keptCopyPicker(ring = true) {
+  const r = await sendersPane();
+  const { v, cx } = r;
+  onOf(cardOf(v), "th-sender-edit-btn-1", "on_click")({}, cx);
+  onOf(cardOf(v), "th-rule-dup", "on_click")({}, cx);
+  onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+  await settleAll(cx);
+  v.action("settingsPage:main", cx);
+  v.action("settingsPage:senders", cx);
+  onOf(cardOf(v), "th-sender-edit-btn-2", "on_click")({}, cx);
+  v.cardRing = ring ? "th-sender-type-change" : null;
+  onOf(cardOf(v), "th-sender-type-change", "on_click")({}, cx);
+  expect([v.ruleEdit.at, v.ruleEdit.draft.name, v.ruleEdit.typeOpen, v.cardRing]).toEqual([1, "Checker copy", true, ring ? "th-sender-type-prefix" : null]);
+  return r;
+}
+
+test("TRD-100: a press in Name of a kept copy with its type rows open folds the rows and takes the ring; with no ring shown, none comes", async () => {
+  let { v, cx } = await keptCopyPicker();
+  try {
+    v.senderInputs.name.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, "th-rule-f-name", "rule-sender-name"]);
+    const c = cardOf(v);
+    expect(idsIn(c)).toContain("th-sender-type-change");
+    expect(idsIn(c)).not.toContain("th-sender-type-pattern");
+  } finally { done(v); }
+  ({ v, cx } = await keptCopyPicker(false));
+  try {
+    v.senderInputs.name.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, null, "rule-sender-name"]);
+  } finally { done(v); }
+});
+
+test("TRD-100: after a press in Name folds the type rows, the parts above Starts with are the ones drawn before Change, so a second press at the same place lands in Starts with and takes the keys", async () => {
+  const { v, cx } = await keptCopyPicker();
+  try {
+    // What sits above Starts with in the open rule, as drawn: its ids and its words.
+    const above = () => {
+      const c = cardOf(v);
+      const ids = idsIn(c);
+      const strs = strsOf(c);
+      return {
+        ids: ids.slice(ids.indexOf("th-rule-edit-2"), ids.indexOf("th-rule-f-prefix")),
+        strs: strs.slice(strs.indexOf("Type"), strs.lastIndexOf("Starts with")),
+      };
+    };
+    expect(above().ids).toContain("th-sender-type-pattern");
+    v.senderInputs.name.handlers.focus({}, cx);
+    const folded = above();
+    // Before Change: the same rule, opened again with its type on one line.
+    v.closeRule();
+    onOf(cardOf(v), "th-sender-edit-btn-2", "on_click")({}, cx);
+    expect(folded).toEqual(above());
+    expect(folded.ids).not.toContain("th-sender-type-pattern");
+    // The press where Name was is now in Starts with, which takes the keys and the text.
+    v.senderInputs.prefix.handlers.focus({}, cx);
+    expect([v.fieldFocused, v.ruleEdit.typeOpen]).toEqual(["rule-sender-prefix", false]);
+    typeSender(v, "prefix", "mail from {name}:", cx);
+    expect(v.ruleEdit.draft.prefix).toBe("mail from {name}:");
+  } finally { done(v); }
+});
+
+test("TRD-100: a press in Starts with of a kept copy with its type rows open folds them and takes the ring; a key edits it and Keep rule writes it", async () => {
+  const { v, cx } = await keptCopyPicker();
+  try {
+    v.senderInputs.prefix.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, "th-rule-f-prefix", "rule-sender-prefix"]);
+    typeSender(v, "prefix", "mail from {name}:", cx);
+    expect(v.ruleEdit.draft.prefix).toBe("mail from {name}:");
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()[1]).toEqual({ name: "Checker copy", prefix: "mail from {name}:", example: SENDS[0].example });
+    expect(lastSenders()[0]).toEqual(SENDS[0]);
+  } finally { done(v); }
+});
+
+test("TRD-100: Tab steps from the field a press gave the keyboard, not from a ring left on a type row; Shift-Tab goes back", async () => {
+  const { v, cx } = await keptCopyPicker();
+  try {
+    v.senderInputs.name.handlers.focus({}, cx);
+    stopsOf(v); pressKey(v, cx, "tab");
+    expect([v.cardRing, v.fieldFocused]).toEqual(["th-rule-f-prefix", "rule-sender-prefix"]);
+    stopsOf(v); pressKey(v, cx, "tab", tabEv(true));
+    expect([v.cardRing, v.fieldFocused]).toEqual(["th-rule-f-name", "rule-sender-name"]);
+  } finally { done(v); }
+});
+
+test("TRD-100: on Link rules too, Tab steps from a field a press gave the keyboard while the ring is on another control", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    v.cardRing = "th-rule-edit-btn-1"; stopsOf(v); pressKey(v, cx, "enter");
+    expect(v.cardRing).toBe("th-rule-type-change");
+    v.ruleInputs.name.handlers.focus({}, cx);
+    const s = stopsOf(v);
+    const next = s[s.indexOf("th-rule-f-name") + 1];
+    expect(next).toMatch(/^th-rule-f-/);
+    pressKey(v, cx, "tab");
+    expect([v.cardRing, v.fieldFocused]).toEqual([next, `rule-${next.slice(10)}`]);
+  } finally { done(v); }
+});
+
+test("TRD-100: on a kept link rule with its Change rows open, a press in a field folds the rows and takes a shown ring; with no ring shown, none comes", async () => {
+  let { v, cx } = await rulesPane();
+  try {
+    v.cardRing = "th-rule-edit-btn-2"; stopsOf(v); pressKey(v, cx, "enter");
+    stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit.at, v.ruleEdit.typeOpen, v.cardRing]).toEqual([1, true, "th-rule-type-custom"]);
+    expect(idsIn(cardOf(v))).toContain("th-rule-type-ticket");
+    v.ruleInputs.pattern.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, "th-rule-f-pattern", "rule-pattern"]);
+    const c = cardOf(v);
+    expect(idsIn(c)).toContain("th-rule-type-change");
+    expect(idsIn(c)).not.toContain("th-rule-type-ticket");
+    // Tab goes on from the field pressed into.
+    const s = stopsOf(v);
+    pressKey(v, cx, "tab");
+    expect(v.cardRing).toBe(s[s.indexOf("th-rule-f-pattern") + 1]);
+  } finally { done(v); }
+  ({ v, cx } = await rulesPane());
+  try {
+    onOf(cardOf(v), "th-rule-edit-btn-2", "on_click")({}, cx);
+    onOf(cardOf(v), "th-rule-type-change", "on_click")({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing]).toEqual([true, null]);
+    v.ruleInputs.name.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, null, "rule-name"]);
+    // A sender field's focus does nothing to an open link rule.
+    onOf(cardOf(v), "th-rule-type-change", "on_click")({}, cx);
+    v.senderInputs.name.handlers.focus({}, cx);
+    expect(v.ruleEdit.typeOpen).toBe(true);
+  } finally { done(v); }
+});
+
+test("TRD-100: on a new rule, not kept yet, a press in Name leaves its type rows open, on Sender rules and on Link rules", async () => {
+  let { v, cx } = await sendersPane();
+  try {
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    expect([v.ruleEdit.kind, v.ruleEdit.at]).toEqual(["senders", null]);
+    v.senderInputs.name.handlers.focus({}, cx);
+    expect(v.fieldFocused).toBe("rule-sender-name");
+    const c = cardOf(v);
+    expect(idsIn(c)).toContain("th-sender-type-prefix");
+    expect(idsIn(c)).toContain("th-sender-type-pattern");
+    expect(idsIn(c)).not.toContain("th-sender-type-change");
+  } finally { done(v); }
+  ({ v, cx } = await rulesPane());
+  try {
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    expect([v.ruleEdit.kind, v.ruleEdit.at, v.ruleEdit.touched]).toEqual(["links", null, false]);
+    v.ruleInputs.name.handlers.focus({}, cx);
+    expect(v.fieldFocused).toBe("rule-name");
+    const c = cardOf(v);
+    expect(idsIn(c)).toContain("th-rule-type-custom");
+    expect(idsIn(c)).toContain("th-rule-type-ticket");
+    expect(idsIn(c)).not.toContain("th-rule-type-change");
+  } finally { done(v); }
+});
+
+test("TRD-100: Tab steps from the quote key field a press gave the keyboard, not from the ring on another control", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    v.setPage = "main";
+    const s = stopsOf(v);
+    const at = s.indexOf("th-set-quote");
+    expect(at).toBeGreaterThan(2);
+    v.cardRing = s[1];
+    v.quoteInput.handlers.focus({}, cx);
+    expect([v.cardRing, v.fieldFocused]).toEqual([s[1], "quote"]);
+    stopsOf(v); pressKey(v, cx, "tab");
+    expect([v.cardRing, v.fieldFocused]).toEqual([s[at + 1], null]);
+    v.cardRing = s[1];
+    v.quoteInput.handlers.focus({}, cx);
+    stopsOf(v); pressKey(v, cx, "tab", tabEv(true));
+    expect(v.cardRing).toBe(s[at - 1]);
+  } finally { done(v); }
+});
+
+test("TRD-100: the keyboard alone on a kept copy: Change, its type rows, Tab into Name folds them, Tab to Starts with, a key, Enter keeps it", async () => {
+  const { v, cx } = await keptCopyPicker();
+  try {
+    stopsOf(v); pressKey(v, cx, "tab");
+    expect([v.cardRing, v.ruleEdit.typeOpen]).toEqual(["th-sender-type-pattern", true]);
+    stopsOf(v); pressKey(v, cx, "tab");
+    expect([v.cardRing, v.fieldFocused, v.ruleEdit.typeOpen]).toEqual(["th-rule-f-name", "rule-sender-name", false]);
+    stopsOf(v); pressKey(v, cx, "tab");
+    expect([v.cardRing, v.fieldFocused]).toEqual(["th-rule-f-prefix", "rule-sender-prefix"]);
+    typeSender(v, "prefix", "mail from {name}:", cx);
+    v.senderInputs.prefix.handlers.submit({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()[1].prefix).toBe("mail from {name}:");
+    expect(v.cardRing).toBe("th-sender-edit-btn-2");
+    // Shift-Tab from Name back into the open rows, and a type chosen there, as before.
+    stopsOf(v); pressKey(v, cx, "enter");
+    stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.cardRing, v.ruleEdit.typeOpen]).toEqual(["th-sender-type-prefix", true]);
+    v.cardRing = "th-sender-type-pattern"; stopsOf(v); pressKey(v, cx, "space");
+    expect([v.ruleEdit.draft.by, v.ruleEdit.typeOpen, v.cardRing]).toEqual(["pattern", false, "th-sender-type-change"]);
+  } finally { done(v); }
+});
+
 // ---- the settings card's bound Tab (issue 104): the window takes plain Tab before on_key_down ----
 
 const CARD_BOUND = [
@@ -20937,4 +21146,594 @@ test("a terminal at px beside the pair is never resized: its width holds through
     expect(t.row.widths().p1).toBe(704);
     expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p1")).toBe(false);
   } finally { t.restore(); }
+});
+
+// ---- the opening (TRD-94): the pane's first session opens at its end, still ----
+// A pane armed by a draw before its session is read, whose read stops (each step waits) while
+// hold() says so. step(f) lets it go on until f() holds, then stops it again.
+async function openingPane(file, holdAt = () => true) {
+  let hold = holdAt;
+  const waiting = [];
+  const { v, cx } = await paneWith(file, (cx) => {
+    cx.sleepHook = () => (hold(v) ? new Promise((r) => waiting.push(r)) : new Promise((r) => setTimeout(r, 0)));
+  }, 0);
+  await until(() => v.current() && v.reading, "the read");
+  draw(v, cx);
+  const go = (f) => { hold = f; for (const r of waiting.splice(0)) r(); };
+  return { v, cx, go, waiting };
+}
+// The text a draw gave its elements.
+const drawnText = (calls) => calls.filter(([n, x]) => n === "child" && typeof x === "string").map(([, x]) => x);
+// A transcript whose first turn has its end in the second chunk: tool results of 100 KB each
+// fill the first 2 MiB, then the reply and the turn's end. Made-up words only.
+function endInChunk2() {
+  const at = (s) => new Date(Date.UTC(2026, 10, 2, 9, 0, s)).toISOString();
+  const lines = [{ type: "user", uuid: "u1", timestamp: at(0), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: "Read every cart module and sum the totals" } }];
+  for (let i = 0; i < 30; i++) {
+    lines.push({ type: "assistant", uuid: `a${i}`, timestamp: at(1 + i), sessionId: "s", message: { id: `m${i}`, role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { file_path: `cart/part${i}.ts` } }] } });
+    lines.push({ type: "user", uuid: `r${i}`, timestamp: at(1 + i), sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: `const kaz${i} = "${"zo".repeat(50000)}";` }] } });
+  }
+  lines.push({ type: "assistant", uuid: "z", timestamp: at(40), sessionId: "s", message: { id: "mz", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "The totals agree." }], usage: { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 9000, cache_creation_input_tokens: 300 } } });
+  lines.push({ type: "system", subtype: "turn_duration", durationMs: 40000, uuid: "d", timestamp: at(40), sessionId: "s" });
+  const dir = mkdtempSync(join(tmpdir(), "threads-open-"));
+  const file = join(dir, "o.jsonl");
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  return file;
+}
+// Frames until the opening has shown the list (as Herdr draws: timers due, then a draw).
+function openFrames(v, cx, n = 300) {
+  const frames = [];
+  for (let k = 0; k < n && v.openActive(); k++) { cx.flush(16); frames.push(frame(v, cx)); v.report(); }
+  return frames;
+}
+
+test("the opening: while the session is read there are no rows and no scrolling, only the loading state; a turn whose end is in a later chunk is never running", async () => {
+  const { v, cx, go } = await openingPane(endInChunk2(), (v) => v.current()?.offset > 0);
+  go((v) => v.current()?.offset > 0);
+  await until(() => v.current().offset > 0 && v.opening?.peek, "the first chunk");
+  const s = v.current();
+  expect(s.loaded).toBeFalsy();
+  // The first chunk ends inside the turn: it has no end yet, and it is not the running turn.
+  expect(s.turns.length).toBe(1);
+  expect(s.turns[0].done).toBe(false);
+  expect(v.isLive(s, 0, 0)).toBe(false);
+  // Nor does the loading state say the agent is working: that waits for the whole read.
+  expect(v.openInfo(s).working).toBe(false);
+  // Within the quiet time, the background alone (the header says Reading…); then the loading
+  // state. No list either way.
+  lastList = null;
+  const painted = v.opening.painted;
+  v.opening.painted = false;
+  v.opening.at = Date.now();
+  expect(drawnText(frame(v, cx)).filter((x) => !/^Reading…/.test(x))).toEqual([]);
+  v.opening.painted = painted;
+  v.opening.at -= 1000;
+  const said = drawnText(frame(v, cx));
+  expect(lastList).toBeNull();
+  expect(said).toContain("Reading this session");
+  expect(said.join("|")).not.toMatch(/No reply yet|Working|Running/);
+  // The status row says Reading, with no percentage: the loading state below says how much.
+  expect(v.headerText()).toBe("Reading…");
+  expect(said.filter((x) => /^Reading…/.test(x))).toEqual(["Reading…"]);
+  // A wheel, a key and a press change nothing while it reads.
+  const sel = v.sel;
+  v.listWheel({ delta: { y: 120 } });
+  v.key(keyEv("k"), cx);
+  v.click("0:1", cx);
+  expect([v.sel, v.follow]).toEqual([sel, true]);
+  go(() => false);
+  await settle(v);
+  openFrames(v, cx);
+  expect(v.openActive()).toBe(false);
+  expect(s.turns[0].done).toBe(true);
+  expect(v.isLive(s, 0, 0)).toBe(false);
+});
+
+test("the opening: the list shows at its end, still, with every row shaped (no empty bubbles), and the end held while parts above are measured", async () => {
+  listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    const { v, cx, go } = await openingPane(busy());
+    v.opening.at -= 1000;
+    draw(v, cx);
+    expect(v.opening.painted).toBe(true);
+    go(() => false);
+    await settle(v);
+    let bottoms = 0;
+    const asked = [];
+    v.scroll = { scroll_to_bottom() { bottoms++; }, scroll_to_item() {} };
+    const frames = [];
+    const states = [];
+    while (v.openActive() && frames.length < 300) {
+      cx.flush(16);
+      const b0 = bottoms;
+      const hidden = v.current().loaded;
+      frames.push(frame(v, cx));
+      asked.push(bottoms > b0);
+      // Read but not shown yet: still Reading, and no Done (nor any state) before the list.
+      if (hidden && v.openActive()) states.push([v.headerText(), v.agentStateNow(), drawnText(frames.at(-1)).includes("Done"), drawnText(frames.at(-1)).includes("Reading…")]);
+      v.report();
+    }
+    expect(states.length).toBeGreaterThan(0);
+    for (const x of states) expect(x).toEqual(["Reading…", null, false, true]);
+    expect(v.openActive()).toBe(false);
+    // The end is asked for in every frame drawn hidden, and in the one that shows the list.
+    expect(asked.every(Boolean)).toBe(true);
+    // Shown: the state is the agent's again.
+    expect(v.agentStateNow()?.word).toBe("Done");
+    expect(v.headerText()).not.toBe("Reading…");
+    // Every frame before was the list hidden under the loading state.
+    for (const f of frames.slice(0, -1)) expect(drawnText(f)).toContain("Reading this session");
+    // Shown: built, shaped, at the end, with no blank shape anywhere in the list.
+    expect(v.rowJob).toBeNull();
+    expect(v.rowsMemo.some((r) => r.shape?.blank)).toBe(false);
+    expect(v.bottomShown).toBe(true);
+    expect(v.partsWaiting(v.rowsMemo, ...v.viewRange)).toBe(false);
+    // Each condition alone holds it back: a part in view unmeasured, the end off screen, or a
+    // draw that did not have every row.
+    const rows = v.rowsMemo;
+    expect(v.openReady(rows)).toBe(true);
+    const pw = v.partsWaiting;
+    v.partsWaiting = () => true;
+    expect(v.openReady(rows)).toBe(false);
+    v.partsWaiting = pw;
+    v.bottomShown = false;
+    expect(v.openReady(rows)).toBe(false);
+    v.bottomShown = true;
+    const lr = v.lastRange;
+    v.lastRange = `${String(lr).split("/")[0]}/${rows.length - 1}`;
+    expect(v.openReady(rows)).toBe(false);
+    v.lastRange = lr;
+    // A rows build still going, a row left with an old shape, a row left to reshape.
+    const job = v.rowJob;
+    v.rowJob = { made: "up" };
+    expect(v.openReady(rows)).toBe(false);
+    v.rowJob = job;
+    const stale = v.staleRows;
+    v.staleRows = [rows.length - 1];
+    expect(v.openReady(rows)).toBe(false);
+    v.staleRows = stale;
+    const left = v.shapeLeft;
+    v.shapeLeft = 1;
+    expect(v.openReady(rows)).toBe(false);
+    v.shapeLeft = left;
+    expect(v.openReady(rows)).toBe(true);
+    // Parts above the end are still to measure: each frame asks for the end in that frame.
+    expect(v.probeLeft).toBeGreaterThan(0);
+    expect(v.openHold).toBe(true);
+    bottoms = 0;
+    for (let k = 0; k < 3; k++) draw(v, cx);
+    expect(bottoms).toBe(3);
+    expect(v.follow).toBe(true);
+    // The frame that finds nothing left still asks: its slots carry the last measures.
+    v.probeDue = () => { v.probeLeft = 0; return []; };
+    bottoms = 0;
+    draw(v, cx);
+    expect(bottoms).toBe(1);
+    expect(v.openHold).toBe(false);
+  } finally { listWindow = null; }
+});
+
+test("the opening: a scroll up while parts above wait takes the place on screen and keeps it through the next wheels, until they are measured", async () => {
+  listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    const { v, cx, go } = await openingPane(busy());
+    v.opening.at -= 1000;
+    draw(v, cx);
+    go(() => false);
+    await settle(v);
+    openFrames(v, cx);
+    expect(v.openHold).toBe(true);
+    v.listH = 600;
+    v.listWheel({ delta: { y: 120 } });
+    expect(v.follow).toBe(false);
+    expect(v.anchor?.open).toBe(true);
+    expect(v.openHold).toBe(false);
+    draw(v, cx);
+    const a = v.anchor;
+    // A place still to take for a new column width (rows: anchorDue) is dropped with the old
+    // one (dropAnchor): the wheel's own place is the one held.
+    v.anchorDue = true;
+    v.listWheel({ delta: { y: 60 } });
+    expect(v.anchorDue).toBe(false);
+    draw(v, cx);
+    // Taken again at the new place, not let go by the wheel.
+    expect(v.anchor?.open).toBe(true);
+    expect(v.anchor).not.toBe(a);
+    expect(v.holdDone()).not.toBe("scroll");
+    // A wheel past the one it was taken at does not let it go either (an ordinary anchor goes).
+    v.wheelN = v.anchor.wheels + 2;
+    expect(v.holdDone()).not.toBe("scroll");
+    v.anchor.open = false;
+    expect(v.holdDone()).toBe("scroll");
+  } finally { listWindow = null; }
+});
+
+test("the opening: a list ready within the quiet time is shown at once, and the loading state never paints", async () => {
+  const { v, cx, go } = await openingPane(fixture("--extra", "3"));
+  go(() => false);
+  await settle(v);
+  expect(Date.now() - v.opening.at).toBeLessThan(300);
+  // Drawn hidden under the background alone until what it shows is measured, then shown.
+  const said = openFrames(v, cx).flatMap(drawnText);
+  expect(v.openActive()).toBe(false);
+  expect(v.opening.painted).toBe(false);
+  expect(said).not.toContain("Reading this session");
+  expect(v.turnKeys(v.rows()).length).toBeGreaterThan(0);
+});
+
+test("the opening: the loading state's tokens are the status line's, and the newest prompt from the file's end is the newest one typed", async () => {
+  const { v, go } = await openingPane(busy(), (v) => v.current()?.offset > 0);
+  go((v) => v.current()?.offset > 0);
+  await until(() => v.opening?.newest, "the newest prompt");
+  const s = v.current();
+  expect(s.loaded).toBeFalsy();
+  const early = v.opening.newest;
+  // The bar never goes back.
+  v.openInfo(s);
+  const pct = v.opening.pct;
+  const off = s.offset;
+  s.offset = 1;
+  expect(v.openInfo(s).pct).toBe(pct);
+  s.offset = off;
+  go(() => false);
+  await settle(v);
+  const { newestPrompt } = await import("../mods/agent-threads/ui.js");
+  expect(early).toEqual(newestPrompt(s.turns));
+  const info = v.openInfo(s);
+  expect(info.tokens).toBe(v.statusStats().tokens);
+  expect(info.tokens).toBeGreaterThan(0);
+  // The status line's own words for them, at a width that has room for its tokens.
+  const tokens = statusGroupsForTest(v.statusStats(), 2000).find((g) => g.key === "tokens")?.text ?? "";
+  const { openLines } = await import("../mods/agent-threads/ui.js");
+  expect(tokens.startsWith(openLines(info)[6].match(/· ([^·]+ tokens)/)[1])).toBe(true);
+});
+
+test("the opening: a session whose last turn runs says Working now once read, by the running turn's own test", async () => {
+  const { v, cx, go } = await openingPane(fixture("--extra", "3", "--open"));
+  go(() => false);
+  await settle(v);
+  draw(v, cx);
+  const s = v.current();
+  const last = s.turns.length - 1;
+  expect(v.isLive(s, 0, last)).toBe(true);
+  expect(v.openInfo(s).working).toBe(true);
+  const { openLines } = await import("../mods/agent-threads/ui.js");
+  expect(openLines(v.openInfo(s))[4]).toMatch(/ · Working now$/);
+});
+
+test("the opening: with nothing left to measure, the frame that shows the list and the one after still ask for the end (their slots carry the last measures)", async () => {
+  const { v, cx, go } = await openingPane(fixture("--extra", "3"));
+  go(() => false);
+  await settle(v);
+  v.probeDue = () => { v.probeLeft = 0; return []; };
+  v.partsWaiting = () => false;
+  let bottoms = 0;
+  v.scroll = { scroll_to_bottom() { bottoms++; }, scroll_to_item() {} };
+  const asked = [];
+  // Frames until one is drawn with the list already shown.
+  for (let was = true, k = 0; was && k < 300; k++) {
+    cx.flush(16);
+    const b0 = bottoms;
+    was = v.openActive();
+    frame(v, cx);
+    asked.push([was, bottoms > b0]);
+    v.report();
+  }
+  expect(v.openActive()).toBe(false);
+  // Every frame up to and including the one that showed it, then the next one.
+  expect(asked.length).toBeGreaterThanOrEqual(2);
+  expect(asked.every(([, b]) => b)).toBe(true);
+  expect(asked.at(-1)[0]).toBe(false);
+  expect(v.openHold).toBe(false);
+});
+
+// The opening ends with any state other than its own once the session is read, failed or gone:
+// the status row is the session's again, the agent's state shows, and the list's keys act.
+function openEnded(v, cx, text) {
+  for (let k = 0; k < 60; k++) { cx.flush(16); const f = frame(v, cx); v.report(); if (k === 59) expect(drawnText(f)).toContain(text); }
+  expect(v.openActive()).toBe(false);
+  expect(v.headerText()).not.toBe("Reading…");
+  expect(v.headerText()).not.toBe("");
+  v.filtering = false;
+  v.key(keyEv("/"), cx);
+  expect(v.filtering).toBe(true);
+  v.filtering = false;
+}
+
+test("the opening ends when every turn read is hidden (No user messages yet): Done shows, and keys act", async () => {
+  const file = fixture("--only", "0", "--agents");
+  const { v, cx, go } = await openingPane(file, (v) => v.current()?.offset > 0);
+  go((v) => v.current()?.offset > 0);
+  await until(() => v.current().offset > 0, "the first chunk");
+  expect(v.openActive()).toBe(true);
+  // Only agent turns with no reply, and agent messages off: every turn is hidden.
+  const s = v.current();
+  s.turns = s.turns.filter((t) => t.agent);
+  for (const t of s.turns) t.after = [];
+  s.version++;
+  go(() => false);
+  await settle(v);
+  expect(v.prefs.agentTurns).toBe(false);
+  openEnded(v, cx, "No user messages yet");
+  expect(v.counts().hiddenAll).toBeGreaterThan(0);
+  expect(v.agentStateNow()).not.toBeNull();
+});
+
+test("the opening ends when the session is read with no turns (No turns yet: a new session's first line only)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "threads-open-"));
+  const file = join(dir, "e.jsonl");
+  writeFileSync(file, `${JSON.stringify({ type: "summary", summary: "Made-up cart work", leafUuid: "u0" })}\n`);
+  const { v, cx, go } = await openingPane(file);
+  expect(v.openActive()).toBe(true);
+  go(() => false);
+  await settle(v);
+  expect(v.current().turns.length).toBe(0);
+  openEnded(v, cx, "No turns yet");
+  expect(v.headerText()).toBe("0 turns");
+});
+
+test("the opening ends when the read fails before any turn (Couldn't read this session, with Retry)", async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  extractHook = async () => { await gate; return { code: 3, stdout: "", stderr: "made-up failure" }; };
+  try {
+    const { v, cx } = await openingPane(busy());
+    expect(v.openActive()).toBe(true);
+    release();
+    await until(() => v.current()?.error && !v.reading, "the failed read");
+    openEnded(v, cx, "Couldn't read this session");
+    expect(v.headerText()).toBe("Read failed");
+  } finally { extractHook = null; }
+});
+
+test("the opening ends when the sessions are dropped and resolving finds none", async () => {
+  const { v, cx, go } = await openingPane(busy(), (v) => v.current()?.offset > 0);
+  expect(v.openActive()).toBe(true);
+  // What a pick leaves (pick: the sessions dropped), then a resolution that found nothing.
+  v.resolveGen = (v.resolveGen ?? 0) + 1;
+  v.sessions = [];
+  v.res = { kind: "none", tried: [], choices: [] };
+  go(() => false);
+  for (let k = 0; k < 10; k++) { cx.flush(16); frame(v, cx); v.report(); }
+  expect(v.headerText()).toBe("No session");
+  expect(v.openActive()).toBe(false);
+  expect(v.headerText()).not.toBe("Reading…");
+  v.filtering = false;
+  v.key(keyEv("/"), cx);
+  expect(v.filtering).toBe(true);
+});
+
+test("the opening: a frame when the quiet time ends paints the loading state, with nothing else asking for one (openTick)", async () => {
+  const { v, cx } = await openingPane(busy());
+  const o = v.opening;
+  expect(o.painted).toBe(false);
+  expect(Date.now() - o.at).toBeLessThan(300);
+  // One timer for the end of the quiet time, and nothing else drawing meanwhile.
+  const tick = cx.timers.filter((x) => x.ms >= 250 && x.ms <= 320);
+  expect(tick.length).toBe(1);
+  let notified = 0;
+  cx.notifyHook = () => { notified++; };
+  o.at -= 400;
+  cx.timers = cx.timers.filter((x) => x !== tick[0]);
+  tick[0].fn(cx);
+  expect(notified).toBe(1);
+  cx.notifyHook = null;
+  expect(drawnText(frame(v, cx))).toContain("Reading this session");
+  expect(o.painted).toBe(true);
+});
+
+test("the opening: a read started over part way never shows less than was shown (MB with the bar, turns, prompts, tool calls, tokens)", async () => {
+  const { openLines } = await import("../mods/agent-threads/ui.js");
+  const { v, go } = await openingPane(busy(), (v) => v.current()?.offset > 0 && v.current().turns.length > 3);
+  go((v) => v.current()?.offset > 0 && v.current().turns.length > 3);
+  await until(() => v.current().offset > 0 && v.current().turns.length > 3, "the first chunks");
+  const s = v.current();
+  // busy() has no tool counts in its status figures: 7 before, as a session with tools would.
+  const stats = v.statusStats.bind(v);
+  v.statusStats = () => ({ ...stats(), tools: 7 });
+  const was = v.openInfo(s);
+  const shown = openLines(was);
+  expect(was.turns).toBeGreaterThan(3);
+  expect(was.prompts).toBeGreaterThan(0);
+  expect(was.tools).toBeGreaterThan(0);
+  expect(was.tokens).toBeGreaterThan(0);
+  // As a stall's recovery or a replaced file does: the session from the top again.
+  v.restart(s);
+  s.offset = 1;
+  s.version++;
+  v.statusStats = () => ({ ...stats(), tools: 0 });
+  const now = v.openInfo(s);
+  for (const k of ["offset", "size", "pct", "turns", "prompts", "tools", "tokens"]) expect(now[k]).toBe(was[k]);
+  expect(openLines(now).slice(1, 3)).toEqual(shown.slice(1, 3));
+  expect(openLines(now)[6]).toBe(shown[6]);
+  go(() => false);
+});
+
+test("the opening: last active is the file's last write at the first chunk, and again once the read ends", async () => {
+  // A copy of the shared busy fixture, whose time is changed below.
+  const file = join(mkdtempSync(join(tmpdir(), "threads-open-")), "b.jsonl");
+  writeFileSync(file, readFileSync(busy()));
+  const { v, go } = await openingPane(file, (v) => v.current()?.offset > 0);
+  go((v) => v.current()?.offset > 0);
+  await until(() => v.opening?.mtime, "the first stat");
+  const first = v.opening.mtime;
+  // A write while it is read (as a live session's), with the size the same.
+  const later = new Date(first + 90 * 60000);
+  utimesSync(file, later, later);
+  go(() => false);
+  await settle(v);
+  await until(() => v.opening.mtime !== first, "the stat at the end");
+  expect(Math.abs(v.opening.mtime - later.getTime())).toBeLessThan(2000);
+});
+
+test("the opening: read, with its first rows still being built, keeps the loading state (no other state ends it)", async () => {
+  const { v, cx, go } = await openingPane(busy());
+  v.opening.at -= 1000;
+  go(() => false);
+  await settle(v);
+  expect(v.openActive()).toBe(true);
+  // As the first slice of a rows build leaves it: a job going on and no row yet.
+  const rows = v.rows;
+  v.rows = () => { v.rowJob = { made: "up" }; v.baseRows = []; return []; };
+  try {
+    const said = drawnText(frame(v, cx));
+    expect(said).toContain("Reading this session");
+    expect(v.openActive()).toBe(true);
+  } finally { v.rows = rows; v.rowJob = null; v.baseRows = null; }
+});
+
+test("the opening: a new session on the list while the first is read starts from its own figures, not the first one's peaks", async () => {
+  const { openLines } = await import("../mods/agent-threads/ui.js");
+  const { v, go } = await openingPane(busy(), (v) => v.current()?.offset > 0 && v.current().turns.length > 3);
+  go((v) => v.current()?.offset > 0 && v.current().turns.length > 3);
+  await until(() => v.current().offset > 0 && v.current().turns.length > 3 && v.opening?.mtime && v.opening?.newest, "the first chunks, stat and peek");
+  const was = v.openInfo(v.current());
+  expect(was.turns).toBeGreaterThan(3);
+  expect(was.pct).toBeGreaterThan(0);
+  expect(was.active).toBeGreaterThan(0);
+  expect(was.newest?.text).toBeTruthy();
+  // A /clear part way: a new session of 5 KB, nothing of it read yet, on the same list.
+  const n = newSessionForTest("made-up-new", join(mkdtempSync(join(tmpdir(), "threads-open-")), "n.jsonl"));
+  n.size = 5000;
+  v.sessions.push(n);
+  expect(v.current()).toBe(n);
+  const now = v.openInfo(n);
+  expect([now.offset, now.size, now.pct, now.turns]).toEqual([0, 5000, null, 0]);
+  // In the frame before its read starts: no last write and no newest prompt of the first's.
+  expect([now.active, now.newest]).toEqual([null, null]);
+  expect(openLines(now)[7]).toBe("");
+  expect(openLines(now)[1]).not.toContain("of");
+  expect(openLines(now)[1]).toBe("5 KB");
+  expect(openLines(now)[2]).toBe("");
+  go(() => false);
+});
+
+test("the opening: a new session on the list with the same version and turn count as the first sums its own figures, never keeps the first one's", async () => {
+  const { v, go } = await openingPane(busy(), (v) => v.current()?.offset > 0 && v.current().turns.length > 3);
+  go((v) => v.current()?.offset > 0 && v.current().turns.length > 3);
+  await until(() => v.current().offset > 0 && v.current().turns.length > 3, "the first chunks");
+  const first = v.current();
+  const stats = v.statusStats.bind(v);
+  v.statusStats = () => ({ ...stats(), tools: 7, tokens: 7000 });
+  const was = v.openInfo(first);
+  expect([was.tools, was.tokens]).toEqual([7, 7000]);
+  // A /clear part way: a new session whose version, turn count and read state match the
+  // first's, with its own model and figures.
+  const n = newSessionForTest("made-up-new", join(mkdtempSync(join(tmpdir(), "threads-open-")), "n.jsonl"));
+  n.turns = first.turns.map((t) => ({ ...t, model: "made-up-model-b" }));
+  n.version = first.version;
+  n.loaded = first.loaded;
+  n.offset = first.offset;
+  n.size = first.size;
+  v.sessions.push(n);
+  expect(v.current()).toBe(n);
+  v.statusStats = () => ({ ...stats(), tools: 3, tokens: 300 });
+  const now = v.openInfo(n);
+  expect([now.tools, now.tokens, now.model]).toEqual([3, 300, "made-up-model-b"]);
+  go(() => false);
+});
+
+test("the opening: a new session on the list while the first is read shows its own last write and newest prompt, never the first one's", async () => {
+  const { openLines } = await import("../mods/agent-threads/ui.js");
+  const { v, cx, go } = await openingPane(busy(), (v) => v.current()?.offset > 0);
+  go((v) => v.current()?.offset > 0);
+  await until(() => v.opening?.mtime && v.opening?.newest, "the first session's stat and peek");
+  const first = v.current();
+  const was = { mtime: v.opening.mtime, newest: v.opening.newest.text };
+  expect(openLines(v.openInfo(first))[7]).toMatch(/^Newest prompt/);
+  // A /clear part way: another session, over a chunk so the loading state stays up and its
+  // end is peeked, its newest prompt in other words, last written two days before the first.
+  const file = join(mkdtempSync(join(tmpdir(), "threads-open-")), "second.jsonl");
+  writeFileSync(file, readFileSync(busy(), "utf8").replaceAll(was.newest, "Sort the made-up changelog by date"));
+  const old = new Date(was.mtime - 2 * 86400000);
+  utimesSync(file, old, old);
+  // What the opening holds when the second's first chunk is in, before its peek, with no
+  // frame drawn in between: the reset is the read's, not the next frame's.
+  const atPeek = [];
+  const peek = v.openPeek.bind(v);
+  v.openPeek = (s, cx) => { atPeek.push({ s, mtime: v.opening.mtime, newest: v.opening.newest }); peek(s, cx); };
+  v.adopt({ kind: "found", id: "made-up-second", file, live: true }, cx);
+  const second = v.current();
+  expect(second).not.toBe(first);
+  // Its first chunk: stat and peek again, for this session.
+  go((v) => v.current() === second && second.offset > 0);
+  await until(() => second.offset > 0 && v.opening.newest && v.opening.mtime, "the second session's stat and peek");
+  expect(atPeek.map((x) => [x.s === second, x.mtime, x.newest])).toEqual([[true, null, null]]);
+  expect(v.openActive()).toBe(true);
+  const info = v.openInfo(second);
+  expect(Math.abs(info.active - old.getTime())).toBeLessThan(2000);
+  expect(info.newest.text).toBe("Sort the made-up changelog by date");
+  expect(openLines(info)[8]).toBe("Sort the made-up changelog by date");
+  // A stat of the first session that comes back late lands nowhere.
+  v.openStat(first, cx);
+  await new Promise((r) => setTimeout(r, 300));
+  expect(Math.abs(v.opening.mtime - old.getTime())).toBeLessThan(2000);
+  go(() => false);
+}, 20000);
+
+test("the opening: the first session's stat and peek that come back after another session took the list land nowhere", async () => {
+  const n = newSessionForTest("made-up-new", join(mkdtempSync(join(tmpdir(), "threads-open-")), "n.jsonl"));
+  n.size = 5000;
+  let switched = false;
+  // At the first chunk's pause, its stat and peek just asked for: the list changes there.
+  const hold = (v) => {
+    if (!switched && v.opening?.peek) {
+      switched = true;
+      v.sessions.push(n);
+      v.openInfo(n);
+    }
+    return true;
+  };
+  const { v, go } = await openingPane(busy(), hold);
+  go(hold);
+  await until(() => switched, "the first chunk");
+  expect(v.current()).toBe(n);
+  // Long enough for both to come back (each is one short call).
+  await new Promise((r) => setTimeout(r, 600));
+  expect([v.opening.mtime, v.opening.newest]).toEqual([null, null]);
+  go(() => false);
+});
+
+test("a later session still being read, with no loading state over it, shows no running turn before a later chunk has the turn's end", async () => {
+  let second = null;
+  const { v, cx, go } = await openingPane(busy(), (v) => second != null && v.current() === second && second.offset > 0);
+  v.opening.at -= 1000;
+  go((v) => second != null && v.current() === second && second.offset > 0);
+  await settle(v);
+  openFrames(v, cx);
+  expect(v.openActive()).toBe(false);
+  // A new session (a /clear) whose first turn ends in its second chunk, held after the first.
+  v.adopt({ kind: "found", id: "made-up-second", file: endInChunk2(), live: true }, cx);
+  second = v.current();
+  await until(() => second.offset > 0, "the second session's first chunk");
+  expect([Boolean(second.loaded), second.turns.length, second.turns[0].done]).toEqual([false, 1, false]);
+  expect(v.isLive(second, 1, 0)).toBe(false);
+  // Not the running turn: no live row, and no working card.
+  const rows = v.rows();
+  expect(rows.filter((r) => r.live || r.running).map((r) => r.kind)).toEqual([]);
+  expect(drawnText(frame(v, cx)).join("|")).not.toMatch(/No reply yet|Working/);
+  go(() => false);
+  await settle(v);
+  expect(second.turns[0].done).toBe(true);
+}, 30000);
+
+test("the agent message counts follow a session's read ending: a running agent turn counted hidden while read is shown once it is", async () => {
+  const { v } = await pane(fixture("--extra", "2"));
+  const s = v.current();
+  v.prefs = { ...v.prefs, agentTurns: false };
+  // The newest turn an agent message, still running, as a read leaves it before its end.
+  const t = s.turns[s.turns.length - 1];
+  t.agent = true;
+  t.sender = { kind: "agent", name: "made-up-bot" };
+  t.done = false;
+  s.loaded = false;
+  const before = v.counts();
+  // The read ends: loaded, and nothing else about the turns changes.
+  s.loaded = true;
+  expect(v.isLive(s, v.sessions.length - 1, s.turns.length - 1)).toBe(true);
+  const after = v.counts();
+  v.countsKey = null;
+  const fresh = v.counts();
+  expect(after).toEqual(fresh);
+  expect(fresh).not.toEqual(before);
 });
