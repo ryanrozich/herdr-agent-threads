@@ -220,8 +220,32 @@ function body(name) {
   const next = SRC.slice(at + 1).search(/^ {2}(async )?[A-Za-z_]\w*\([^)]*\) \{$/m);
   return SRC.slice(at, next < 0 ? undefined : at + 1 + next);
 }
-// Whether this source calls readerMoved.
-const callsReaderMoved = (src) => src.includes("readerMoved");
+// The source with its comments taken out: a line comment to its line's end, a block comment
+// whole. Strings and template strings are kept as they are, so a "//" in one is not a comment.
+function code(src) {
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === '"' || c === "'" || c === "`") {
+      let j = i + 1;
+      while (j < src.length && src[j] !== c) j += src[j] === "\\" ? 2 : 1;
+      out += src.slice(i, j + 1);
+      i = j + 1;
+    } else if (c === "/" && src[i + 1] === "/") {
+      while (i < src.length && src[i] !== "\n") i++;
+    } else if (c === "/" && src[i + 1] === "*") {
+      const end = src.indexOf("*/", i + 2);
+      i = end < 0 ? src.length : end + 2;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+// Whether this source calls readerMoved (in its code, not its comments).
+const callsReaderMoved = (src) => /\breaderMoved\s*\(/.test(code(src));
 test("no scroll the pane makes itself counts as the reader's", () => {
   const found = Object.fromEntries(PANE.map((n) => [n, body(n) == null ? "missing" : callsReaderMoved(body(n)) ? "counts" : "no"]));
   expect(found).toEqual(Object.fromEntries(PANE.map((n) => [n, "no"])));
