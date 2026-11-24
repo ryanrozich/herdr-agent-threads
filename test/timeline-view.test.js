@@ -272,7 +272,8 @@ test("timeline view: the debug report's traj.timeline says whether it shows, and
   const { b, cb } = await dockPane(fixture("--extra", "3"), "bottom", 1440);
   shownFrame(b, cb);
   const tl = b.trajReport().timeline;
-  expect(Object.keys(tl).sort()).toEqual(["can", "cw", "drawn", "grow", "hidden", "labels", "layers", "live", "ms", "rowsLeft", "shown", "spans", "turns", "waiting"]);
+  expect(Object.keys(tl).sort()).toEqual(["can", "cw", "drawn", "grow", "hidden", "labels", "layers", "live", "made", "ms", "rowsLeft", "shown", "spans", "turns", "waiting"]);
+  expect(Object.keys(tl.made).sort()).toEqual(["geo", "layout"]);
   expect(tl).toMatchObject({ can: true, shown: true, waiting: false, cw: 1370, turns: b.ledger().totals.heads.length, live: -1, grow: [] });
   expect(tl.spans).toBeGreaterThan(0);
   expect(tl.layers).toBeGreaterThan(0);
@@ -304,4 +305,57 @@ test("heading bar: gone at every width: a heading keeps no line, and no heading 
     noLine(c);
     expect([w, short(c)]).toEqual([w, false]);
   }
+});
+
+test("timeline view: a selection change and a press reuse the placed turns and their layout: nothing is placed again", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "3"), "bottom", 1440);
+  shownFrame(b, cb);
+  const M = b.tlModel;
+  const made = { ...TL.TL_MADE };
+  const rows = b.ledgerRows().filter((r) => r.kind === "tr");
+  for (const r of rows.slice(0, 5)) { b.tsel = r.key; frame(b, cb); }
+  b.key(keyEv("j"), cb);
+  frame(b, cb);
+  const step = rows.find((r) => r.lk === "tool" && r.start != null && r.dur > 0);
+  const { box, lane } = barOf(b, step.key);
+  press(b, cb, (box.x0 + box.x1) / 2, lane * 16 + 8);
+  press(b, cb, (box.x0 + box.x1) / 2, lane * 16 + 8);
+  frame(b, cb);
+  expect([TL.TL_MADE.geo - made.geo, TL.TL_MADE.layout - made.layout]).toEqual([0, 0]);
+  expect(b.tlModel.geo).toBe(M.geo);
+  expect(b.tlModel.L).toBe(M.L);
+  expect(b.trajReport().timeline.made).toEqual({ ...TL.TL_MADE });
+});
+
+test("timeline view: every turn number and tick the model gives is drawn, not the first 80, and the fail marks are one layer across the whole strip", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "3"), "bottom", 2600);
+  shownFrame(b, cb);
+  // 400 made-up turns, each with a failed call, in the layout's shape.
+  const heads = [];
+  for (let i = 0; i < 400; i++) {
+    const key = `0:${i}`;
+    heads.push({
+      kind: "trh", key, n: i + 1, t0: 1e12 + i * 100000, total: 60000, span: 60000, going: false,
+      cnt: { steps: 2, input: 0, model: 0, tools: 2, failed: 1, user: 0, agent: 0 },
+      stepRows: [{ kind: "tr", key: `tr:${key}:0`, lk: "tool" }, { kind: "tr", key: `tr:${key}:1`, lk: "failed", failed: true }],
+      tl: [1000, 5000, 0, 6000, 9000, 4],
+    });
+  }
+  H.rec = [];
+  b.timelineView(theme, { totals: { heads }, partial: false }, [], -1, trajInks(theme, true));
+  const c = H.rec;
+  H.rec = null;
+  const T = b.tlModel.L;
+  expect(T.labels.length).toBeGreaterThan(80);
+  const labels = words(own(c, "th-tl-labels"));
+  expect(labels.length).toBe(T.labels.length);
+  expect(words(own(c, "th-tl-ticks")).length).toBe(T.ticks.length);
+  expect(T.fails.length).toBeGreaterThan(120);
+  // One layer: in Herdr one painted path; here its divs, which reach the last mark.
+  const fails = own(c, "th-tl-fails");
+  expect(fails).not.toBe(null);
+  const lefts = fails.filter((e) => e[0] === "left").map((e) => e[1]);
+  const ws = fails.filter((e) => e[0] === "w").map((e) => e[1]);
+  expect(Math.max(...lefts.slice(1).map((x, k) => x + ws[k + 1]))).toBeGreaterThanOrEqual(T.fails.at(-1) + 3 - 0.5);
+  expect(fails).toContainEqual(["bg", theme.blocked]);
 });

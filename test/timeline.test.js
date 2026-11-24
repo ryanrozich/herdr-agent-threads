@@ -275,3 +275,91 @@ test("timeline band: the first and last steps whose bars start inside a band, in
   expect(bandRows(L, heads, L.gaps[0][0] + 1, L.gaps[0][1] - 1)).toBe(null);
   expect(bandRows(L, heads, 10, 5)).toBe(null);
 });
+
+// ---- slice 1's bounds (PR #299 review): what a draw can be asked to make ----
+// n made-up headings in the layout's shape, each 60 s long and 100 s after the last: the user's
+// message, a call, a failed call, the reply (fail: false leaves the failed one a plain call).
+function strip(n, { fail = true } = {}) {
+  const heads = [];
+  for (let i = 0; i < n; i++) {
+    const key = `0:${i}`;
+    const lks = ["you", "tool", fail ? "failed" : "tool", "reply"];
+    heads.push({
+      kind: "trh", key, n: i + 1, t0: T0 + i * 100000, total: 60000, span: 60000, going: false,
+      cnt: { steps: 4, input: 1, model: 1, tools: 2, failed: fail ? 1 : 0, user: 1, agent: 0 },
+      stepRows: lks.map((lk, j) => ({ kind: "tr", key: `tr:${key}:${j}`, lk, failed: lk === "failed" })),
+      tl: [0, Number.NaN, 0, 1000, 5000, 0, 6000, 9000, fail ? 4 : 0, 10000, 60000, 0],
+    });
+  }
+  return heads;
+}
+const LANES_H = 48;
+
+test("timeline hatch: at Fit the breaks 4 px or wider make at most TL_HATCH_MAX segments, 5 px apart until then and wider past it", () => {
+  expect([TL.TL_HATCH, TL.TL_HATCH_MAX]).toEqual([5, 800]);
+  const counts = {};
+  for (const cw of [1370, 2500]) {
+    for (const n of [2, 5, 8, 20, 40, 52, 60, 100, 300, 2000]) {
+      const L = timelineLayout(strip(n), cw, "clock", T0, null);
+      const { lines, every } = TL.hatchLines(L.gaps, cw, LANES_H);
+      counts[`${cw}/${n}`] = lines.length;
+      expect(lines.length).toBeLessThanOrEqual(TL.TL_HATCH_MAX);
+      expect(every).toBe(5);
+      // Each segment a 45 degree line inside its break, inside the lanes.
+      for (const [x0, y0, x1, y1] of lines) {
+        expect(x1).toBeGreaterThan(x0);
+        expect(Math.abs((y0 - y1) - (x1 - x0))).toBeLessThan(1e-9);
+        expect(Math.min(y0, y1)).toBeGreaterThanOrEqual(0);
+        expect(Math.max(y0, y1)).toBeLessThanOrEqual(LANES_H);
+      }
+    }
+  }
+  // Past 52 turns a 1,370 px strip's breaks are under 4 px: no hatch at all.
+  expect([counts["1370/60"], counts["1370/300"], counts["1370/2000"]]).toEqual([0, 0, 0]);
+  expect(counts["1370/52"]).toBeGreaterThan(0);
+  // A strip of many wide breaks (as a zoomed view could hold): capped, the lines spaced wider.
+  const gaps = Array.from({ length: 400 }, (_, i) => [i * 40, i * 40 + 30, null]);
+  const many = TL.hatchLines(gaps, 16000, LANES_H);
+  expect(many.lines.length).toBeLessThanOrEqual(TL.TL_HATCH_MAX);
+  // At least one line a break: the count is the cap less one a break, at most the cap.
+  expect(many.lines.length).toBeGreaterThanOrEqual(TL.TL_HATCH_MAX - 400);
+  expect(many.every).toBeGreaterThan(5);
+  // Breaks under 4 px, or out of the strip, make none.
+  expect(TL.hatchLines([[10, 13, null], [-40, -1, null], [1400, 1430, null]], 1370, LANES_H).lines).toEqual([]);
+});
+
+test("timeline labels, ticks and fail marks: never more than fit, at any session length: numbers 24 px apart, ticks 62 px apart, fail marks 6 px apart, the last turn's kept", () => {
+  for (const cw of [1370, 2500]) {
+    for (const n of [1, 3, 10, 40, 100, 400, 2000, 6000]) {
+      const L = timelineLayout(strip(n), cw, "clock", T0, null);
+      const gapsOf = (xs) => xs.slice(1).map((x, i) => x - xs[i]);
+      const lx = L.labels.map((l) => l.x);
+      const tx = L.ticks.map((k) => k.x);
+      for (const d of gapsOf(lx)) expect(d).toBeGreaterThanOrEqual(24);
+      for (const d of gapsOf(tx)) expect(d).toBeGreaterThanOrEqual(62);
+      for (const d of gapsOf(L.fails)) expect(d).toBeGreaterThanOrEqual(6);
+      expect(L.labels.length).toBeLessThanOrEqual(Math.floor(cw / 24) + 1);
+      expect(L.ticks.length).toBeLessThanOrEqual(Math.floor(cw / 62) + 1);
+      expect(L.fails.length).toBeLessThanOrEqual(Math.floor(cw / 6) + 1);
+      // The marks run to the strip's right end: the last turn's failure is among them.
+      const last = L.turns.at(-1);
+      expect(L.fails.at(-1)).toBeGreaterThanOrEqual(last.x - 6);
+    }
+  }
+});
+
+test("timeline model: a selection change or a press places nothing again; the placements and layouts made are counted", () => {
+  const heads = strip(2000);
+  const before = { ...TL.TL_MADE };
+  const m = timelineModel(null, heads, 1370, "clock", T0, null);
+  expect([TL.TL_MADE.geo - before.geo, TL.TL_MADE.layout - before.layout]).toEqual([1, 1]);
+  // The same heads, width and scale (a selection change, a press, a tick): nothing made again.
+  let next = m;
+  for (let k = 0; k < 5; k++) next = timelineModel(next, heads, 1370, "clock", T0 + k * 1000, null);
+  expect([TL.TL_MADE.geo - before.geo, TL.TL_MADE.layout - before.layout]).toEqual([1, 1]);
+  expect([next.geo, next.L]).toEqual([m.geo, m.L]);
+  expect(next.geo).toBe(m.geo);
+  // A new width: placed again.
+  timelineModel(next, heads, 1330, "clock", T0, null);
+  expect([TL.TL_MADE.geo - before.geo, TL.TL_MADE.layout - before.layout]).toEqual([2, 2]);
+});
