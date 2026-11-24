@@ -173,3 +173,24 @@ test("pinsIdle stops its loop when the cap wins: a save that never ends does not
     });
   } finally { release(); }
 });
+
+// A pane whose save never settles to idle: its chain is already resolved, so each turn of the
+// loop gets through at once, but pinSaving stays set, so the loop would turn again for ever.
+// The cap must end that loop, not only the call that waits on it.
+test("pinsIdle stops its loop when the cap wins: a pane that is saving but whose chain has ended does not keep it turning", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "3");
+  v.sel = keys()[0];
+  v.action("pin", cx);
+  await pinsIdle();
+  v.pinSaving = 1;
+  v.pinChain = Promise.resolve();
+  try {
+    await timersOf(async (zero) => {
+      await expect(pinsIdle(40)).rejects.toThrow("a pin save never ended");
+      expect(zero.n).toBeGreaterThan(0); // it did turn while the cap was open
+      const at = zero.n;
+      await new Promise((r) => setTimeout(r, 80));
+      expect(zero.n).toBe(at);
+    });
+  } finally { v.pinSaving = 0; }
+});
