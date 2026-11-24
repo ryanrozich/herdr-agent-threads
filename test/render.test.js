@@ -6792,6 +6792,27 @@ test("two capped replies open: no frame passes Herdr's time while both settle, a
   expect(Math.max(...runs.map((r) => r.most))).toBeLessThan(P121.stop);
 }, 60000);
 
+test("an open reply's links follow a change of the repository or its owner", async () => {
+  const { v, cx, key } = await openLong(shortParas(980));
+  const { parseLinks } = await import("../mods/agent-threads/settings.js");
+  v.repoLooking = true;
+  for (const [url, remotes, want] of [
+    ["https://github.com/{repo}/issues/$1", [["acme/web", "acme"], ["acme/shop", "acme"]], ["acme/web/issues/1)", "acme/shop/issues/1)"]],
+    ["https://github.com/{owner}/tracker/issues/$1", [["acme/web", "acme"], ["acme/web", "acme-labs"]], ["acme/tracker/issues/1)", "acme-labs/tracker/issues/1)"]],
+  ]) {
+    const l = parseLinks([{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url }]);
+    v.setLinks(l.rules, l.list, 1);
+    for (const [j, [repo, owner]] of remotes.entries()) {
+      v.remote = { key: "fixed", repo, owner, host: "github.com" };
+      // The rows' key has the repository but not the owner: a new owner comes with a new origin.
+      v.rowsKey = null;
+      const r = costedFrames(v, cx, 20, await cardDone(v, key));
+      expect([r.stops, r.settled > 0]).toEqual([0, true]);
+      expect(v.baseRows.find((x) => x.key.startsWith(`md:${key}:`)).md).toContain(want[j]);
+    }
+  }
+}, 60000);
+
 test("eight replies of 58 parts each opened one after another, 464 parts in all, draw in time and link and split each once", async () => {
   const { v, cx, keys } = await openLong(Array.from({ length: 8 }, (_, j) => shortParas(4000).replaceAll("Paragraph", `Turn ${j}, paragraph`)), true);
   const all = { stops: 0, linked: 0, splits: 0, most: 0, settled: [] };
