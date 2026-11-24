@@ -1284,6 +1284,73 @@ test("an older step whose slice ends before it reaches a match stays, and the ne
   expect({ more: r.presses > 1, stays: r.stays, landed: r.landed }).toEqual({ more: true, stays: true, landed: nearest });
 }, 300000);
 
+// The 2,400-turn tail above, with "zebra" in its 800th turn and its last, the last selected and
+// a turn come in, so the tail is checked again from its start: the pane, the keys, and the
+// last match's and the nearest older match's keys.
+async function zebraTail() {
+  const { v, cx, s } = await longPane(5600);
+  const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
+  const base = s.turns.length;
+  for (let i = 0; i < 2400; i++) {
+    T.apply(s, { k: "p", o: "human", t: i === 800 || i === 2399 ? `Tail ${i}: the zebra list.` : `Tail ${i}: nothing here.`, ts });
+    T.apply(s, { k: "d", ms: 1000, ts });
+  }
+  settleRows(v, cx);
+  const last = `0:${base + 2400}`;
+  return { v, cx, s, ts, base, last, nearest: `0:${base + 801}` };
+}
+function zebraSearch({ v, cx, s, ts, last }) {
+  v.action("search:zebra", cx);
+  for (let k = 0; k < 200 && counting(v); k++) drawOnce(v, cx);
+  v.sel = last;
+  T.apply(s, { k: "p", o: "human", t: "One more: nothing here.", ts });
+  T.apply(s, { k: "d", ms: 1000, ts });
+  v.hitsNow();
+}
+
+// The same step, pressed once: its slice ends before it reaches the match, and the draws after
+// it go on with it, each in Herdr's time, until it lands on the nearest older match. A person
+// presses n once.
+test("an older step whose slice ends before it reaches a match goes on by itself in the next draws and lands on the nearest older match", async () => {
+  const z = await zebraTail();
+  const { v, cx, last } = z;
+  const r = { draws: 0, stops: 0, inTime: true };
+  X = 2;
+  try { priced(v, () => {
+    zebraSearch(z);
+    v.action("olderMatch", cx);
+    r.stayed = v.sel === last;
+    for (let k = 0; k < 40 && v.sel === last; k++) {
+      const d = drawOnce(v, cx);
+      r.draws++;
+      if (d.stopped) r.stops++;
+      if (d.ms > LIMIT) r.inTime = false;
+    }
+  }); } finally { X = 1; }
+  expect({ stayed: r.stayed, landed: v.sel, stops: r.stops, inTime: r.inTime }).toEqual({ stayed: true, landed: z.nearest, stops: 0, inTime: true });
+  expect(r.draws).toBeGreaterThan(0);
+}, 300000);
+
+// A step going on by itself is called off by a key, or by a new selection (a click on a turn):
+// the draws after it leave the selection where that put it.
+for (const how of ["a key", "a new selection"]) test(`an older step going on by itself is called off by ${how}, and the draws after it leave the selection there`, async () => {
+  const z = await zebraTail();
+  const { v, cx, base, last } = z;
+  const r = {};
+  X = 2;
+  try { priced(v, () => {
+    zebraSearch(z);
+    v.action("olderMatch", cx);
+    r.stayed = v.sel === last;
+    if (how === "a key") v.action("newerMatch", cx);
+    else v.sel = `0:${base + 1200}`;
+    r.sel = v.sel;
+    for (let k = 0; k < 40; k++) drawOnce(v, cx);
+  }); } finally { X = 1; }
+  expect({ stayed: r.stayed, sel: v.sel }).toEqual({ stayed: true, sel: r.sel });
+  expect(r.sel).toBe(how === "a key" ? last : `0:${base + 1200}`);
+}, 300000);
+
 // A tail longer than the cap (HITS_TAIL_MAX turns) is not dropped place by place in one call:
 // the set is found again from the start, in slices. Just under the cap the tail is checked
 // again; just over it the set is new. Either way the draws keep inside Herdr's time, the
