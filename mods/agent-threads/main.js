@@ -218,8 +218,9 @@ const HITS_TAIL = 64;
 // again as tails.
 const HITS_TAIL_MAX = 2500;
 // A step kept from a press that could not land yet (stepHit) goes on for this many draws at
-// most, a slice each; then it is dropped, and the field says there is no further match that
-// way. The bound is in draws, since a draw's slice is what moves a step on, whatever Herdr's
+// most, a slice each; then it is dropped with no words, the selection left where it is (an
+// older or newer match can still be there: the step gave up, it did not reach the end), and
+// the step button starts a new one. The bound is in draws, since a draw's slice is what moves a step on, whatever Herdr's
 // frame rate: 100 slices check about 150,000 turns at 6 ms and 4 µs a turn, many times the
 // longest sessions the figures use, so a step still kept then is waiting on a session that
 // changes before every draw (hitsTail), not on work left.
@@ -6519,10 +6520,8 @@ export default class Threads extends View {
   action(name, cx) {
     this.stickStep = null; // a key decides, not a frame drawn before it
     if (READER_ACTIONS.has(name) || /^(go|pick|search):/.test(name)) this.readerMoved();
-    // A key also calls off a step going on by itself (stepHit); a step sets it again. It takes
-    // away the words of a step dropped at its bound (stepEnd).
+    // A key also calls off a step going on by itself (stepHit); a step sets it again.
     if (this.hits) this.hits.step = null;
-    this.stepEnd = null;
     if (this.textSel && !["copy", "quote", "keys"].includes(name)) this.textSel = null;
     const rows = this.rows();
     const keys = this.turnKeys(rows);
@@ -8101,9 +8100,6 @@ export default class Threads extends View {
     const q = this.filterText();
     // Less than a search: how much to type, in the count's place.
     if (!q) return this.query.trim() ? (this.pw() < 420 ? "2 or more" : "Type 2 or more characters") : null;
-    // A step dropped at its bound (STEP_DRAWS), its match still selected: the step button's
-    // words for no further match, until a key or a change to the field.
-    if (this.stepEnd && this.stepEnd.key === this.sel && this.view !== "pinned") return this.stepEnd.older ? "No older match" : "No newer match";
     let hit = 0, hiddenHit = 0;
     // While the matches are counted (scanStep): "Counting…" with none found yet, and the total
     // so far with a "+"; the hidden ones, no match, and the first or only mention wait for
@@ -9207,8 +9203,8 @@ export default class Threads extends View {
     // A step kept from a press that could not land yet (stepHit): in a draw, its next slice,
     // in place of the scan's, while the step's match is still selected and still matches. It
     // keeps itself until it lands, so a stop in its slice leaves it for the next draw.
-    // A step still kept after STEP_DRAWS draws going on with it is dropped, and the field says
-    // there is no further match that way (stepEnd) while that match stays selected.
+    // A step still kept after STEP_DRAWS draws going on with it is dropped with no words, the
+    // selection left where it is: it gave up, so a match that way can still be there.
     // The reader moving the list or leaving the view since the step was kept (readerMoves, noted
     // when it was kept) drops it with no words, the selection left where it is.
     let stepped = false;
@@ -9218,7 +9214,7 @@ export default class Threads extends View {
         stepped = true;
         h.step.draws = (h.step.draws ?? 0) + 1;
         this.stepHit(h, h.step.older);
-        if (h.step && h.step.draws >= STEP_DRAWS) { this.stepEnd = { key: h.step.key, older: h.step.older }; h.step = null; }
+        if (h.step && h.step.draws >= STEP_DRAWS) h.step = null;
       } else h.step = null;
     }
     // A set made just now has had its first slice (hitsNow).
@@ -9507,7 +9503,6 @@ export default class Threads extends View {
     // The field changed: a step kept in the set (stepHit) is called off, also when the same
     // words are typed again after the field was cleared, which keeps the set.
     if (this.hits) this.hits.step = null;
-    this.stepEnd = null;
     if (n == null && this.filterText()) {
       if (this.view === "pinned") {
         const mk = this.matchKeys();
