@@ -472,14 +472,18 @@ test("a part of 3,900 or 4,050 characters with dollar signs, past one view only 
   expect(seen).toEqual([[3900, "mdlong", 3900, true, false], [4050, "mdlong", 4050, true, false]]);
 }, 60000);
 
-// Such a part's counted height (the mdlong row's, before the probe measures it) holds what is
-// drawn: its gap, main's line at the line's 11.5 px (18 px a line, as wide as the reading
-// line), 4 px, then all of the text. On a narrow pane main's line wraps to more than one line,
-// and a height that left it out, or counted it as one line, gave the part a slot too short; a
-// run of 20,000 characters is counted at all its length.
-test("a part shown whole as plain text under main's line, of 3,900 or 20,000 characters, is counted at the height of what is drawn, main's line wrapped on a narrow pane", async () => {
+// Such a part's counted height (the mdlong row's, before the probe measures it) is that of what
+// is drawn: its gap, main's line, the gap below it, then all of the text. Main's line is read off
+// the draw, not the count's own sums: it wraps beside its icon and the icon's gap, at its own
+// text size and line height. On a narrow pane it wraps to more than one line, and at 416 px only
+// because of the icon: a count at the reading line's full width gave it one line too few. At
+// 440 px it is one line at its 11.5 px; a count of its characters at the reading text's size
+// gave it two.
+// The text below it is counted rough (restHeight), as the probe measures it after.
+const wrapAt = (text, cols) => { let n = 1, at = 0; for (const word of text.split(" ")) { const need = at ? at + 1 + word.length : word.length; if (need > cols && at) { n++; at = word.length; } else at = need; } return n; };
+test("a part shown whole as plain text under main's line is counted at the height of its draw: main's line beside its icon, at its drawn size and line height, on wide and narrow panes", async () => {
   const seen = [];
-  for (const [text, w] of [[`${"a$".repeat(1800)}${"b".repeat(300)}`, 640], [`${"a$".repeat(1800)}${"b".repeat(300)}`, 300], ["z".repeat(20000), 640]]) {
+  for (const [text, w] of [[`${"a$".repeat(1800)}${"b".repeat(300)}`, 640], [`${"a$".repeat(1800)}${"b".repeat(300)}`, 300], [`${"a$".repeat(1800)}${"b".repeat(300)}`, 416], [`${"a$".repeat(1800)}${"b".repeat(300)}`, 440], ["z".repeat(20000), 640]]) {
     const { v, cx, key } = await openLong(text);
     v.probeDue = function () { this.probeLeft = 0; return []; };
     v.forcedWidth = w;
@@ -488,14 +492,26 @@ test("a part shown whole as plain text under main's line, of 3,900 or 20,000 cha
     const row = () => v.baseRows.find((x) => x.key.startsWith(`md:${key}:`) && x.kind === "mdlong");
     drawToEnd(v, cx, key, () => Boolean(row()));
     const r = row();
-    const drawn = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
-    const note = drawn.find((x) => x.startsWith("Herdr could not draw this part as Markdown"));
-    // MD_CHAR in main.js (6.1 px, a character of 13 px prose) at the line's 11.5 px.
-    const noteLines = v.wrapped(note, v.prose(), (v.charW(6.1) * 11.5) / 13);
-    const held = (r.gap ?? 6) + 18 * noteLines + 4 + v.restHeight(text.length, 1);
-    seen.push([text.length, w, drawn.includes(text), noteLines > 1, v.height(r) === held]);
+    const c = frame(v, cx);
+    const drawn = c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+    const at = c.findIndex((e) => e[0] === "child" && typeof e[1] === "string" && e[1].startsWith("Herdr could not draw this part as Markdown"));
+    const note = c[at][1];
+    // The calls that built the note, nearest first: the icon's size, the note's own line
+    // height (after the icon, or none), the row's gap and text size, then the gap below it
+    // and the part's own gap.
+    const back = (name, from = at) => { for (let i = from; i >= 0; i--) if (c[i][0] === name) return [i, c[i][1]]; return [-1, null]; };
+    const [iconAt, icon] = back("size");
+    const [lhAt, lh] = back("line_height");
+    const [rowGapAt, rowGap] = back("gap", iconAt);
+    const [, size] = back("text_size", iconAt);
+    const [belowAt, below] = back("gap", rowGapAt - 1);
+    const [, top] = back("mt", belowAt);
+    const lineH = lhAt > iconAt ? Number.parseFloat(lh) : null;
+    const lines = wrapAt(note, Math.floor((v.prose() - icon - rowGap) / ((6.1 * size) / 13)));
+    const held = top + (lineH ?? 0) * lines + below + v.restHeight(text.length, 1);
+    seen.push([text.length, w, drawn.includes(text), lineH, lines, v.height(r) === held]);
   }
-  expect(seen).toEqual([[3900, 640, true, false, true], [3900, 300, true, true, true], [20000, 640, true, false, true]]);
+  expect(seen).toEqual([[3900, 640, true, 18, 1, true], [3900, 300, true, 18, 2, true], [3900, 416, true, 18, 2, true], [3900, 440, true, 18, 1, true], [20000, 640, true, 18, 1, true]]);
 }, 60000);
 
 // A paragraph of Japanese or Chinese prose that one view holds is one Markdown part, as main
