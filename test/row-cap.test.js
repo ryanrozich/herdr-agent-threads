@@ -2177,9 +2177,10 @@ test("a press's open 300 ms on is dropped by a jump made in the wait: a rail cli
 
 // ---- the window's memos over a live session: what a change past the window's start reads ----
 
-// The session's rows read by RowWindow.outside and by the day pill (stickyDay), counted. The
-// base rows are given through one proxy per array, so every identity the pane keeps still
-// holds, and only reads made inside those two are counted.
+// The session's rows read by RowWindow.outside and by the day pill (stickyDay), counted, and
+// the looks for the window's day band (bandAbove). The base rows are given through one proxy
+// per array, so every identity the pane keeps still holds, and only reads made inside those
+// two are counted. Set before the memos are made: they hold the rows they were made from.
 function memoReads(v) {
   const n = { outside: 0, day: 0 };
   let inside = null;
@@ -2194,6 +2195,9 @@ function memoReads(v) {
   const within = (name, fn) => (...args) => { const was = inside; inside = name; try { return fn(...args); } finally { inside = was; } };
   v.win.outside = within("outside", v.win.outside.bind(v.win));
   v.stickyDay = within("day", v.stickyDay.bind(v));
+  const band = v.bandAbove.bind(v);
+  n.looks = 0;
+  v.bandAbove = (base, at) => { n.looks++; return band(base, at); };
   return n;
 }
 // A session of n short turns, the newest still running, on two days: the first 100 turns on
@@ -2231,10 +2235,10 @@ function bandNow(v) {
 test("a live event in a long session, following: the counts outside the window and the window's day are kept, and no row outside the window is read", async () => {
   const { v, cx, s } = await runningSession(1500, { slide: 600, block: 50, stop: 660 });
   const { apply } = await import("../mods/agent-threads/core/turns.js");
+  const n = memoReads(v);
   v.jumpLatest(true);
   frames(v, cx);
   expect(v.win.at.a).toBeGreaterThan(900);
-  const n = memoReads(v);
   const { head, band } = bandNow(v);
   expect(band?.kind).toBe("day");
   expect(drawnPill(v, cx, head.key)).toBe(band);
@@ -2244,16 +2248,22 @@ test("a live event in a long session, following: the counts outside the window a
     const rows = v.allRows();
     n.outside = 0;
     n.day = 0;
+    n.looks = 0;
     apply(s, { k: "t", t: `More ${e}: the order is still fine.` });
     frames(v, cx);
     // Each event built the newest rows again in a new array, the rows before them kept.
     expect(v.allRows()).not.toBe(rows);
     const now = bandNow(v);
     expect(drawnPill(v, cx, now.head.key)).toBe(now.band);
-    per.push({ outside: n.outside, day: n.day });
+    per.push({ outside: n.outside, day: n.day, looks: n.looks });
     expectOutsideRight(v);
   }
-  expect(per).toEqual(Array.from({ length: 4 }, () => ({ outside: 0, day: 0 })));
+  // No row outside the window, and for the day only the band's own row, once a look.
+  for (const x of per) {
+    expect(x.looks).toBeGreaterThan(0);
+    expect(x.outside).toBe(0);
+    expect(x.day).toBeLessThanOrEqual(x.looks);
+  }
 });
 
 test("a new turn and live events while the reader sits in an older window: no row after the window is read, and Show later's count follows", async () => {
@@ -2262,6 +2272,10 @@ test("a new turn and live events while the reader sits in an older window: no ro
   v.jumpLatest(true);
   frames(v, cx);
   v.action("first", cx);
+  frames(v, cx);
+  // Every row built again with the rail as it is now: the closed rows kept so far were built
+  // before the rail showed, which a closed row depends on (closedLook).
+  v.rowsKey = null;
   frames(v, cx);
   const n = memoReads(v);
   const was = expectOutsideRight(v);
@@ -2283,6 +2297,7 @@ test("a new turn and live events while the reader sits in an older window: no ro
 test("a card opened and closed above the window, and one inside it, keep the counts and the window's day right, each read only the card's rows", async () => {
   // Three days of 50 turns each, the window starting partway through the second.
   const { v, cx } = await capSession(150, SMALL, -1, 25, (i) => Math.floor(i / 50));
+  const n = memoReads(v);
   v.jumpLatest(true);
   frames(v, cx);
   for (let k = 0; k < 14 && bandNow(v).band && v.rows().some((r) => r.kind === "day" && v.rows().indexOf(r) < v.rows().indexOf(bandNow(v).head)); k++) { v.showMore(false); frames(v, cx); }
@@ -2291,8 +2306,8 @@ test("a card opened and closed above the window, and one inside it, keep the cou
   expect(first.band.key).not.toBe(v.allRows().find((r) => r.kind === "day").key);
   expect(drawnPill(v, cx, first.head.key)).toBe(first.band);
   const was = expectOutsideRight(v);
-  const n = memoReads(v);
   const step = (fn) => {
+    n.looks = 0;
     n.outside = 0;
     n.day = 0;
     const at = v.win.at.a;
@@ -2302,7 +2317,7 @@ test("a card opened and closed above the window, and one inside it, keep the cou
     expect(drawnPill(v, cx, now.head.key)).toBe(now.band);
     expect(now.band.key).toBe(first.band.key);
     expect(expectOutsideRight(v)).toEqual(was);
-    return { moved: v.win.at.a - at, outside: n.outside, day: n.day };
+    return { moved: v.win.at.a - at, outside: n.outside, day: n.day, looks: n.looks };
   };
   // Above the window, on the first day: every row of the window, and its day band, moves on.
   const above = step(() => v.open.add("0:5"));
@@ -2313,7 +2328,9 @@ test("a card opened and closed above the window, and one inside it, keep the cou
   const inside = step(() => v.open.add(v.turnKeys(v.rows())[3]));
   expect(inside.moved).toBe(0);
   for (const x of [above, back, inside]) {
+    expect(x.looks).toBeGreaterThan(0);
     expect(x.outside).toBe(0);
-    expect(x.day).toBe(0);
+    // The band's own row, once a look: no walk.
+    expect(x.day).toBeLessThanOrEqual(x.looks);
   }
 });
