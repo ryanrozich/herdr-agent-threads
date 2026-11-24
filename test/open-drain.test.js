@@ -319,9 +319,11 @@ test.skip("the opening: a drag of the scroll bar while the rows above drain stay
   expect(frames.filter((f) => f[2] >= f[8] - 1)).toEqual([]);
 }, 30000);
 
-// What the jump's fix must leave alone: a reader who stays at the end (j at the newest turn
-// selects it again, with a scroll to it) and Jump to latest just after a jump, while it lands.
-// Both keep the end in every frame to the end of the drain, and the rows above drain in each.
+// A reader who stays at the end during the drain: j at the newest turn (it selects it again,
+// with a scroll to it) and Jump to latest just after a jump, while it lands. Both keep the end
+// in every frame to the end of the drain, and the rows above drain in each. This is not the
+// behaviour before the fix: it pins the wait skip during the drain too. Before, j at the
+// newest waited up to 2 s (SCROLL_WAIT_MS) and showed the newest turn's head, not the end.
 test("the opening: through the drain the end stays held while following, after j at the newest turn and after Jump to latest", async () => {
   const ways = {
     "j at the newest": (v, cx) => { v.action("next", cx); expect(v.follow).toBe(true); expect(v.scrollTo).not.toBeNull(); return v.sel; },
@@ -337,7 +339,7 @@ test("the opening: through the drain the end stays held while following, after j
     const { v, frames } = await leaveDuringDrain(go);
     expect([name, frames.length > 30, v.staleRows.length]).toEqual([name, true, 0]);
     // The end drawn in every frame from the fourth, with no empty bubble. Before it, j's scroll to
-    // the newest turn's head shows for one frame, as at the commit before this fix.
+    // the newest turn's head shows for one frame.
     expect([name, frames.slice(3).filter((f) => f[2] !== f[8] || f[3] > 0)]).toEqual([name, []]);
     expect([name, frames.filter((f, k) => f[0] > 0 && f[0] >= (frames[k - 1]?.[0] ?? Infinity))]).toEqual([name, []]);
   }
