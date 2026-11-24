@@ -336,3 +336,66 @@ test("a resumed build Herdr stops inside a later slice builds each row once: the
   }
   expect(got).toEqual([["height", false, 1, true, true, 1, true, true, 120, 120], ["turnRows", false, 1, true, true, 1, true, true, 120, 120]]);
 }, 60000);
+
+// A resumed build goes on while the newest session changes (jobGoesOn), and the running turn
+// is live by its transcript (no done event yet) while Herdr's status may still say working. A
+// stop in the running turn's last row, in the last slice, leaves that turn's other rows in the
+// build's index; its done event comes before the next draw, and the retry builds it closed, in
+// other rows. The cut takes back the index entries of the stopped slice's rows: none is left
+// pointing at a place another row now holds.
+test("a resumed build Herdr stops in the running turn's last row, whose done event comes before the next draw, leaves no index entry for a row it no longer has", async () => {
+  const at = (i) => new Date(Date.UTC(2026, 10, 1, 8, 0) + i * 60000).toISOString();
+  const ev = [];
+  for (let i = 0; i < 120; i++) ev.push({ k: "p", o: "human", t: `Prompt ${i}: check the cart total ${i}.`, ts: at(i) }, { k: "t", t: `Reply ${i}: the total rounds per line.` }, { k: "d", ts: at(i) });
+  ev.push({ k: "p", o: "human", t: "Prompt 120: run the cart tests.", ts: at(120) }, { k: "t", t: "Running the tests." }, { k: "u", n: "Bash", id: "toolu_1", ts: at(120), in: "bun test" }, { k: "t", t: "They pass so far." });
+  const { v, cx, s } = await scripted(ev);
+  v.debug = false;
+  v.status = () => "working";
+  settleRows(v, cx);
+  dropTimers(v, cx);
+  const live = v.baseRows.filter((x) => x.key.includes("0:121")).map((x) => x.key);
+  const last = live.at(-1);
+  let armed = true;
+  let stops = 0;
+  // At the stop: the job, and which of the turn's other rows its index holds.
+  let job = null;
+  let held = null;
+  v.keptFor().rows.clear();
+  v.buildMax = () => -1;
+  const height = v.height;
+  v.height = function (r) {
+    if (armed && r?.key === last && this.rowJob?.from?.own) {
+      armed = false;
+      job = this.rowJob;
+      held = live.slice(1, -1).filter((k) => job.index.has(k));
+      throw STOP;
+    }
+    return height.call(this, r);
+  };
+  // The job the retry goes on with, as its record is made.
+  let ended = null;
+  const buildStep = v.buildStep;
+  v.buildStep = function (...a) { const j = this.rowJob; const out = buildStep.apply(this, a); if (j && !this.rowJob) ended = j; return out; };
+  v.rowsKey = null;
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  for (let k = 0; k < 60 && (v.rowJob || v.rowsKey == null); k++) {
+    try { draw(v, cx); } catch (e) {
+      if (e !== STOP) throw e;
+      stops++;
+      // The turn's done event, before the next draw; Herdr still says working.
+      apply(s, { k: "d", ts: at(121) });
+      s.version++;
+    }
+    cx.flush?.(0);
+  }
+  delete v.height;
+  delete v.buildMax;
+  delete v.buildStep;
+  const rows = v.baseRows;
+  const wrong = [...v.baseIndex].filter(([k, i]) => rows[i]?.key !== k).map(([k]) => k);
+  // The turn's interim text and its step group were in the index at the stop, the same job went
+  // on to its record, and it built the turn closed: one row, and no entry for the rows it had.
+  expect([live, armed, stops, held, ended === job, v.baseIndex.size === rows.length, wrong, rows.filter((x) => x.key.includes("0:121")).map((x) => x.key)]).toEqual([
+    ["0:121", "it:0:121:0", "gp:0:121:1", "ws:0:121"], false, 1, ["it:0:121:0", "gp:0:121:1"], true, true, [], ["0:121"],
+  ]);
+}, 60000);
