@@ -71,7 +71,7 @@ export const TL_ROWS_MIN = 4;
 export function tlStrip(w) { return Math.max(40, Math.floor(w - TL_GUT - 12)); }
 // How many times the turns were placed (timelineGeo) and laid out (timelineLayout) since the
 // module loaded, for the tests and the debug report: a draw that changes neither adds none.
-export const TL_MADE = { geo: 0, layout: 0 };
+export const TL_MADE = { geo: 0, layout: 0, tail: 0 };
 export const TL_ROOM_MIN = 10000;
 export const TL_ROOM_GROW = 1.5;
 export function liveRoom(ms) {
@@ -198,17 +198,9 @@ export function bandRows(L, heads, lo, hi) {
 // rows, and every row's place): bars outside it get their own spans, with "|o" on the key.
 // The running turn's unfinished bars are not spans: each is in out.grow ({ k, x0, tx, w, wall,
 // t0 }), whose right end tlGrow finds at a given time, so a layout holds while the turn runs.
-export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), view = null, geo = null, range = null) {
-  TL_MADE.layout++;
-  const G = geo ?? timelineGeo(heads, cw, scale, nowMs);
-  const { z, x0 } = tlClamp(G, view);
-  const out = { cw, scale, z, x0, geo: G, turns: G.turns, index: G.index, total: G.total, zmax: tlMaxZoom(G), gaps: [], spans: new Map(), labels: [], every: 1, ticks: [], fails: [], grow: [], from: 0, to: -1 };
-  const n = G.turns.length;
-  if (!n) return out;
-  const walls = G.walls;
-  // Spans by lane, ink and track: "tools|failed|0" -> [[x0, x1]], joined where they touch. A
-  // span whose right end is an unfinished call's is [x0, x1, 1]: drawn with its torn end.
-  const add = (k, a, b, torn = false) => {
+const TL_MARGIN = 40;
+function spanAdder(out) {
+  return (k, a, b, torn = false) => {
     let list = out.spans.get(k);
     if (!list) { list = []; out.spans.set(k, list); }
     const last = list[list.length - 1];
@@ -219,80 +211,130 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
     }
     list.push(torn ? [a, b, 1] : [a, b]);
   };
+}
+// A layout's state before its last turn: each span list's length and a copy of its last span
+// (the last turn may join onto it), and the lengths of the other lists.
+function cutOf(S) {
+  const { out } = S;
+  const spans = new Map();
+  for (const [k, list] of out.spans) spans.set(k, [list.length, list[list.length - 1].slice()]);
+  return { spans, fails: out.fails.length, grow: out.grow.length, ticks: out.ticks.length, gaps: out.gaps.length, to: out.to, failEnd: S.failEnd };
+}
+// The layout P with its last turn laid out again from heads, whose other headings are P's
+// (timelineModel checks): the lists cut back to before that turn, copied, then that turn
+// alone. The places, the numbers and the breaks stay P's. With no cut (the last turn out of
+// view), P itself.
+function tlTail(P, heads) {
+  TL_MADE.tail++;
+  const c = P.cut;
+  if (!c) return P;
+  const out = { ...P, spans: new Map(), fails: P.fails.slice(0, c.fails), grow: P.grow.slice(0, c.grow), ticks: P.ticks.slice(0, c.ticks), gaps: P.gaps.slice(0, c.gaps), to: c.to };
+  for (const [k, list] of P.spans) {
+    const s = c.spans.get(k);
+    if (!s) continue;
+    const l = list.slice(0, s[0]);
+    l[s[0] - 1] = s[1].slice();
+    out.spans.set(k, l);
+  }
+  const G = P.geo;
+  const S = { out, heads, G, z: P.z, x0: P.x0, cw: P.cw, scale: P.scale, range: null, walls: G.walls, add: spanAdder(out), M: TL_MARGIN, failEnd: c.failEnd, nti: [], nx: [], nw: [] };
+  layTurn(S, heads.length - 1);
+  return out;
+}
+// One turn of a layout: its number's place, its spans (or one per lane under 2 px), its fail
+// marks, its growing bars, its ticks and the break after it. S: the layout's state (timelineLayout).
+// false once the turn is past the strip's end and its margin.
+function layTurn(S, ti) {
+  const { out, heads, G, z, x0, cw, scale, range, walls, add, M } = S;
+  const n = G.turns.length;
+  const t = G.turns[ti];
+  const x = t.x * z - x0;
+  if (x > cw + M) return false;
+  out.to = ti;
+  const h = heads[ti];
+  const w = t.w * z;
+  // The number at the turn's start, or at the strip's left edge while the turn runs past it.
+  if (x < cw && x + w > 0) { S.nti.push(ti); S.nx.push(Math.max(0, x)); S.nw.push(x + w - Math.max(0, x)); }
+  if (w < 2) {
+    const c = h.cnt ?? {};
+    const x1 = x + Math.max(w, 1);
+    // A turn too narrow for its steps is inside the range when any of its rows is.
+    const ih = range ? range.pos.get(h.key) : null;
+    const o = range && !(ih != null && ih <= range.ib && ih + stepN(h) >= range.ia) ? "|o" : "";
+    if (c.input) add(`${c.user ? "input|user|0" : c.agent ? "input|agent|0" : "input|context|0"}${o}`, x, x1);
+    if (c.model) add(`model|model|0${o}`, x, x1);
+    if (c.tools) add(`${c.failed ? "tools|failed|0" : "tools|tools|0"}${o}`, x, x1);
+    if (c.failed && x >= S.failEnd) { out.fails.push(x + w / 2); S.failEnd = x + 6; }
+  } else {
+    const live = ti === G.live;
+    const len = stepN(h);
+    for (let i = 0; i < len; i++) {
+      const sk = laneKeys(h.stepRows[i]);
+      if (!sk) continue;
+      const b = itemBox(h.tl, i, x, w, walls[ti], scale, len);
+      if (!b || b.x1 < -M || b.x0 > cw + M) continue;
+      const k = sk[b.track ? 1 : 0];
+      if (live && b.open) {
+        out.grow.push({ k, x0: b.x0, tx: x, w, wall: walls[ti], t0: h.t0 });
+        continue;
+      }
+      const ip = range ? range.pos.get(h.stepRows[i].key) : null;
+      add(range && !(ip != null && ip >= range.ia && ip <= range.ib) ? `${k}|o` : k, b.x0, b.x1, Boolean(b.open));
+      if (h.tl[3 * i + 2] & TL_FAILED && b.x0 >= S.failEnd) { out.fails.push((b.x0 + b.x1) / 2); S.failEnd = b.x0 + 6; }
+    }
+    // Ticks inside a wide turn: on the clock its time from the start, by steps its step
+    // numbers. Only those in view.
+    if (w >= 120) {
+      if (scale === "steps") {
+        const len = stepN(h);
+        const every = Math.max(1, Math.ceil(36 / (w / len)));
+        for (let i = 0; i < len; i += every) { const tx = x + ((i + 0.5) * w) / len; if (tx >= -M && tx <= cw) out.ticks.push({ x: tx, text: `${i + 1}`, step: true }); }
+      } else if (walls[ti] > 0) {
+        const pps = w / walls[ti];
+        const step = [1, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600].map((s) => s * 1000).find((v) => v * pps >= 62);
+        // From the first tick in view.
+        const k0 = step ? Math.max(1, Math.floor(-x / (step * pps))) : 1;
+        for (let k = k0; step && k * step < walls[ti] && k * step * pps < w - 34; k++) {
+          const tx = x + k * step * pps;
+          if (tx > cw) break;
+          if (tx >= -M) out.ticks.push({ x: tx, text: startText(k * step) });
+        }
+      }
+    }
+  }
+  if (ti < n - 1) {
+    const next = heads[ti + 1];
+    out.gaps.push([x + w, x + w + G.gap * z, next.t0 != null && h.t0 != null ? next.t0 - (h.t0 + walls[ti]) : null]);
+  }
+  return true;
+}
+export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), view = null, geo = null, range = null) {
+  TL_MADE.layout++;
+  const G = geo ?? timelineGeo(heads, cw, scale, nowMs);
+  const { z, x0 } = tlClamp(G, view);
+  const out = { cw, scale, z, x0, geo: G, turns: G.turns, index: G.index, total: G.total, zmax: tlMaxZoom(G), gaps: [], spans: new Map(), labels: [], every: 1, ticks: [], fails: [], grow: [], from: 0, to: -1 };
+  const n = G.turns.length;
+  if (!n) return out;
+  const walls = G.walls;
+  // Spans by lane, ink and track: "tools|failed|0" -> [[x0, x1]], joined where they touch. A
+  // span whose right end is an unfinished call's is [x0, x1, 1]: drawn with its torn end.
+  const add = spanAdder(out);
   // The turns in view, and a margin: the first found by halving, since turns are in order.
-  const M = 40;
+  const M = TL_MARGIN;
   const left = (x0 - M) / z;
   let lo = 0;
   let hi = n - 1;
   while (lo < hi) { const m = (lo + hi) >> 1; const t = G.turns[m]; if (t.x + t.w + G.gap < left) lo = m + 1; else hi = m; }
   out.from = lo;
-  // The turns that could have a number: those starting before the strip's end.
-  const nti = [];
-  const nx = [];
-  const nw = [];
-  let failEnd = -Infinity;
+  // The turns that could have a number (those starting before the strip's end) in nti, nx, nw.
+  const S = { out, heads, G, z, x0, cw, scale, range, walls, add, M, failEnd: -Infinity, nti: [], nx: [], nw: [] };
   for (let ti = lo; ti < n; ti++) {
-    const t = G.turns[ti];
-    const x = t.x * z - x0;
-    if (x > cw + M) break;
-    out.to = ti;
-    const h = heads[ti];
-    const w = t.w * z;
-    // The number at the turn's start, or at the strip's left edge while the turn runs past it.
-    if (x < cw && x + w > 0) { nti.push(ti); nx.push(Math.max(0, x)); nw.push(x + w - Math.max(0, x)); }
-    if (w < 2) {
-      const c = h.cnt ?? {};
-      const x1 = x + Math.max(w, 1);
-      // A turn too narrow for its steps is inside the range when any of its rows is.
-      const ih = range ? range.pos.get(h.key) : null;
-      const o = range && !(ih != null && ih <= range.ib && ih + stepN(h) >= range.ia) ? "|o" : "";
-      if (c.input) add(`${c.user ? "input|user|0" : c.agent ? "input|agent|0" : "input|context|0"}${o}`, x, x1);
-      if (c.model) add(`model|model|0${o}`, x, x1);
-      if (c.tools) add(`${c.failed ? "tools|failed|0" : "tools|tools|0"}${o}`, x, x1);
-      if (c.failed && x >= failEnd) { out.fails.push(x + w / 2); failEnd = x + 6; }
-    } else {
-      const live = ti === G.live;
-      const len = stepN(h);
-      for (let i = 0; i < len; i++) {
-        const sk = laneKeys(h.stepRows[i]);
-        if (!sk) continue;
-        const b = itemBox(h.tl, i, x, w, walls[ti], scale, len);
-        if (!b || b.x1 < -M || b.x0 > cw + M) continue;
-        const k = sk[b.track ? 1 : 0];
-        if (live && b.open) {
-          out.grow.push({ k, x0: b.x0, tx: x, w, wall: walls[ti], t0: h.t0 });
-          continue;
-        }
-        const ip = range ? range.pos.get(h.stepRows[i].key) : null;
-        add(range && !(ip != null && ip >= range.ia && ip <= range.ib) ? `${k}|o` : k, b.x0, b.x1, Boolean(b.open));
-        if (h.tl[3 * i + 2] & TL_FAILED && b.x0 >= failEnd) { out.fails.push((b.x0 + b.x1) / 2); failEnd = b.x0 + 6; }
-      }
-      // Ticks inside a wide turn: on the clock its time from the start, by steps its step
-      // numbers. Only those in view.
-      if (w >= 120) {
-        if (scale === "steps") {
-          const len = stepN(h);
-          const every = Math.max(1, Math.ceil(36 / (w / len)));
-          for (let i = 0; i < len; i += every) { const tx = x + ((i + 0.5) * w) / len; if (tx >= -M && tx <= cw) out.ticks.push({ x: tx, text: `${i + 1}`, step: true }); }
-        } else if (walls[ti] > 0) {
-          const pps = w / walls[ti];
-          const step = [1, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600].map((s) => s * 1000).find((v) => v * pps >= 62);
-          // From the first tick in view.
-          const k0 = step ? Math.max(1, Math.floor(-x / (step * pps))) : 1;
-          for (let k = k0; step && k * step < walls[ti] && k * step * pps < w - 34; k++) {
-            const tx = x + k * step * pps;
-            if (tx > cw) break;
-            if (tx >= -M) out.ticks.push({ x: tx, text: startText(k * step) });
-          }
-        }
-      }
-    }
-    if (ti < n - 1) {
-      const next = heads[ti + 1];
-      out.gaps.push([x + w, x + w + G.gap * z, next.t0 != null && h.t0 != null ? next.t0 - (h.t0 + walls[ti]) : null]);
-    }
+    // Before the last turn, what the layout holds so far, so a new heading of that turn alone
+    // is laid out again from here (tlTail).
+    if (ti === n - 1 && !range) out.cut = cutOf(S);
+    if (!layTurn(S, ti)) break;
   }
-  numbers(out, heads, nti, nx, nw);
+  numbers(out, heads, S.nti, S.nx, S.nw);
   return out;
 }
 // The turns' numbers, 10.5 px: a number is TL_NUM_PAD px (its edge line and padding) and
@@ -503,12 +545,55 @@ export function tlBar(L, heads, ti, si, nowMs = Date.now()) {
   const upTo = ti === L.geo?.live && h.t0 != null && wall > 0 ? growEnd(T.x, T.w, wall, h.t0, nowMs) : null;
   return barAt(h, si, T.x, T.w, wall, L.scale, stepN(h), upTo);
 }
+// The step of turn ti a press at x (and ly, px down the lane, or null) gets in a lane:
+// { ti, i, top, r, w, d }, or null. top: its bar is under the press, the one drawn on top
+// there (r: failed over the rest, half height over full, the view's order; then the
+// narrowest, w); else the nearest bar within 4 px (d).
+function stepIn(L, heads, ti, x, lane, nowMs, ly) {
+  const t = L.turns[ti];
+  const h = heads[ti];
+  if (!t || !h || h.key !== t.key) return null;
+  const z = L.z ?? 1;
+  const wall = L.geo?.walls[ti] ?? wallOf(h);
+  const tx = t.x * z - (L.x0 ?? 0);
+  const tw = t.w * z;
+  // The running turn's unfinished bars end at now, not at its room's end.
+  const upTo = ti === L.geo?.live && h.t0 != null ? growEnd(tx, tw, wall, h.t0, nowMs) : null;
+  let best = null;
+  let top = null;
+  const len = stepN(h);
+  for (let i = 0; i < len; i++) {
+    const k = LEDGER_KINDS[h.stepRows[i].lk];
+    if (lane && k?.lane !== lane) continue;
+    const b = barAt(h, i, tx, tw, wall, L.scale, len, upTo);
+    if (!b) continue;
+    const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
+    const r = (b.track ? 1 : 0) + (k?.ink === "failed" ? 2 : 0);
+    const w = b.x1 - b.x0;
+    // A full bar is 2 to 14 px down its lane, a half one 8 to 14 (the view's rectLayer).
+    if (d === 0 && (ly == null || (ly >= (b.track ? 8 : 2) && ly <= 14))) {
+      if (!top || r > top.r || (r === top.r && w < top.w)) top = { ti, i, top: true, r, w, d };
+    } else if (d < 4 && (!best || d < best.d || (d === best.d && r > best.r))) best = { ti, i, top: false, r, w, d };
+  }
+  return top ?? best;
+}
+// Whether step c wins over step a for a press: a bar under the press over a near one, then
+// the one drawn on top and the narrowest, or the nearer. A tie keeps a.
+function hitWins(c, a) {
+  if (!a) return true;
+  if (c.top !== a.top) return c.top;
+  if (c.top) return c.r > a.r || (c.r === a.r && c.w < a.w);
+  return c.d < a.d || (c.d === a.d && c.r > a.r);
+}
 // The turn and step under px x of the strip in a lane: { turn, key } (key: the step's row,
 // or the turn's heading when no step's bar is within 4 px). heads in the layout's order; x in
 // px of the view (zoomed and panned); ly, px down the lane (null: any). Where bars overlap
 // (calls running at once share the half-height track), the bar drawn on top at x and ly:
 // failed over the rest, half height over full (the view's order), then the narrowest. With
-// none there, the nearest within 4 px.
+// none there, the nearest within 4 px. The turn under the press is looked at first, then the
+// turns within 4 px of it each side, nearest first: on turns under 1 px each lane is one span
+// a turn, and neighbours' spans join, so the bar under the press can be a neighbour's. With
+// no bar in the lane within 4 px, the heading of the turn under the press.
 export function timelineHit(L, heads, x, lane, nowMs = Date.now(), ly = null) {
   const T = L.turns;
   if (!T.length) return null;
@@ -518,38 +603,25 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now(), ly = null) {
   let lo = 0;
   let hi = T.length - 1;
   while (lo < hi) { const m = (lo + hi + 1) >> 1; if (T[m].x <= fx) lo = m; else hi = m - 1; }
-  const t = T[lo];
-  const h = heads[lo];
-  if (!h || h.key !== t.key) return null;
   // Past the turn into its break: the nearer turn.
-  if (fx > t.x + t.w && T[lo + 1] && T[lo + 1].x - fx < fx - (t.x + t.w)) return timelineHit(L, heads, T[lo + 1].x * z - x0, lane, nowMs, ly);
-  const wall = L.geo?.walls[lo] ?? wallOf(h);
-  const tx = t.x * z - x0;
-  const tw = t.w * z;
-  // The running turn's unfinished bars end at now, not at its room's end.
-  const upTo = lo === L.geo?.live && h.t0 != null ? growEnd(tx, tw, wall, h.t0, nowMs) : null;
-  let best = null;
-  let bestD = 4;
-  let bestR = -1;
-  let top = null;
-  let topR = -1;
-  let topW = Infinity;
-  const len = stepN(h);
-  for (let i = 0; i < len; i++) {
-    const k = LEDGER_KINDS[h.stepRows[i].lk];
-    if (lane && k?.lane !== lane) continue;
-    const b = barAt(h, i, tx, tw, wall, L.scale, len, upTo);
-    if (!b) continue;
-    const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
-    const r = (b.track ? 1 : 0) + (k?.ink === "failed" ? 2 : 0);
-    // A full bar is 2 to 14 px down its lane, a half one 8 to 14 (the view's rectLayer).
-    if (d === 0 && (ly == null || (ly >= (b.track ? 8 : 2) && ly <= 14))) {
-      const w = b.x1 - b.x0;
-      if (r > topR || (r === topR && w < topW)) { top = i; topR = r; topW = w; }
-    } else if (d < bestD || (d === bestD && r > bestR)) { best = i; bestD = d; bestR = r; }
+  if (fx > T[lo].x + T[lo].w && T[lo + 1] && T[lo + 1].x - fx < fx - (T[lo].x + T[lo].w)) lo++;
+  const h = heads[lo];
+  if (!h || h.key !== T[lo].key) return null;
+  let win = stepIn(L, heads, lo, x, lane, nowMs, ly);
+  // A turn's drawn extent in px of the view: at least 1 px, as the layout draws it.
+  const start = (j) => T[j].x * z - x0;
+  const end = (j) => start(j) + Math.max(T[j].w * z, 1);
+  for (let s = 1; s <= 400; s++) {
+    const a = lo - s >= 0 && end(lo - s) >= x - 4 ? lo - s : -1;
+    const b = lo + s < T.length && start(lo + s) <= x + 4 ? lo + s : -1;
+    if (a < 0 && b < 0) break;
+    for (const j of [a, b]) {
+      if (j < 0) continue;
+      const c = stepIn(L, heads, j, x, lane, nowMs, ly);
+      if (c && hitWins(c, win)) win = c;
+    }
   }
-  const pick = top ?? best;
-  return { turn: h.key, key: pick != null ? h.stepRows[pick].key : h.key };
+  return win ? { turn: heads[win.ti].key, key: heads[win.ti].stepRows[win.i].key } : { turn: h.key, key: h.key };
 }
 // The timeline for a draw: the turns placed and the view laid out, each made again only when
 // what it depends on changes, and the running turn's growing bars at nowMs. prev: the last
@@ -558,9 +630,22 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now(), ly = null) {
 // draw does only tlGrow, and the rest of the strip stays where it was.
 export function timelineModel(prev, heads, cw, scale = "clock", nowMs = Date.now(), view = null) {
   const room = roomOf(heads, scale, nowMs);
-  const same = prev && prev.heads === heads && prev.cw === cw && prev.scale === scale && prev.geo.room === room;
-  const geo = same ? prev.geo : timelineGeo(heads, cw, scale, nowMs);
+  const base = prev && prev.cw === cw && prev.scale === scale && prev.geo.room === room;
+  const same = base && prev.heads === heads;
+  // ledger() makes a new heads array at every change to the session, but keeps each finished
+  // turn's heading. When only the last heading is new and its length on the strip is the
+  // same (its room while it runs), the places hold, and only that turn is laid out again.
+  const tail = base && !same && scale === "clock" && lastOnly(prev.heads, heads) && prev.geo.walls[heads.length - 1] === (room > 0 ? room : wallOf(heads[heads.length - 1]));
+  const geo = same || tail ? prev.geo : timelineGeo(heads, cw, scale, nowMs);
   const vk = view ? `${view.z}|${view.x0}` : "";
-  const L = same && prev.vk === vk ? prev.L : timelineLayout(heads, cw, scale, nowMs, view, geo);
+  const L = same && prev.vk === vk ? prev.L : tail && prev.vk === vk ? tlTail(prev.L, heads) : timelineLayout(heads, cw, scale, nowMs, view, geo);
   return { heads, cw, scale, geo, vk, L, grow: tlGrow(L, nowMs) };
+}
+// Whether b is a with only its last heading new (the same turn): every other heading the same
+// object, checked from the end, where a change shows first.
+function lastOnly(a, b) {
+  const n = b.length;
+  if (!a || a.length !== n || !n || a[n - 1].key !== b[n - 1].key) return false;
+  for (let i = n - 2; i >= 0; i--) if (a[i] !== b[i]) return false;
+  return true;
 }

@@ -503,8 +503,8 @@ test("timeline press: of two bars on top at a point, on the same track and ink, 
 test("timeline press: a turn under 2 px at Fit is drawn as one span per lane; a press gets the turn under the pointer, and a step of it, the one drawn on top, only where its span is within 4 px; the span is the step's bar for the press and the outline", () => {
   for (const cw of [1143, 1370]) {
     const heads = strip(2000);
-    // One turn with no tools call: in the Tools lane it has no span, so a press there gets
-    // its heading. Its rows keep their keys (the reply is tr:0:1000:3).
+    // One turn with no tools call: it draws no tools span of its own. Its rows keep their
+    // keys (the reply is tr:0:1000:3).
     const q = heads[1000];
     heads[1000] = { ...q, cnt: { ...q.cnt, tools: 0, failed: 0 }, stepRows: [q.stepRows[0], q.stepRows[3]], tl: [0, Number.NaN, 0, 10000, 60000, 0] };
     const L = timelineLayout(heads, cw, "clock", T0, null);
@@ -521,7 +521,9 @@ test("timeline press: a turn under 2 px at Fit is drawn as one span per lane; a 
       expect(timelineHit(L, heads, x, "model", T0, 4)).toEqual({ turn: `0:${ti}`, key: `tr:0:${ti}:3` });
     }
     const T = tlBox(L, 1000);
-    expect(timelineHit(L, heads, T.x + T.w / 2, "tools", T0, 4)).toEqual({ turn: "0:1000", key: "0:1000" });
+    // Turn 999's tools span, at least 1 px, runs over turn 1000, which has none: the press
+    // gets the nearest turn with a tools bar within 4 px, 999 (the next test).
+    expect(timelineHit(L, heads, T.x + T.w / 2, "tools", T0, 4)).toEqual({ turn: "0:999", key: "tr:0:999:2" });
     expect(timelineHit(L, heads, T.x + T.w / 2, "model", T0, 4)).toEqual({ turn: "0:1000", key: "tr:0:1000:3" });
   }
   // A wide turn's bar is its own (itemBox), as before.
@@ -569,13 +571,15 @@ test("timeline model: with events arriving in the running turn, the finished tur
       if (k === 16) expect(drawn(m.L)).toEqual(drawn(timelineLayout(m.heads, cw, "clock", at(k), null)));
     }
     const made = { geo: TL.TL_MADE.geo - before.geo, layout: TL.TL_MADE.layout - before.layout, tail: TL.TL_MADE.tail - before.tail };
-    // One whole layout at k 16 for the comparison above.
-    expect(made).toEqual({ geo: 1, layout: 2, tail: 30 });
+    // The model placed and laid out once, and laid out the running turn alone at each of the
+    // 30 events. The whole layout at k 16, for the comparison above, adds one of each.
+    expect(made).toEqual({ geo: 2, layout: 2, tail: 30 });
     // The same strip as a whole layout of the last heads, the running turn's open bar too.
     const whole = timelineLayout(m.heads, cw, "clock", at(31), null);
     expect(drawn(m.L)).toEqual(drawn(whole));
     const m2 = timelineModel(m, [...done, runningHead(n, 32, t0)], cw, "clock", at(32), null);
-    expect(m2.grow.length).toBe(1);
+    // Its open call grows where the turn is 2 px or wider; under 2 px it is the lane's span.
+    expect(m2.grow.length).toBe(tlBox(m2.L, n - 1).w >= 2 ? 1 : 0);
     expect(drawn(m2.L)).toEqual(drawn(timelineLayout(m2.heads, cw, "clock", at(32), null)));
     // Past its room the strip is placed again, once.
     const g0 = TL.TL_MADE.geo;

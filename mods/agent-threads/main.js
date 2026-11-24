@@ -12108,7 +12108,7 @@ export default class Threads extends View {
       cw: M?.cw ?? null, turns: T?.turns.length ?? 0, drawn: T ? T.to - T.from + 1 : 0, spans,
       layers: T ? T.spans.size + new Set(M.grow.map((g) => g.k)).size : 0, live: M?.geo.live ?? -1,
       grow: (M?.grow ?? []).map((g) => ({ k: g.k, x0: Math.round(g.x0), x1: Math.round(g.x1) })), labels: T?.labels.length ?? 0, ms: this.tlMs ?? null,
-      made: { geo: TL_MADE.geo, layout: TL_MADE.layout },
+      made: { geo: TL_MADE.geo, layout: TL_MADE.layout, tail: TL_MADE.tail },
     };
   }
   // A press on the lanes: the nearest step in that lane within 4 px, else its turn's heading
