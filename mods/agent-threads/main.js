@@ -94,7 +94,7 @@ import {
   BAR_W, BAR_H, BAR_SLANT, trajLayout, rowsLeft,
 } from "./ledger.js";
 import {
-  timelineModel, timelineHit, tlBox, itemBox, tornPoints, polyRows, tlStrip, hatchLines, TL_MADE,
+  timelineModel, timelineHit, tlBox, itemBox, tornPoints, polyRows, tlStrip, hatchLines, tlNumbers, TL_MADE,
   TL_LANES, TL_MIN_W, TL_H, TL_GUT, TL_AX, TL_TK, TL_LT, TL_LANE, TL_PT, TL_ROWS_MIN,
 } from "./timeline.js";
 import { VERSION, versionLine, parseBuild } from "./version.js";
@@ -12205,10 +12205,12 @@ export default class Threads extends View {
     const lanes = div().id("th-tl-lanes").relative().w(cw).h(laneH).cursor_pointer().overflow_hidden()
       .on_mouse_down("left", (e, cx) => this.tlPress(e, cx))
       .children(kids);
-    // Every number, tick and fail mark the layout gives: it keeps them 24, 62 and 6 px apart, so
-    // there are never more than fit (test/timeline.test.js). The marks are one layer.
+    // Every number, tick and fail mark the layout gives: the numbers every k-th turn's, apart by
+    // their own width and a gap, the ticks 62 and the fail marks 6 px apart, so there are never
+    // more than fit (test/timeline.test.js). The selected turn's number is always there: it
+    // takes the place of any it touches. The marks are one layer.
     const labels = div().id("th-tl-labels").relative().w(cw).h(TL_AX).overflow_hidden()
-      .children(T.labels.map((l) => h_flex().absolute().top(0).left(l.x).w(Math.min(l.w, 160)).h(TL_AX).pl(5).gap(5).items_center()
+      .children(tlNumbers(T, M.heads, ti).map((l) => h_flex().absolute().top(0).left(l.x).w(Math.min(l.w, 160)).h(TL_AX).pl(5).gap(5).items_center()
         .border_l(1).border_color(t.border).text_size(10.5)
         .child(div().flex_none().text_color(t.foreground).child(l.text))
         .when(Boolean(l.total), (el) => el.child(div().flex_none().text_color(t.dim).child(l.total)))));

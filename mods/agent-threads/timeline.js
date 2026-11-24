@@ -202,7 +202,7 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
   TL_MADE.layout++;
   const G = geo ?? timelineGeo(heads, cw, scale, nowMs);
   const { z, x0 } = tlClamp(G, view);
-  const out = { cw, scale, z, x0, geo: G, turns: G.turns, index: G.index, total: G.total, zmax: tlMaxZoom(G), gaps: [], spans: new Map(), labels: [], ticks: [], fails: [], grow: [], from: 0, to: -1 };
+  const out = { cw, scale, z, x0, geo: G, turns: G.turns, index: G.index, total: G.total, zmax: tlMaxZoom(G), gaps: [], spans: new Map(), labels: [], every: 1, ticks: [], fails: [], grow: [], from: 0, to: -1 };
   const n = G.turns.length;
   if (!n) return out;
   const walls = G.walls;
@@ -226,7 +226,10 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
   let hi = n - 1;
   while (lo < hi) { const m = (lo + hi) >> 1; const t = G.turns[m]; if (t.x + t.w + G.gap < left) lo = m + 1; else hi = m; }
   out.from = lo;
-  let labelEnd = -Infinity;
+  // The turns that could have a number: those starting before the strip's end.
+  const nti = [];
+  const nx = [];
+  const nw = [];
   let failEnd = -Infinity;
   for (let ti = lo; ti < n; ti++) {
     const t = G.turns[ti];
@@ -236,11 +239,7 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
     const h = heads[ti];
     const w = t.w * z;
     // The number at the turn's start, or at the strip's left edge while the turn runs past it.
-    const lx = Math.max(x, Math.min(0, x + w - 24));
-    if (x + w - lx >= 24 && lx >= labelEnd) {
-      out.labels.push({ x: lx, w: x + w - lx, text: `${h.n}`, total: x + w - lx >= 120 ? (h.going ? "running" : durText(walls[ti]) || null) : null });
-      labelEnd = lx + Math.max(24, Math.min(x + w - lx, 120));
-    }
+    if (x < cw && x + w > 0) { nti.push(ti); nx.push(Math.max(0, x)); nw.push(x + w - Math.max(0, x)); }
     if (w < 2) {
       const c = h.cnt ?? {};
       const x1 = x + Math.max(w, 1);
@@ -293,7 +292,90 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
       out.gaps.push([x + w, x + w + G.gap * z, next.t0 != null && h.t0 != null ? next.t0 - (h.t0 + walls[ti]) : null]);
     }
   }
+  numbers(out, heads, nti, nx, nw);
   return out;
+}
+// The turns' numbers, 10.5 px: a number is TL_NUM_PAD px (its edge line and padding) and
+// TL_NUM_CH px a digit wide, and TL_NUM_GAP px clear of the next. A turn's length goes beside
+// its number where the turn and the room to the next number are both TL_NUM_LEN px or more.
+export const TL_NUM_PAD = 6;
+export const TL_NUM_CH = 6.5;
+export const TL_NUM_GAP = 8;
+export const TL_NUM_LEN = 120;
+export function tlNumW(text) { return TL_NUM_PAD + String(text).length * TL_NUM_CH; }
+// The steps k is chosen from: 1, 2, 5, 10, 20, 50 and on.
+function nextStep(k) { const d = 10 ** Math.floor(Math.log10(k)); const m = k / d; return (m < 2 ? 2 : m < 5 ? 5 : 10) * d; }
+// out.labels: the first turn's number, then every k-th turn's (turn numbers a multiple of k),
+// k the smallest step that keeps them all apart (out.every). A multiple that would run past
+// the strip's end, or touch the first turn's number, has none. nti, nx, nw: the turns in view
+// that start before the strip's end, their number's x and their width from it.
+function numbers(out, heads, nti, nx, nw) {
+  const cw = out.cw;
+  const m = nti.length;
+  if (!m) return;
+  const top = heads[nti[m - 1]].n;
+  let k = 1;
+  for (; k <= top; k = nextStep(k)) {
+    let end = -Infinity;
+    let ok = true;
+    for (let j = 0; j < m && ok; j++) {
+      const ti = nti[j];
+      const h = heads[ti];
+      if (ti === 0 || h.n % k) continue;
+      const w = tlNumW(h.n);
+      if (nx[j] + w > cw) continue;
+      if (nx[j] < end) ok = false;
+      end = nx[j] + w + TL_NUM_GAP;
+    }
+    if (ok) break;
+  }
+  out.every = k;
+  const list = [];
+  let end = -Infinity;
+  for (let j = 0; j < m; j++) {
+    const ti = nti[j];
+    const h = heads[ti];
+    if (ti !== 0 && h.n % k) continue;
+    const w = tlNumW(h.n);
+    if (ti !== 0 && (nx[j] + w > cw || nx[j] < end)) continue;
+    list.push({ ti, x: ti === 0 ? Math.min(nx[j], Math.max(0, cw - w)) : nx[j], tw: nw[j], text: `${h.n}`, w: 0, total: null });
+    end = list.at(-1).x + w + TL_NUM_GAP;
+  }
+  out.labels = roomOfNumbers(list, heads, out);
+}
+// Each number's w, the room to the next number (or the strip's end), and its turn's length
+// where there is room.
+function roomOfNumbers(list, heads, L) {
+  for (let j = 0; j < list.length; j++) {
+    const l = list[j];
+    const room = (j + 1 < list.length ? list[j + 1].x : L.cw) - l.x;
+    l.w = Math.max(tlNumW(l.text), room - (j + 1 < list.length ? TL_NUM_GAP / 2 : 0));
+    const h = heads[l.ti];
+    l.total = l.tw >= TL_NUM_LEN && room >= TL_NUM_LEN ? (h.going ? "running" : durText(L.geo.walls[l.ti]) || null) : null;
+  }
+  return list;
+}
+// The numbers to draw with turn ti selected: the layout's, with the selected turn's number
+// at its start (kept inside the strip) in place of any it touches. ti null, out of view or
+// already numbered: the layout's own list.
+export function tlNumbers(L, heads, ti) {
+  if (ti == null || !L.turns[ti] || L.labels.some((l) => l.ti === ti)) return L.labels;
+  const t = L.turns[ti];
+  const x = t.x * L.z - L.x0;
+  const w = t.w * L.z;
+  if (x >= L.cw || x + w <= 0) return L.labels;
+  const text = `${heads[ti].n}`;
+  const sw = tlNumW(text);
+  const sx = Math.min(Math.max(0, x), Math.max(0, L.cw - sw));
+  const touches = (l) => (l.x <= sx ? l.x + tlNumW(l.text) + TL_NUM_GAP > sx : sx + sw + TL_NUM_GAP > l.x);
+  const list = [];
+  let put = false;
+  for (const l of L.labels) {
+    if (!put && l.x > sx) { list.push({ ti, x: sx, tw: x + w - Math.max(0, x), text, w: 0, total: null }); put = true; }
+    if (!touches(l)) list.push({ ...l });
+  }
+  if (!put) list.push({ ti, x: sx, tw: x + w - Math.max(0, x), text, w: 0, total: null });
+  return roomOfNumbers(list, heads, L);
 }
 // The breaks' hatch: 45 degree lines TL_HATCH px apart in each break 4 px or wider (gaps from
 // timelineLayout, [x0, x1, ms]), cut to the break and to a strip cw px wide and h px tall, as
