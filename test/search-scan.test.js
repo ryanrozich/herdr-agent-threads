@@ -1399,6 +1399,40 @@ for (const how of ["a key", "a new selection"]) test(`an older step going on by 
   expect(direct(v, "zebra")).toContain(`0:${base + 401}`);
 }, 300000);
 
+// A step going on by itself is called off by anything the reader does to move the list or
+// leave the view, with the selection left where it is: the wheel over the list, a scroll the
+// list reports with no wheel (its scroll bar), the rail's wheel, a press on a rail end's dot,
+// the pin button on a rail card, and the pane hidden (no draw for 30 s). Each route as its
+// handler runs it.
+const LEAVES = {
+  "the wheel": (v, cx) => v.listWheel({ delta: { y: 3000 } }),
+  "a scroll the list reports": (v, cx) => { const rows = v.rows(); v.stickCheck(rows, v.bottomShown, (v.stickStart ?? 40) - 20); },
+  "the rail's wheel": (v, cx) => { v.railCut = true; v.railWheel({ delta_lines: { y: 3 } }, cx); },
+  "a rail end's dot": (v, cx) => v.railReveal(0, cx),
+  "a rail card's pin button": (v, cx) => { v.togglePin(v.sel, cx); cx.notify(); },
+  "the pane hidden": (v, cx) => { paid.frames += 1500; },
+};
+for (const [how, go] of Object.entries(LEAVES)) test(`an older step going on by itself is called off by ${how}, with no words and the selection left where it is`, async () => {
+  const z = await zebraTail();
+  const { v, cx, last } = z;
+  const r = {};
+  X = 2;
+  try { priced(v, () => {
+    zebraSearch(z);
+    drawOnce(v, cx);
+    v.action("olderMatch", cx);
+    r.kept = v.sel === last && Boolean(v.hitsNow().step);
+    go(v, cx);
+    for (let k = 0; k < 40; k++) drawOnce(v, cx);
+    r.step = v.hitsNow().step ?? null;
+    r.field = fieldText(v);
+  }); } finally { X = 1; }
+  await v.pinChain;
+  delete recordFiles[PINS];
+  expect({ kept: r.kept, sel: v.sel, step: r.step }).toEqual({ kept: true, sel: last, step: null });
+  expect(r.field).not.toMatch(/No (older|newer) match/);
+}, 300000);
+
 // An older step going on by itself while the newest session changes before every draw, each
 // time by a turn done with no reply: every turn the step's check back passed was closed, so
 // that check goes on from where it got to, and the step lands.
