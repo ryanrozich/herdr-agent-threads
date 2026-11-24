@@ -10631,7 +10631,12 @@ export default class Threads extends View {
       if (prevShown !== this.bottomShown) this.stickyDue = true;
       // The rail brightens the turns on screen: redraw when the first or last one changes.
       this.viewRange = [range.start, range.end];
-      this.viewEndKey = rows[range.end - 1]?.key ?? null;
+      // The last of the session's rows on screen, past the list's own items under it (Show
+      // later, a cut note, the tail), which winPlace could not find in the base rows: a card
+      // opened above then moves that row on, and the window's end follows it.
+      let e = range.end - 1;
+      while (e > range.start && !this.baseIndex?.has(rows[e]?.key)) e--;
+      this.viewEndKey = this.baseIndex?.has(rows[e]?.key) ? rows[e].key : null;
       let f = range.start;
       while (f < range.end - 1 && !rowTurnKey(rows[f])) f++;
       let l = range.end - 1;

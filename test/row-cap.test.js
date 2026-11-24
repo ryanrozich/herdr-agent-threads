@@ -1514,3 +1514,29 @@ test("with no cut, a jump that moves the window shows its turn in the first fram
   expect(turns(sim.last())).toContain("0:150");
   H.listWindow = null;
 });
+
+test("with Show later on screen, a card opened above the view keeps the turns on screen in the window: the end is the last row of the session's on screen", async () => {
+  const { v, cx, s } = await capSession(150, SMALL, 125);
+  v.jumpLatest(true);
+  frames(v, cx);
+  v.follow = false;
+  v.toBottom = false;
+  await addCapTurns(s, 150, 20);
+  frames(v, cx);
+  const rows = v.rows();
+  expect(rows.at(-1).key).toBe("newer");
+  // The view on the window's last turns and Show later under them.
+  const n = rows.length;
+  const last = v.turnKeys(rows).at(-1);
+  try {
+    H.listWindow = (k) => (k === v.rows().length && v.rows()[k - 1]?.key === "newer" ? { start: k - 6, end: k } : { start: 0, end: 1 });
+    draw(v, cx);
+    expect(v.viewRange[1]).toBe(n);
+    expect(v.viewEndKey).toBe(last);
+    v.open.add("0:126");
+    H.listWindow = () => ({ start: 0, end: 1 });
+    frames(v, cx, 1);
+    expect(v.rows().some((r) => r.key.startsWith("md:0:126:"))).toBe(true);
+    expect(inList(v, last)).toBe(true);
+  } finally { H.listWindow = null; }
+});
