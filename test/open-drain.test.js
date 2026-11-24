@@ -933,27 +933,35 @@ test("the opening: a row on screen refused 64 draws runs alone once, as its draw
 }, 300000);
 
 // 44 ms of fixed work in every draw ahead of the owed row (ahead: in react, before payOwed, as
-// on this branch applyStick, fitColumn and react are), with one draw in every 40 of 2 ms: that
-// light draw keeps lightBase low, so a row is never judged one that can never fit, and the
-// light draw is judged by the heavy draw before it (fitsHost on its frameBase), so it refuses
-// the row too. Before, the rows on screen stayed blank for as long as that went on. Now a row
-// refused 64 draws runs alone once, whatever lightBase says. Rows of 4 ms end before 50 ms
-// (44 + 4), so they are kept with no stop, and from the frame after the constant none is
-// blank. Rows of 8 cannot end in such a draw (44 + 8 > 50): each one's run alone is cut at
-// 50 ms, one stop, and it is held for its text, blank: one stop a row, about 5 s apart.
-test("the opening: with one light draw in every 40, a row on screen refused 64 draws still runs alone once, whatever the lightest draw says", async () => {
+// on this branch applyStick, fitColumn and react are), 2 after it, rows of 8 ms. A row on
+// screen fits no such draw (44 + 8 and the margin pass 50), and from the 64th draw the lightest
+// draw is one of these too, so the rows can never fit and are owed 64 draws. A run alone
+// would start at 44 ms and be cut at 50: one stop a row, and the row held blank for its text.
+// So none starts where the time already spent and its estimate pass the limit less the margin,
+// while a lighter draw could fit it: no row is run and no draw is stopped, and the rows stay as
+// they were (blank) for as long as every draw is this heavy.
+test("the opening: with 44 ms of work ahead of the owed row in every draw, a row that can end in no such draw is not run, and no draw is stopped", async () => {
+  const { v, frames } = await costlyWheel(8, 44, 450, wheelUp, { stop: true, after: 2, ahead: true });
+  expect([frames.filter((f) => f.stopped).length, frames.reduce((n, f) => n + f.starts.length, 0), frames.reduce((n, f) => n + f.over, 0), v.aloneCut ?? 0]).toEqual([0, 0, 0, 0]);
+  expect(frames.slice(-10).filter((f) => f.blank === 0)).toEqual([]);
+}, 300000);
+
+// The same with one draw in every 40 of 2 ms (frames 39, 79, ...): that light draw keeps the
+// lightest draw low, so no row ever counts as one that can never fit, and it is judged by the
+// heavy draw before it (fitsHost on its frameBase), so it refuses the row too. Before, the rows
+// stayed blank for as long as that went on. A row refused 64 draws is due to run alone, but
+// in the heavy draws the time already spent (44 ms) and its estimate pass the limit, so it
+// waits for the first light draw: there it runs alone, at about 2 ms, and is kept, with no
+// stop. One row a light draw, alone, until none on screen is blank.
+test("the opening: with one light draw in every 40, a row on screen refused 64 draws runs alone in the first light draw after, with no stop", async () => {
   const mixed = (k) => (k % 40 === 39 ? 2 : 44);
-  let { v, frames } = await costlyWheel(4, mixed, 120, wheelUp, { stop: true, after: 2, ahead: true });
-  expect(v.lightBase()).toBeLessThan(6);
-  expect(frames.slice(0, 64).filter((f) => f.blank === 0)).toEqual([]);
-  expect(frames.slice(68).filter((f) => f.blank > 0)).toEqual([]);
-  expect([frames.filter((f) => f.stopped).length, v.owedAlone > 0, v.aloneCut ?? 0]).toEqual([0, true, 0]);
-  ({ v, frames } = await costlyWheel(8, mixed, 800, wheelUp, { stop: true, after: 2, ahead: true }));
-  const stops = frames.flatMap((f, k) => (f.stopped ? [k] : []));
-  expect(stops.length).toBe(3);
-  expect(stops[0]).toBeGreaterThanOrEqual(64);
-  expect(stops[1] - stops[0]).toBeGreaterThan(5000 / 16 - 10);
-  expect([v.owedAlone, v.aloneCut, frames.reduce((n, f) => n + f.over, 0), frames.at(-1).blank > 0]).toEqual([3, 3, 3, true]);
+  for (const ms of [4, 8]) {
+    const { v, frames } = await costlyWheel(ms, mixed, 240, wheelUp, { stop: true, after: 2, ahead: true });
+    const ran = frames.flatMap((f, k) => (f.starts.length ? [k] : []));
+    expect(v.lightBase()).toBeLessThan(6);
+    expect([ms, ran[0], ran.every((k) => k % 40 === 39), frames.filter((f) => f.stopped).length, frames.reduce((n, f) => n + f.over, 0)]).toEqual([ms, 79, true, 0, 0]);
+    expect([ms, frames.slice(0, 79).filter((f) => f.blank === 0).length, frames.at(-1).blank, v.owedAlone > 0]).toEqual([ms, 0, 0, true]);
+  }
 }, 300000);
 
 // Two jumps 60 ms apart, in different frames, during the drain: each one's 130 ms timer is for

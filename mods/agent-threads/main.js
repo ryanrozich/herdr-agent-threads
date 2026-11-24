@@ -4858,11 +4858,11 @@ export default class Threads extends View {
   //   draws (payOwed) run only as their draw's first shaping unit, alone: nothing else is
   //   shaped in that draw (unitAlone, counted in aloneRun). Such a run may pass the limit once;
   //   what it shaped is kept if the stop comes after it. Not in the frames after a stopped
-  //   render (shapeMax -1), in the drain not past the line unless its row is on screen, and
-  //   not while it runs: a running turn's reply is reshaped at each update, and each would
-  //   pass the limit, so it keeps the shape it had until it ends. With a rate far too
-  //   high every turn can never fit: each runs alone, a draw each, and teaches the rate down
-  //   (shapeLearn).
+  //   render (shapeMax -1), in the drain not past the line unless its row is on screen, not
+  //   where the time already spent would have it cut (cutWhereNow), and not while it runs: a
+  //   running turn's reply is reshaped at each update, and each would pass the limit, so it
+  //   keeps the shape it had until it ends. With a rate far too high every turn can never
+  //   fit: each runs alone, a draw each, and teaches the rate down (shapeLearn).
   // - Every other turn: within the draw's shaping time (the draw's first whatever its cost; a
   //   turn never shaped, fresh, while any is left), and in the drain expected to end in time
   //   (lineCut, fitsHost).
@@ -4890,6 +4890,7 @@ export default class Threads extends View {
     }
     if (alone) {
       if ((this.unitsRun ?? 0) > 0 || spent > 0 || max < 0 || live || (!this.lineScreen && this.pastLine())) return true;
+      if (this.cutWhereNow(est)) { if (this.lineScreen) this.oweRow(); return true; }
       this.unitAlone = true;
       this.aloneRun = (this.aloneRun ?? 0) + 1;
       if (this.owedRun === turn) this.owedAlone = (this.owedAlone ?? 0) + 1;
@@ -4999,6 +5000,14 @@ export default class Threads extends View {
   // A reshape's expected cost for Herdr's stop (fitsHost): shapeCost, or null before a rate has
   // been learned (shapeLearn).
   hostCost(turn, text) { return this.shapeRate == null ? null : this.shapeCost(turn, text); }
+  // Whether a run alone of est ms, started now, would be cut while a lighter draw could fit it:
+  // the time this draw has spent, read from the clock, and est pass Herdr's limit less the margin,
+  // and est with the margin alone does not. It waits, with no stop, for a draw with less work
+  // ahead of it (one on screen is owed). A turn no draw can fit (est and the margin past the
+  // limit) still runs once, as a draw's first unit: its estimate may be wrong.
+  cutWhereNow(est) {
+    return est != null && est + HOST_MARGIN_MS <= HOST_MS && now() - (this.renderAt ?? 0) + est + HOST_MARGIN_MS > HOST_MS;
+  }
   // Whether a reshape of est ms can fit no draw: est with the margin and the lightest base
   // this pane draws (lightBase) over Herdr's limit. A turn that would fit a light draw but not
   // this one is refused (fitsHost) and owed instead, with no stop, for up to OWED_DRAWS draws.
