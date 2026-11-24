@@ -44,14 +44,14 @@ const LIMIT = 50;
 // checks; or, with scan, at the given check among those the scan makes in draws.
 let stopV = null;
 let plant = null;
-// Where the last planted stop landed: in the matches' scan (scanHits) or elsewhere, and the
-// turns of the session it was checking (landedIn).
+// Where the last planted stop landed: in the matches' scan (scanHits), in an older step's
+// check back (tailBack) or elsewhere, and the turns of the session it was checking (landedIn).
 let landed = null;
 let landedIn = null;
 const realMatches = T.threadMatches;
 function stopHere(turns) {
   if (!stopV?.renderOpen) return false;
-  if (plant?.scan ? stopV.scanning && --plant.scan === 0 : plant && checks() >= plant.at) { plant = null; landed = stopV.scanning ? "scan" : "other"; landedIn = turns; return true; }
+  if (plant?.back ? stopV.backing && --plant.back === 0 : plant?.scan ? stopV.scanning && --plant.scan === 0 : plant && checks() >= plant.at) { plant = null; landed = stopV.scanning ? "scan" : stopV.backing ? "back" : "other"; landedIn = turns; return true; }
   return base + clock() - stopV.renderAt > LIMIT;
 }
 // A seeded draw of numbers in [0, 1) (mulberry32), so a planted stop lands at the same check
@@ -140,6 +140,9 @@ function priced(v, fn) {
   const own = Object.hasOwn(v, "scanHits") ? v.scanHits : null;
   const scan = v.scanHits;
   v.scanHits = function (...a) { this.scanning = true; try { return scan.apply(this, a); } finally { this.scanning = false; } };
+  const ownBack = Object.hasOwn(v, "tailBack") ? v.tailBack : null;
+  const back = v.tailBack;
+  v.tailBack = function (...a) { this.backing = true; try { return back.apply(this, a); } finally { this.backing = false; } };
   performance.now = () => base + clock();
   H.stopDraw = () => v.renderOpen && base + clock() - v.renderAt > LIMIT;
   v.frameBase = 0;
@@ -148,6 +151,8 @@ function priced(v, fn) {
     performance.now = real; H.stopDraw = null; stopV = null; plant = null; fold(); spy.mockRestore(); spy = null;
     if (own) v.scanHits = own;
     else delete v.scanHits;
+    if (ownBack) v.tailBack = ownBack;
+    else delete v.tailBack;
   }
 }
 
@@ -1199,15 +1204,20 @@ test("a step from a match in a long tail being checked again goes the way it is 
     const h = v.hitsNow();
     r.placed = h.at.has(from);
     // Newer: no place newer than it yet (the tail is checked again oldest first), so Shift n
-    // stays. Older: the nearest match before it by turn order, among all the matches, though
-    // the newest place before it is further back (the tail's matches not checked again).
+    // waits for the tail check to place it (a slice in the press, then the draws), and lands
+    // on the nearest newer match by turn order. Older: the nearest match before it by turn
+    // order, among all the matches, though the newest place before it is further back (the
+    // tail's matches not checked again).
     const found = [];
     for (let p = h.bot; p < h.top; p++) found.push(h.by.get(p));
-    const newer = found.find((k) => n(k) > n(from)) ?? from;
-    const older = direct(v, "please look").find((k) => n(k) < n(from));
+    const all = direct(v, "please look");
+    const newer = all.findLast((k) => n(k) > n(from));
+    const older = all.find((k) => n(k) < n(from));
     r.gap = n(older) > n(found.findLast((k) => n(k) < n(from)));
+    r.noNewerPlace = !found.some((k) => n(k) > n(from));
     v.action("newerMatch", cx);
-    r.newer = v.sel === newer && newer === from;
+    for (let k = 0; k < 80 && v.sel === from; k++) drawOnce(v, cx);
+    r.newer = v.sel === newer;
     v.sel = from;
     v.action("olderMatch", cx);
     r.older = v.sel === older && v.selMatches();
@@ -1215,7 +1225,7 @@ test("a step from a match in a long tail being checked again goes the way it is 
     for (let k = 0; k < 80 && counting(v); k++) drawOnce(v, cx);
     r.back = v.matchPlace().at > 0;
   });
-  expect(r).toEqual({ from: true, settled: "3 of 5360 · newest first", texts: [], placed: false, gap: true, newer: true, older: true, back: true });
+  expect(r).toEqual({ from: true, settled: "3 of 5360 · newest first", texts: [], placed: false, gap: true, noNewerPlace: true, newer: true, older: true, back: true });
   expect(fieldText(v)).toBe(finalWords(v, "please look"));
   expect(places(v)).toEqual(want(v, "please look"));
 }, 120000);
@@ -1331,9 +1341,9 @@ test("an older step whose slice ends before it reaches a match goes on by itself
   expect(r.draws).toBeGreaterThan(0);
 }, 300000);
 
-// Herdr stops a draw going on with the step, inside the step's own slice (its first checks are
-// the step's: the rows are built and nothing changed since). The step is kept, and a later draw
-// lands it.
+// Herdr stops a draw going on with the step, inside the step's own check back (tailBack), not
+// in the rows' build the new turn left for that draw. The step is kept, and a later draw lands
+// it.
 test("a draw going on with an older step, stopped inside the step's slice, leaves the step to a later draw, which lands it", async () => {
   const z = await zebraTail();
   const { v, cx, last } = z;
@@ -1343,11 +1353,13 @@ test("a draw going on with an older step, stopped inside the step's slice, leave
     zebraSearch(z);
     v.action("olderMatch", cx);
     r.stayed = v.sel === last;
-    plant = { at: checks() + 40 };
+    landed = null;
+    plant = { back: 40 };
     for (let k = 0; k < 40 && v.sel === last; k++) if (drawOnce(v, cx).stopped) r.stops++;
     r.planted = plant === null;
+    r.where = landed;
   }); } finally { X = 1; }
-  expect({ stayed: r.stayed, planted: r.planted, stops: r.stops, landed: v.sel }).toEqual({ stayed: true, planted: true, stops: 1, landed: z.nearest });
+  expect({ stayed: r.stayed, planted: r.planted, where: r.where, stops: r.stops, landed: v.sel }).toEqual({ stayed: true, planted: true, where: "back", stops: 1, landed: z.nearest });
 }, 300000);
 
 // A step going on by itself is called off by a key, here p (the selected turn pinned, the
@@ -1375,6 +1387,158 @@ for (const how of ["a key", "a new selection"]) test(`an older step going on by 
   expect({ stayed: r.stayed, sel: v.sel }).toEqual({ stayed: true, sel: r.sel });
   expect(r.sel).toBe(how === "a key" ? last : `0:${base + 1200}`);
 }, 300000);
+
+// An older step going on by itself, and turns coming in that take the tail past the cap, so
+// the set is found again from the newest turn down: the step goes on in the new set and lands
+// on the nearest older match.
+test("an older step going on by itself still lands on the nearest older match when turns come in and the set is found again past the cap", async () => {
+  const z = await zebraTail();
+  const { v, cx, s, ts, last } = z;
+  const r = {};
+  X = 2;
+  try { priced(v, () => {
+    zebraSearch(z);
+    v.action("olderMatch", cx);
+    r.stayed = v.sel === last;
+    const was = v.hits;
+    for (let i = 0; i < 200; i++) { T.apply(s, { k: "p", o: "human", t: "More: nothing here.", ts }); T.apply(s, { k: "d", ms: 1000, ts }); }
+    v.hitsNow();
+    T.apply(s, { k: "p", o: "human", t: "One more: nothing here.", ts });
+    T.apply(s, { k: "d", ms: 1000, ts });
+    v.hitsNow();
+    r.foundAgain = v.hits !== was;
+    for (let k = 0; k < 200 && v.sel === last; k++) drawOnce(v, cx);
+  }); } finally { X = 1; }
+  expect({ stayed: r.stayed, foundAgain: r.foundAgain, landed: v.sel }).toEqual({ stayed: true, foundAgain: true, landed: z.nearest });
+}, 300000);
+
+// An older step from the oldest match found so far, while the count goes on, with the next
+// older match more than one slice back: the press checks one slice and finds none, so the
+// step is kept and the draws after it go on with it until it lands there.
+test("an older step past the oldest match found so far, with the next one more than a slice back, goes on by itself and lands on it", async () => {
+  const z = await zebraTail();
+  const { v, cx, last } = z;
+  const r = {};
+  X = 2;
+  try { priced(v, () => {
+    v.sel = last;
+    v.action("search:zebra", cx);
+    const h = v.hitsNow();
+    r.only = h.top - h.bot === 1 && h.at.get(last) === h.bot && !h.done;
+    v.action("olderMatch", cx);
+    r.stayed = v.sel === last;
+    for (let k = 0; k < 40 && v.sel === last; k++) drawOnce(v, cx);
+  }); } finally { X = 1; }
+  expect({ only: r.only, stayed: r.stayed, landed: v.sel }).toEqual({ only: true, stayed: true, landed: z.nearest });
+}, 300000);
+
+// A selected match the scan has not reached yet (picked by a key or a click before the count
+// gets there): the matches next to it are not all found yet. A step from it, either way, waits
+// for the scan to place it, then lands on the next match that way, passing none over.
+for (const way of ["newer", "older"]) test(`${way === "older" ? "an" : "a"} ${way} step from a selected match the scan has not reached yet waits for it and lands on the next ${way} match, with none passed over`, async () => {
+  const { v, cx, s } = await longPane(5600);
+  v.sel = `0:${s.turns.length}`;
+  const r = {};
+  priced(v, () => {
+    v.action("search:rename", cx);
+    drawOnce(v, cx);
+    const h = v.hitsNow();
+    r.notReached = !h.at.has("0:101") && h.bot < h.top && Number(h.by.get(h.bot).split(":")[1]) > 111;
+    v.sel = "0:101";
+    v.action(way === "newer" ? "newerMatch" : "olderMatch", cx);
+    r.stayed = v.sel === "0:101";
+    for (let k = 0; k < 200 && v.sel === "0:101"; k++) drawOnce(v, cx);
+  });
+  expect({ notReached: r.notReached, stayed: r.stayed, landed: v.sel }).toEqual({ notReached: true, stayed: true, landed: way === "newer" ? "0:111" : "0:91" });
+}, 120000);
+
+// A step going on by itself, then the search cleared (its x) and the same words typed again
+// before a draw: the set is kept for the same search, but the step is not. The selection stays.
+test("an older step going on by itself is called off when the search is cleared, also when the same search is typed again", async () => {
+  const z = await zebraTail();
+  const { v, cx, last } = z;
+  const r = {};
+  X = 2;
+  try { priced(v, () => {
+    zebraSearch(z);
+    v.action("olderMatch", cx);
+    r.stayed = v.sel === last;
+    const was = v.hits;
+    v.input.set_value("");
+    v.query = "";
+    v.filtering = false;
+    v.setQuery("zebra", cx);
+    r.sameSet = v.hits === was;
+    for (let k = 0; k < 40; k++) drawOnce(v, cx);
+  }); } finally { X = 1; }
+  expect({ stayed: r.stayed, sameSet: r.sameSet, sel: v.sel }).toEqual({ stayed: true, sameSet: true, sel: last });
+}, 300000);
+
+// Herdr can stop a draw anywhere, here just after the scan asked for its next draw (its 0 ms
+// timer). A timer asked for in a stopped render may never run, so it is dropped here, and the
+// scan's mark that it asked is still set. The draw after it (Herdr's 120 ms watch draws a
+// stopped pane once more) asks for the scan's next draw again, so the count does not wait on
+// another event. (In a search the rows' own build usually asks for draws too; this checks the
+// scan's own ask.)
+test("after a draw stopped once the scan asked for its next draw, the next draw asks for it again", async () => {
+  const { v, cx, s } = await longPane(5600);
+  v.sel = `0:${s.turns.length}`;
+  const r = {};
+  priced(v, () => {
+    v.action("search:rename", cx);
+    drawOnce(v, cx);
+    // The stop: in the step right after the scan's slice, once. The stopped render's timers
+    // are dropped.
+    const sync = v.syncOutEditors;
+    let stopped = false;
+    v.syncOutEditors = function (...a) { if (!stopped) { stopped = true; throw new Error("interrupted"); } return sync.apply(this, a); };
+    const n0 = cx.timers.length;
+    r.stopped = false;
+    try { v.render(cx); } catch (e) {
+      if (String(e?.message) !== "interrupted") throw e;
+      r.stopped = true;
+      v.renderOpen = true;
+    } finally { v.syncOutEditors = sync; }
+    fold();
+    r.marked = Boolean(v.scanNext);
+    cx.timers.length = Math.min(cx.timers.length, n0);
+    // The next draw: which timers it asks for, and whether the scan's is one of them.
+    const after = cx.timer.after;
+    let scanAsked = false;
+    cx.timer.after = function (ms, fn) { if (ms === 0 && new Error().stack.includes("scanStep")) scanAsked = true; return after.call(this, ms, fn); };
+    try { v.render(cx); } finally { cx.timer.after = after; }
+    fold();
+    r.counting = counting(v);
+    r.scanAsked = scanAsked;
+  });
+  expect(r).toEqual({ stopped: true, marked: true, counting: true, scanAsked: true });
+}, 120000);
+
+// A finished session, then 4,000 turns read at once, each with a reply: the tail from the last
+// turn done with a reply is the whole new read, past HITS_TAIL_MAX, so the set is found again
+// from the newest turn down and the newest match is found first, not checked again oldest first.
+test("4,000 turns read at once after a finished session: the set is found again from the newest turn, which finds the newest match first", async () => {
+  const { v, cx, s } = await longPane(600);
+  v.sel = `0:${s.turns.length}`;
+  const r = {};
+  priced(v, () => {
+    v.action("search:rename", cx);
+    for (let k = 0; k < 80 && counting(v); k++) drawOnce(v, cx);
+    const was = v.hits;
+    const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
+    for (let i = 0; i < 4000; i++) {
+      T.apply(s, { k: "p", o: "human", t: i === 3999 ? "Newest: rename the queue helper." : `More ${i}: nothing here.`, ts });
+      T.apply(s, { k: "t", t: "Done." });
+      T.apply(s, { k: "d", ms: 1000, ts });
+    }
+    const h = v.hitsNow();
+    r.foundAgain = h !== was;
+    r.newestFirst = h.at.has(`0:${s.turns.length}`);
+    for (let k = 0; k < 80 && counting(v); k++) drawOnce(v, cx);
+  });
+  expect(r).toEqual({ foundAgain: true, newestFirst: true });
+  expect(places(v)).toEqual(want(v, "rename"));
+}, 120000);
 
 // A tail longer than the cap (HITS_TAIL_MAX turns) is not dropped place by place in one call:
 // the set is found again from the start, in slices. Just under the cap the tail is checked
@@ -1446,21 +1610,32 @@ const asked = (s, t) => {
 test("a new search whose first slice finds nothing selects the newest match, also when a turn comes in and a long tail is checked again oldest first", async () => {
   const { v, cx, s } = await longPane(600);
   const base = s.turns.length;
-  for (let i = 0; i < 5000; i++) asked(s, i === 10 || i === 2400 ? `Tail ${i}: the zebra list.` : `Tail ${i}: nothing here.`);
+  // A 2,400-turn tail, under HITS_TAIL_MAX, so the turn coming in has it checked again (oldest
+  // first) and not found again from the newest: "zebra" in its 11th turn and its 401st, which
+  // is 2,000 turns back from the newest, past the command's first slice.
+  for (let i = 0; i < 2400; i++) asked(s, i === 10 || i === 400 ? `Tail ${i}: the zebra list.` : `Tail ${i}: nothing here.`);
   settleRows(v, cx);
-  v.sel = `0:${s.turns.length}`;
+  const start = `0:${s.turns.length}`;
+  v.sel = start;
+  const older = `0:${base + 11}`;
   const r = {};
-  priced(v, () => {
+  // At twice the prices, so a draw's slices do not check the whole tail again at once.
+  X = 2;
+  try { priced(v, () => {
     v.action("search:zebra", cx);
     r.firstSlice = v.hitsNow().top - v.hitsNow().bot;
     asked(s, "A new turn: nothing here.");
-    // The draw after the turn takes the change (hitsTail) and selects in the same slice.
-    drawOnce(v, cx);
-    for (let k = 0; k < 80 && counting(v); k++) drawOnce(v, cx);
-  });
+    // The draws after the turn take the change (hitsTail) and check the tail again. Once the
+    // older match has its place: the tail is still being checked, and the selection waits.
+    for (let k = 0; k < 80 && counting(v); k++) {
+      drawOnce(v, cx);
+      const h = v.hitsNow();
+      if (!r.atOlder && h.at.has(older)) r.atOlder = { checking: h.cur.tail != null, waiting: v.hitsSelect != null, sel: v.sel === start };
+    }
+  }); } finally { X = 1; }
   r.sel = v.sel;
-  expect(r).toEqual({ firstSlice: 0, sel: `0:${base + 2401}` });
-  expect(direct(v, "zebra")).toEqual([`0:${base + 2401}`, `0:${base + 11}`]);
+  expect(r).toEqual({ firstSlice: 0, atOlder: { checking: true, waiting: true, sel: true }, sel: `0:${base + 401}` });
+  expect(direct(v, "zebra")).toEqual([`0:${base + 401}`, `0:${base + 11}`]);
   expect(places(v)).toEqual(want(v, "zebra"));
 }, 120000);
 
