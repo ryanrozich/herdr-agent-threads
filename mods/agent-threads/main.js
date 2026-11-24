@@ -9532,8 +9532,9 @@ export default class Threads extends View {
       // row by key, in the rows of its own frame then, which a window moved since re-indexes.
       const wheels = this.wheelN ?? 0;
       const landN = (this.landN = (this.landN ?? 0) + 1);
+      const still = () => (this.wheelN ?? 0) === wheels && this.landN === landN && !this.scrollTo && !this.toBottom;
       const ask = (k, h) => {
-        if ((this.wheelN ?? 0) !== wheels || this.landN !== landN || this.scrollTo || this.toBottom) return;
+        if (!still()) return;
         const now = rows[k] ? this.rowIndex(rows[k].key) : -1;
         if (now >= 0) this.askScroll(now, h);
       };
@@ -9589,12 +9590,14 @@ export default class Threads extends View {
         const lift = p.lift ?? 0;
         this.landed = { key: rows[i]?.key ?? null, ...p };
         first(16, (cx) => { ask(j, "top"); cx.notify(); });
+        // The lift goes with the ask, and only that landing's own lift comes off (liftN): a newer
+        // jump keeps its own, or none.
         cx.timer.after(48, (cx) => {
-          if (lift > 0 && (this.wheelN ?? 0) === wheels) { this.landLift = lift; this.fitKey = null; }
+          if (lift > 0 && still()) { this.landLift = lift; this.liftN = landN; this.fitKey = null; }
           ask(p.j, p.how);
           cx.notify();
         });
-        if (lift > 0) cx.timer.after(120, (cx) => { this.landLift = 0; this.fitKey = null; cx.notify(); });
+        if (lift > 0) cx.timer.after(120, (cx) => { if (this.liftN !== landN) return; this.landLift = 0; this.fitKey = null; cx.notify(); });
       } else if (i >= 0) {
         const top = lead(i);
         first(16, (cx) => { ask(i, how); cx.notify(); });
