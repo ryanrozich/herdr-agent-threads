@@ -562,6 +562,21 @@ test("a draw Herdr stops halfway through putting an open card's new rows in leav
   expect([armed, r.stops, r.settled > 0, parts, v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i)]).toEqual([false, 1, true, 58, true]);
 }, 60000);
 
+// A splice that runs to its end clears its mark: the next open or close is a splice too. With
+// the mark left set, every build after a splice was of every row.
+test("an open card's rows put in by a splice leave no mark: the next card opened is put in by a splice too", async () => {
+  const { v, cx, keys } = await openLong(["Short reply one.", "Short reply two."], true);
+  const made = [];
+  const sr = v.spliceRows;
+  v.spliceRows = function (...a) { const out = sr.apply(this, a); made.push(out); return out; };
+  for (const k of keys) {
+    v.toggle(k, cx);
+    settleRows(v, cx);
+  }
+  delete v.spliceRows;
+  expect([made.length > 0 && made.every(Boolean), made.filter(Boolean).length >= 2, v.splicing, v.open.has(keys[0]) && v.open.has(keys[1])]).toEqual([true, true, false, true]);
+}, 60000);
+
 // Herdr's stop is the script engine's interrupt, which falls at any call: a full build can be
 // stopped after it has sized a row and before it has put the row in its index. The build goes
 // on from its next row, so that row was in no index: here the open card's head, which every
