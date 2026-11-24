@@ -19980,17 +19980,28 @@ function plainChat(n) {
   plainFiles[n] = file;
   return file;
 }
-// A plain chat of n turns read whole, under the loading state, its rows not built yet. Each
-// reshape costs 1 ms more on the shaping clock and a draw has 12 ms for it (shapeBudget), so
-// a draw reshapes 12 rows on any machine, as a slow one would: most rows are left to drain.
+// A plain chat of n turns read whole, under the loading state, its rows not built yet. The
+// shaping clock counts 1 ms a reshape and nothing else (a link pass or a Markdown height, real
+// time on a busy machine, counts 0), and a draw has 12 ms of it (shapeBudget): a draw reshapes
+// 12 rows on any machine, as a slow one would, and most rows are left to drain.
 // Debug is off (measure() would rebuild the rows in every draw).
 async function plainOpening(n) {
   const { v, cx, go } = await openingPane(plainChat(n));
   v.debug = false;
   v.opening.at -= 1000;
   v.shapeBudget = 12;
-  const reshape = v.reshape;
-  v.reshape = function (...a) { this.shapeSpent = (this.shapeSpent ?? 0) + 1; return reshape.apply(this, a); };
+  for (const [name, ms] of [["reshape", 1], ["stepLinks", 0], ["mdHeight", 0]]) {
+    const f = v[name];
+    // shape() adds reshape's real time after it returns: taken off here first.
+    v[name] = function (...a) {
+      const s0 = this.shapeSpent ?? 0;
+      const t0 = performance.now();
+      const r = f.apply(this, a);
+      if (name === "reshape") this.shapeSpent = s0 + ms - (performance.now() - t0);
+      else if ((this.shapeSpent ?? 0) !== s0) this.shapeSpent = s0 + ms;
+      return r;
+    };
+  }
   go(() => false);
   await settle(v);
   let bottoms = 0;
@@ -20155,8 +20166,10 @@ test("the drain uses its shaping time: a pass reshapes rows until the draw's bud
     // Every frame that started with rows to spare reshaped 12 (1 ms each, 12 ms a draw): none
     // stopped early, none was left without a pass.
     // (The first frame after the read has none: its pass is asked for by that frame.)
+    // Every such frame is counted: one a 12 rows until fewer than 24 are left.
     const full = frames.slice(1).filter((x) => x.before >= 24 && x.after <= x.before);
-    expect(full.length).toBeGreaterThan(80);
+    expect(frames[1].before).toBeGreaterThan(400);
+    expect(full.length).toBeGreaterThanOrEqual(Math.floor((frames[1].before - 24) / 12));
     for (const x of full) expect(x.before - x.after).toBeGreaterThanOrEqual(11);
     // One pass on its own: it stops once the budget is spent, with the rest left as they were.
     v.width -= 40;
