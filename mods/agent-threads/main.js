@@ -79,7 +79,7 @@ import {
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, noticeTurn, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
+  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, mdSplit, mdSplitOn, MD_MAX, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
   REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear, pairEvent, pairAlone, pinFit, weightHerdr, rowEvent, closeWeights, rowSolve,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
@@ -161,6 +161,9 @@ const CUT_MS = 5000;
 // How soon a render Herdr stopped is asked for again, and how long a scroll to a place waits
 // for the rows to be built and shaped before it goes ahead with the heights it has.
 const CUT_WATCH_MS = 250;
+// Lines of an open reply's split read between two looks at the draw's time (splitOn): about
+// 2 ms of short paragraphs at the rig's price for the split.
+const SPLIT_LINES = 128;
 // What a draw should cost. Reshaping and building rows share what the rest of the last draw
 // left of it, each down to its floor, so a machine where the rest of a draw is slow does
 // less of both per frame and stays clear of Herdr's 50 ms stop.
@@ -471,7 +474,7 @@ const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (sca
 const WORD_END = new RegExp(`(?<=[\\s${HYPHEN_BREAK}])`);
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
-const CARD = new Set(["head", "imgs", "you", "ustrip", "rhead", "itext", "grp", "call", "cout", "wspin", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "copy", "seltext", "resume"]);
+const CARD = new Set(["head", "imgs", "you", "ustrip", "rhead", "itext", "grp", "call", "cout", "wspin", "noreply", "md", "mdrest", "codehead", "code", "fold", "lhead", "latest", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
 // The line limit of a collapsed row's prompt and reply when long messages are not shortened
 // (truncate off, the default): no message reaches it, so nothing is cut.
@@ -2795,7 +2798,7 @@ export default class Threads extends View {
         this.buildsLeft = (this.buildsLeft ?? 0) + 1;
         return;
       }
-      job.sizes.push(this.cachedH.get(i) ?? this.height(out[i]));
+      job.sizes.push(this.cachedH.get(i) ?? this.partH(out[i]) ?? this.height(out[i]));
       job.index.set(out[i].key, i);
     }
     this.buildSpent = (this.buildSpent ?? 0) + Math.max(0, now() - b0 - ((this.shapeSpent ?? 0) - s0));
@@ -3144,7 +3147,7 @@ export default class Threads extends View {
       this.cachedH = new Map();
       this.cacheNew = [];
       this.turnRows({ kind: "turn", key: k, turn, s, si, last: Boolean(r.last), live: Boolean(r.live) }, ti, out, status, cg);
-      const sizes = out.map((x, j) => this.cachedH.get(j) ?? this.height(x));
+      const sizes = out.map((x, j) => this.cachedH.get(j) ?? this.partH(x) ?? this.height(x));
       for (const e of this.cacheNew) e.sizes = e.rows.map((_, j) => sizes[e.at + j]);
       const gone = z - a + 1;
       const d = out.length - gone;
@@ -4870,6 +4873,7 @@ export default class Threads extends View {
     const selecting = this.selecting === key && this.selEditor?.key === key && text;
     const linked = selecting ? null : this.linkedSegs(key, segs);
     const pm = selecting ? null : this.partMemo(key, text);
+    if (pm) this.partGeo = this.rowsGeo();
     if (selecting) {
       const per = Math.max(8, Math.floor((this.inner() - 26) / SELECT_CHAR));
       const lines = wrappedLines(this.selEditor.text.slice(0, SELECT_CHARS), per);
@@ -4892,13 +4896,29 @@ export default class Threads extends View {
         // the list draws only the items in view. Link rules run on the text shown; heights use
         // the text as written. A return to a pin lands at the start of its item.
         // A table is an item of its own ("table"), so it can run wider than the reading line.
-        let parts = pm.split.get(i);
-        if (!parts) pm.split.set(i, (parts = this.splitParts(md)));
-        parts.forEach(({ text: src, table }, j) => {
-          const lk = parts.length === 1 && linked?.[i] && src === seg.text ? linked[i] : this.partLinks(pm, src);
-          const sub = parts.length === 1 ? `${i}` : `${i}.${j}`;
-          push({ ...item, kind: "md", key: `md:${key}:${sub}`, md: lk.md, src, links: lk.links, ...(j ? { gap: this.paraGap() } : {}), ...(table ? { table: true } : {}) });
-        });
+        // The split goes on in each draw's reshaping time (splitOn), and each part's row is
+        // built and sized in it too (partRow): the parts split and built so far are shown, and
+        // one row at a rough height (mdrest) stands for the rest until later frames bring it.
+        let job = pm.split.get(i);
+        if (!job) pm.split.set(i, (job = mdSplit(md, MD_MAX, true)));
+        this.splitOn(job);
+        const parts = job.parts;
+        const one = job.done && parts.length === 1;
+        let j = 0;
+        let shown = 0;
+        for (; j < parts.length; j++) {
+          const { text: src, table } = parts[j];
+          const row = this.partRow(pm, item, `md:${key}:${one ? i : `${i}.${j}`}`, src, table, j, one && linked?.[i] && src === seg.text ? linked[i] : null);
+          if (!row) break;
+          push(row);
+          shown += src.length;
+        }
+        if (j < parts.length || !job.done) {
+          this.shapeLeft = (this.shapeLeft ?? 0) + 1;
+          this.otherLeft = (this.otherLeft ?? 0) + 1;
+          const gap = j ? this.paraGap() : 6;
+          push({ ...item, kind: "mdrest", key: `mr:${key}:${i}`, gap, h: gap + this.restHeight(Math.max(0, md.length - shown), parts.length - j) });
+        }
       } else {
         used += seg.text.length;
         push({ ...item, kind: "codehead", key: `cc:${key}:${i}`, seg, i });
@@ -5972,8 +5992,8 @@ export default class Threads extends View {
   repoSig() { return this.remote.repo ? `${this.remote.host ?? ""}/${this.remote.repo}` : ""; }
   linkOne(md) { return this.links.length ? linkify(md, this.links, this.linkCtx()) : { md, links: 0 }; }
   // An open reply's parts, kept per open turn: its Markdown segments split into parts (split,
-  // until the reply changes) and the parts with the link rules applied (links, until the reply,
-  // the rules or the repo change). A closed turn's go at the next build of an open one. Every
+  // each a job that goes on over draws, until the reply changes), the parts with the link rules
+  // applied (links, until the reply, the rules or the repo change), and their rows (partRow). A closed turn's go at the next build of an open one. Every
   // part of a 200,000-character reply linked in one draw took longer than Herdr's time for a
   // draw ("This view could not be re-rendered", interrupted), and each draw after that began
   // them again; one memo for every open turn, emptied when full, did the same once the open
@@ -5986,12 +6006,83 @@ export default class Threads extends View {
     const turns = (this.partTurns ??= new Map());
     if (turns.size > this.open.size) for (const k of turns.keys()) if (!this.open.has(k)) turns.delete(k);
     let m = turns.get(key);
-    if (m?.text !== text) turns.set(key, (m = { text, ver, links: new Map(), prev: m?.ver === ver ? m.links : null, split: new Map() }));
+    if (m?.text !== text) turns.set(key, (m = { text, ver, links: new Map(), prev: m?.ver === ver ? m.links : null, split: new Map(), rows: new Map() }));
     else if (m.ver !== ver) { m.ver = ver; m.links = new Map(); m.prev = null; }
     return m;
   }
-  // An open reply's Markdown segment split into its parts: chunks within MD_MAX, tables apart.
-  splitParts(md) { return mdChunks(md).flatMap((src) => splitTables(src)); }
+  // An open reply's Markdown segment split into its parts (chunks within MD_MAX, tables
+  // apart), in this draw's reshaping time: SPLIT_LINES lines at a time until it is spent, the
+  // rest in later frames. A capped reply's split alone took about 64 ms on the rig.
+  splitOn(job) {
+    // Parts a read made before Herdr stopped it (mdSplitOn) are not the job's.
+    if (job.parts.length > job.n) job.parts.length = job.n;
+    while (!job.done && (this.shapeSpent ?? 0) <= this.shapeMax()) {
+      const t0 = now();
+      this.splitSome(job);
+      this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
+    }
+    if (!job.done) {
+      this.shapeLeft = (this.shapeLeft ?? 0) + 1;
+      this.otherLeft = (this.otherLeft ?? 0) + 1;
+    }
+  }
+  splitSome(job) { mdSplitOn(job, SPLIT_LINES); }
+  // One part's row of an open reply. It is kept on the turn's record (rows) with its height
+  // (partHs, under the layout it was worked out for, partGeo), so a later build of the card
+  // sizes only new parts: building and sizing the 2,086 rows of a reply of 1,040 short
+  // paragraphs and tables stopped every draw on the rig. A new row is made in this draw's
+  // reshaping time, or 2 ms of a light draw. Past it the row the part had stands in (new link
+  // rules, a new width), at its height or a rough one for the new layout; a part that had none
+  // gets null, and it and the parts after it wait in an mdrest row.
+  partRow(pm, item, key, src, table, j, whole) {
+    const lk = whole ?? this.partLinks(pm, src);
+    const gap = j ? this.paraGap() : undefined;
+    const old = pm.rows.get(key);
+    const same = old && old.src === src && Boolean(old.table) === Boolean(table) && old.gap === gap && this.sameItem(old, item);
+    const e = same ? this.partHs?.get(old) : null;
+    if (same && old.md === lk.md && old.links === lk.links && e?.geo === this.partGeo && e.sv === this.partSv && !e.rough) return old;
+    if ((this.shapeSpent ?? 0) > (this.light ? SHAPE_MIN_MS : this.shapeMax())) {
+      if (!same) return null;
+      this.shapeLeft = (this.shapeLeft ?? 0) + 1;
+      this.otherLeft = (this.otherLeft ?? 0) + 1;
+      const h = e?.geo === this.partGeo ? e.h : (gap ?? 6) + this.restHeight(src.length, 1);
+      this.partHs.set(old, { h, geo: this.partGeo, sv: this.partSv, rough: true });
+      return old;
+    }
+    const row = { ...item, kind: "md", key, md: lk.md, src, links: lk.links, ...(j ? { gap } : {}), ...(table ? { table: true } : {}) };
+    const spent = this.shapeSpent ?? 0;
+    const left = this.shapeLeft ?? 0;
+    const t0 = now();
+    const h = this.height(row);
+    this.shapeSpent = spent + (now() - t0);
+    // A rough height (out of time) is worked out again at the next build.
+    (this.partHs ??= new WeakMap()).set(row, { h, geo: this.partGeo, sv: this.partSv, rough: (this.shapeLeft ?? 0) !== left });
+    pm.rows.set(key, row);
+    return row;
+  }
+  // A part row's height kept for this layout (partRow), or null.
+  partH(r) {
+    const e = this.partHs?.get(r);
+    return e && e.geo === this.partGeo && e.sv === this.partSv ? e.h : null;
+  }
+  // What a part row's height depends on besides its text: the layout (partGeo), and the link
+  // rules, the repository (both in its measure's sig) and the probe's measures (partSv). A row
+  // standing in keeps its height while only the second changed.
+  rowsGeo() {
+    this.partSv = `${this.linksVer}|${this.repoSig()}|${this.measEpoch ?? 0}`;
+    return `${this.sigBase()}|${this.prose()}|${this.rt().line}|${this.paraGap()}|${this.railShown() ? 1 : 0}|${this.colLeft()}|${this.pw()}`;
+  }
+  sameItem(row, item) {
+    for (const k in item) if (k !== "kind" && k !== "key" && row[k] !== item[k]) return false;
+    return true;
+  }
+  // The rough height of an open reply's parts not shown yet: chars characters in n parts (at
+  // least one), as mdHeight guesses one it has no time for.
+  restHeight(chars, n) {
+    const { line } = this.rt();
+    const k = Math.max(1, n);
+    return (Math.ceil((chars * this.charW(MD_CHAR)) / Math.max(this.prose(), 1)) + k) * line + (k - 1) * this.paraGap();
+  }
   partLinks(m, src) {
     if (!this.links.length) return { md: src, links: 0 };
     const known = m.links.get(src) ?? m.prev?.get(src);
@@ -6392,7 +6483,9 @@ export default class Threads extends View {
         return true;
       }
       case "first": go(0); return true;
-      case "latest": this.jumpLatest(true); return true;
+      // A scroll still waiting for rows to settle (an open card's) gives way to it: held, it
+      // kept the end from being held while a long reply's parts came in.
+      case "latest": this.scrollTo = null; this.jumpLatest(true); return true;
       // A search: the next match back in time (older) or forward (newer). With no match
       // selected, either goes to the newest. At either end the selection stays: the search
       // field already says it is the first mention or the newest, and nothing wraps.
@@ -9825,6 +9918,7 @@ export default class Threads extends View {
       case "code": return this.codeBoxH(r);
       case "codeall": return SHOW_ALL_H;
       case "mview": return SHOW_ALL_H;
+      case "mdrest": return r.h;
       case "fold": return 8 + 26 + (r.left ? 18 : 0);
       case "itext": return 6 + this.mdHeight(r.src);
       case "grp": return STEP_GAP + GROUP_H;
@@ -9913,6 +10007,7 @@ export default class Threads extends View {
     const part = key.startsWith("md:") ? this.baseRows?.[this.baseIndex?.get(key)] : null;
     if (part?.kind === "md" && part.key === key && !this.mdBroken?.has(key) && h <= (part.gap ?? 6) + 2 && (part.src ?? part.md ?? "").trim()) {
       (this.mdBroken ??= new Set()).add(key);
+      this.partHs?.delete(part);
       this.meas.delete(key);
       this.measVer = (this.measVer ?? 0) + 1;
       cx.notify();
@@ -9930,6 +10025,7 @@ export default class Threads extends View {
     const r = i != null ? this.baseRows[i] : null;
     if (r?.key === rowKey) {
       this.baseSizes[i] = this.height(r);
+      if (r.kind === "md" && this.partHs?.has(r)) this.partHs.set(r, { h: this.baseSizes[i], geo: this.partGeo, sv: this.partSv });
       this.sizesVer = (this.sizesVer ?? 0) + 1;
       // The turn's kept rows (closedCached) have the old size: built again next time.
       // A row kept for this layout gets the new size too, so a drag back to this width builds
@@ -11016,6 +11112,9 @@ export default class Threads extends View {
       }
       case "codeall": return this.showAllRow(t, r.all ? "Show less" : `Show all · ${plural(r.left, "more row")}`, r.all ? "chevron-up" : "chevron-down");
       case "mview": return this.showAllRow(t, "View diagram", "panel-right");
+      // The parts of a long reply not laid out yet: a quiet line in their place, at their rough
+      // height, until the next frames bring them (partRow).
+      case "mdrest": return v_flex().mt(r.gap ?? 6).h(Math.max(18, r.h - (r.gap ?? 6))).child(div().h(18).text_size(11.5).line_height("18px").text_color(t.dim).child("Laying out the rest of the reply…"));
       case "fold":
         // Quiet: no border or fill, so it reads as the end of the reply, not a button to find.
         return v_flex().mt(8)
