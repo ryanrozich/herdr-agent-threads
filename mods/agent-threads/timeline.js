@@ -448,8 +448,9 @@ export function itemBox(a, b, f, i, tx, w, wall, scale, len, upTo = null) {
   return box;
 }
 // Turn ti's step for a press at px x of the view in a lane: { ti, i, d, r, w } (i null for
-// none). With bars under the press (d 0), the one drawn on top: r, failed over the rest (2),
-// half height over full (1), the view's order; then the narrowest, w. Else the nearest bar
+// none). With bars under the press (d 0), the one drawn on top: r, the running turn's growing
+// bars over all (4; the view draws them last), failed over the rest (2), half height over full
+// (1), the view's order; then the narrowest, w. Else the nearest bar
 // within 4 px, the first listed at equal distance. A turn under 2 px is drawn as one span per
 // lane, from its x and at least 1 px wide (timelineLayout), so each of its bars is that span
 // here: the press answers what is drawn, its failed call where the span is red.
@@ -472,7 +473,7 @@ function nearStep(L, h, ti, x, lane, nowMs) {
     const b = narrow ? { x0: tx, x1: tx + Math.max(tw, 1), track: 0 } : stepBox(h, i, tk?.[i], tx, tw, wall, L.scale, len, upTo);
     if (!b) continue;
     const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
-    const r = (b.track ? 1 : 0) + (k?.ink === "failed" ? 2 : 0);
+    const r = upTo != null && b.open ? 4 : (b.track ? 1 : 0) + (k?.ink === "failed" ? 2 : 0);
     const w = b.x1 - b.x0;
     if (d < out.d || (d === 0 && (r > out.r || (r === out.r && w < out.w)))) Object.assign(out, { i, d, r, w });
   }
