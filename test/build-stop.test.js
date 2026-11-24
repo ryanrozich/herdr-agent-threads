@@ -294,8 +294,8 @@ test("a card closed again right after a draw Herdr stopped in its opening splice
 // A build of many turns goes on over several draws. Each slice after the first adds its rows to
 // the build's own array, from the turn the slice before ended at. Herdr's stop can fall inside a
 // slice, as it builds a turn's rows or works out a row's height: the next draw went on from the
-// same turn and added that slice's rows again, so the rows held turns twice. Made-up session of
-// 120 short turns (scripted).
+// same turn and added that slice's rows again, so the rows (and the rail's turns) held turns
+// twice. Made-up session of 120 short turns (scripted).
 test("a resumed build Herdr stops inside a later slice builds each row once: the next draw goes on from where that slice began", async () => {
   const ev = [];
   for (let i = 0; i < 120; i++) {
@@ -330,7 +330,9 @@ test("a resumed build Herdr stops inside a later slice builds each row once: the
     delete v.buildMax;
     delete v.buildRows;
     const keys = v.baseRows.map((x) => x.key);
-    got.push([at, armed, stops, slices > 4, new Set(keys).size === keys.length, keys.filter((k) => k === key).length, v.baseRows.length === v.baseSizes.length, v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i)]);
+    // The rail's turns too, one tick each.
+    const rail = v.railTurns.map((x) => x.key);
+    got.push([at, armed, stops, slices > 4, new Set(keys).size === keys.length, keys.filter((k) => k === key).length, v.baseRows.length === v.baseSizes.length, v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i), rail.length, new Set(rail).size]);
   }
-  expect(got).toEqual([["height", false, 1, true, true, 1, true, true], ["turnRows", false, 1, true, true, 1, true, true]]);
+  expect(got).toEqual([["height", false, 1, true, true, 1, true, true, 120, 120], ["turnRows", false, 1, true, true, 1, true, true, 120, 120]]);
 }, 60000);
