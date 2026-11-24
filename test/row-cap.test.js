@@ -74,11 +74,20 @@ test("up onto Show earlier and down onto Show later scroll to it, in a window ca
 // window holds, "order 19" 11, and "zzz" none.
 test("a filter set, changed or cleared places the window around the selected turn, or around what was on screen when none is selected", async () => {
   const got = [];
-  for (const none of [false, true]) {
+  // The third pass builds the rows over several draws (a slice ends at every sixteenth turn), as
+  // a session past the shipped cap always is: the window waits for the filter's rows.
+  for (const [none, slices] of [[false, false], [true, false], [false, true]]) {
     const { v, cx } = await capSession(300, SMALL);
     const sim = simList(v);
     try {
       openAt(v, cx, sim, 562);
+      let resumed = 0;
+      if (slices) {
+        delete v.shapeMax;
+        v.buildMax = () => -1;
+        const build = v.buildRows;
+        v.buildRows = function (status, from, ...a) { if (from?.own) resumed++; return build.call(this, status, from, ...a); };
+      }
       v.action("first", cx);
       settleList(v, cx, sim);
       v.command(`search:#${none ? 150 : 13}`, cx);
@@ -93,11 +102,13 @@ test("a filter set, changed or cleared places the window around the selected tur
         settleList(v, cx, sim);
         look(step);
       }
+      if (slices) got.push(["resumed slices", resumed > 10]);
     } finally {
       H.listWindow = null;
     }
   }
-  expect(got).toEqual([["set", "0:13", true], ["changed", "0:200", true], ["cleared", "0:200", true], ["set", null, false], ["cleared", null, true]]);
+  const one = [["set", "0:13", true], ["changed", "0:200", true], ["cleared", "0:200", true]];
+  expect(got).toEqual([...one, ["set", null, false], ["cleared", null, true], ...one, ["resumed slices", true]]);
 });
 
 // ---- the list's window: Herdr's v_virtual_list takes at most 10,000 item sizes ----
