@@ -5229,8 +5229,6 @@ export default class Threads extends View {
     // list's, which Herdr scales by zoom.
     this.listOff = (this.listOff ?? 0) - dy / this.zoom();
     this.wheelN = (this.wheelN ?? 0) + 1;
-    // The reader has taken the view: the open's scroll of a card is dropped.
-    if (this.scrollTo?.how === "card") this.scrollTo = null;
     if (this.view === "pinned") return;
     this.scrolledBy(dy, Date.now());
     this.scrollSeenAt = Date.now();
@@ -5258,11 +5256,8 @@ export default class Threads extends View {
     }
   }
 
-  // A scroll still waiting for the rows to settle (an open's scroll of a card) is dropped: it
-  // would land once they did, and take the view from the end.
   jumpLatest(select = true) {
     this.follow = true;
-    this.scrollTo = null;
     this.stickStep = null;
     this.unseen = false;
     const keys = this.turnKeys(this.rows());
@@ -6538,7 +6533,7 @@ export default class Threads extends View {
       case "first": go(0); return true;
       // A scroll still waiting for rows to settle (an open card's) gives way to it: held, it
       // kept the end from being held while a long reply's parts came in.
-      case "latest": this.jumpLatest(true); return true;
+      case "latest": this.scrollTo = null; this.jumpLatest(true); return true;
       // A search: the next match back in time (older) or forward (newer). With no match
       // selected, either goes to the newest. At either end the selection stays: the search
       // field already says it is the first mention or the newest, and nothing wraps.
@@ -9325,10 +9320,8 @@ export default class Threads extends View {
         let top = lead(i);
         if (rows[top - 1]?.key === `visit:${rows[i].key}`) top -= 1;
         if (rows[top - 1]?.kind === "pday") top -= 1; // a pin's day header comes with it
-        // Asked by key, as the rows can change in between (a card above coming in), and not
-        // at all once the reader has turned the wheel.
-        const wheels = this.wheelN ?? 0;
-        const ask = (k) => { if ((this.wheelN ?? 0) !== wheels) return; const at = this.rowsMemo?.findIndex((x) => x.key === k) ?? -1; if (at >= 0) this.askScroll(at, "top"); };
+        // Asked by key, as the rows can change in between (a card above coming in).
+        const ask = (k) => { const at = this.rowsMemo?.findIndex((x) => x.key === k) ?? -1; if (at >= 0) this.askScroll(at, "top"); };
         const last = rows[j].key, head = rows[top].key;
         cx.timer.after(16, (cx) => { ask(last); cx.notify(); });
         cx.timer.after(48, (cx) => { ask(head); cx.notify(); });
