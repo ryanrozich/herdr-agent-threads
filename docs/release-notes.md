@@ -50,6 +50,7 @@ Open a large session at its end in seconds, see the Trajectory in a pane of its 
 
 - Drag the edge of the Threads pane you want to move. Before, a drag of one edge moved the other as well and resized the terminals on the far side.
 - With the Trajectory or the Pinned column open, each divider between the Chat, the Trajectory, the Pinned column and the terminal moves only the two panes beside it, and a window resize scales them all. `-` and `=` make the pane to the right of the Chat narrower or wider: the Trajectory if it is open, else the Pinned column.
+- These panes work this way on Herdr 0.1.16 and 0.1.17. On other versions, Herdr 0.1.18 among them, the panes keep the sizes and drags they had in 1.1.0.
 
 ### The Trajectory
 
