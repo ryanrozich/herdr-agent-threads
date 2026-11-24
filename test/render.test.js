@@ -4450,14 +4450,28 @@ const drawnRows = (v, cx) => {
   const c = frame(v, cx);
   return unpinLayer(v, cx).rows.filter((n) => ownOf(c, `th-unpin-row-${n}`).some((e) => e[0] === "text_color" && e[1] === theme.dim));
 };
-// A press on pin n's button as gpui delivers it: the button's own click. The number of times
-// it kept the press there (stop_propagation), or null with no such button. The pointer on the
-// button is on its row, so its box is told first (hoverRow), unless hover is false: a press
-// with the pointer at rest since the last frame.
-const clickButton = (v, cx, n, c = frame(v, cx), { hover = true } = {}) => {
+// Pin n's button's press-down in a frame, as gpui delivers it (it notes whether the button was
+// drawn in that frame). The number of times it stopped the press, or null with no such handler.
+const downButton = (cx, n, c) => {
+  const h = ownOf(c, `th-unpin-${n}`).find((e) => e[0] === "on_mouse_down")?.at(-1);
+  if (!h) return null;
+  let stopped = 0;
+  h({ position: { x: 0, y: 0 }, click_count: 1 }, { ...cx, stop_propagation() { stopped++; } });
+  return stopped;
+};
+// A press on pin n's button as gpui delivers it: its press-down, then its own click. The number
+// of times the click kept the press there (stop_propagation), or null with no such button. The
+// pointer on the button is on its row, so its box is told first (hoverRow) and the pane draws
+// again before the press lands, unless hover is false: a press with the pointer at rest since
+// the last frame. With a frame given, the press lands on that frame as it is.
+const clickButton = (v, cx, n, c = null, { hover = true } = {}) => {
+  if (!c) {
+    c = frame(v, cx);
+    if (hover) { hoverRow(v, cx, n, true, c); c = frame(v, cx); }
+  } else if (hover) hoverRow(v, cx, n, true, c);
   const h = ownOf(c, `th-unpin-${n}`).find((e) => e[0] === "on_click")?.at(-1);
   if (!h) return null;
-  if (hover) hoverRow(v, cx, n, true, c);
+  downButton(cx, n, c);
   let stopped = 0;
   h({ position: { x: 0, y: 0 }, click_count: 1 }, { ...cx, stop_propagation() { stopped++; } });
   return stopped;
@@ -4574,13 +4588,13 @@ test("the Pinned column: each closed pin's unpin button is an element of its own
     expect(PIN_ROW.UNPIN).toBe(24);
     expect(PIN_ROW.UNPIN_R).toBe(6);
   }
-  // No other element of the layer takes a press or a drag: a drag that starts on a button, as
-  // one on the divider beside the column can, is not held by it, and the button's click needs
-  // the press and the release on it.
+  // No other element of the layer takes a press or a drag, and the button's press-down only
+  // notes (it stops nothing): a drag that starts on a button, as one on the divider beside the
+  // column can, is not held by it, and the button's click needs the press and the release on it.
   const takes = (c) => c.filter((e) => /^on_(mouse_down|mouse_up|drag|click|item)/.test(e[0])).map((e) => e[0]);
   expect(takes(layer)).toEqual([]);
   expect(takes(ownOf(L.c, "th-unpin-row-2"))).toEqual([]);
-  expect(takes(ownOf(L.c, "th-unpin-2"))).toEqual(["on_click"]);
+  expect(takes(ownOf(L.c, "th-unpin-2"))).toEqual(["on_mouse_down", "on_click"]);
   // The list's own item has no button any more: nothing in it takes the press as an unpin.
   expect(itemWords(v, compactPins(v)[1]).some((e) => e[0] === "id" && e[1] === "th-unpin-2")).toBe(false);
 });
@@ -4700,8 +4714,8 @@ test("the undo notice and the Jump to latest pill take the click: it stops on th
   v.sel = keyOf(1);
   v.key(keyEv("p"), cx);
   expect(toastText(v)).toMatch(/^Unpinned/);
+  hoverRow(v, cx, 1); // the pointer on pin 1's row, under the notice
   const c = frame(v, cx);
-  hoverRow(v, cx, 1, true, c); // the pointer on pin 1's row, under the notice
   const toast = ownOf(c, "th-toast");
   expect(toast.some((e) => e[0] === "on_mouse_down")).toBe(false);
   const click = toast.find((e) => e[0] === "on_click")?.at(-1);
@@ -4709,18 +4723,25 @@ test("the undo notice and the Jump to latest pill take the click: it stops on th
   // A click on the notice over pin 1's button: the notice's click stops it, the button's never runs.
   const btn = ownOf(c, "th-unpin-1").find((e) => e[0] === "on_click")?.at(-1);
   expect(typeof btn).toBe("function");
+  // The press-down reaches the button under the notice too (the notice does not stop it).
+  expect(downButton(cx, 1, c)).toBe(0);
   expect(clickThrough(cx, [click, btn])).toBe(true);
   expect(v.isPinned(keyOf(0))).toBe(true);
   // Without the notice the same click reaches the button and unpins (the model is not empty).
   const k0 = keyOf(0);
+  expect(downButton(cx, 1, c)).toBe(0);
   expect(clickThrough(cx, [btn])).toBe(true);
   expect(v.isPinned(k0)).toBe(false);
   v.key(keyEv("u"), cx);
-  // No unpin control stops the press-down: the rows' buttons and their boxes, and the header's.
+  // No unpin control stops the press-down: the rows' buttons only note it, their boxes and the
+  // header's take none.
   const c2 = frame(v, cx);
   const ids = c2.filter((e) => e[0] === "id" && /^th-unpin/.test(e[1])).map((e) => e[1]);
   expect(ids.length).toBeGreaterThan(0);
-  for (const id of ids) expect(ownOf(c2, id).some((e) => e[0] === "on_mouse_down")).toBe(false);
+  for (const id of ids) {
+    if (/^th-unpin-\d+$/.test(id)) expect(downButton(cx, Number(id.slice(9)), c2)).toBe(0);
+    else expect(ownOf(c2, id).some((e) => e[0] === "on_mouse_down")).toBe(false);
+  }
   rec = []; v.header(theme); const h = rec; rec = null;
   expect(ownOf(h, "th-pin").some((e) => e[0] === "on_click")).toBe(true);
   expect(ownOf(h, "th-pin").some((e) => e[0] === "on_mouse_down")).toBe(false);
@@ -4962,6 +4983,72 @@ test("the Pinned column: a press on a button the pane did not draw selects its p
   expect(clickButton(v, cx, 2, frame(v, cx), { hover: false })).toBe(1);
   expect(v.isPinned(c)).toBe(true);
   expect(v.sel).toBe(c);
+  // A click whose own press-down the button did not get (another pin's, or none) goes by no
+  // record: it selects, even on a drawn button.
+  v.sel = a;
+  hoverRow(v, cx, 2);
+  const f = frame(v, cx);
+  const click2 = ownOf(f, "th-unpin-2").find((e) => e[0] === "on_click").at(-1);
+  downButton(cx, 1, f);
+  click2({ position: { x: 0, y: 0 }, click_count: 1 }, { ...cx, stop_propagation() {} });
+  expect(v.isPinned(c)).toBe(true);
+  expect(v.sel).toBe(c);
+  v.sel = a;
+  click2({ position: { x: 0, y: 0 }, click_count: 1 }, { ...cx, stop_propagation() {} });
+  expect(v.isPinned(c)).toBe(true);
+  expect(v.sel).toBe(c);
+});
+
+// The pointer rests on a row (n), a key moves the rows under it (go), and a press with no move:
+// its press-down lands on the frame drawn after the key, then gpui (back in pointer mode)
+// repaints and the row now under the pointer gets an enter, then the release.
+function pressAfterShift(v, cx, n, go) {
+  hoverRow(v, cx, n);
+  go();
+  const c = frame(v, cx);
+  const h = ownOf(c, `th-unpin-${n}`).find((e) => e[0] === "on_click")?.at(-1);
+  downButton(cx, n, c);
+  hoverRow(v, cx, n, true, frame(v, cx));
+  let stopped = 0;
+  h({ position: { x: 0, y: 0 }, click_count: 1 }, { ...cx, stop_propagation() { stopped++; } });
+  return stopped;
+}
+
+test("the Pinned column: p unpins the selected pin above a resting pointer and the rows move up: a press there, with no move, selects the pin now under it and keeps it, though the repaint after the press-down gives that row an enter", async () => {
+  const { v, cx, keyOf } = await threePins(390);
+  const [a, b, c] = [0, 1, 2].map(keyOf);
+  v.sel = a;
+  expect(pressAfterShift(v, cx, 2, () => {
+    v.key(keyEv("p"), cx);
+    expect(v.isPinned(a)).toBe(false);
+    // b moved up under no pointer and is still the hovered pin; c is under the pointer.
+    expect(compactPins(v).map((r) => r.key)).toEqual([b, c]);
+    expect(drawnRows(v, cx)).toEqual([1]);
+  })).toBe(1);
+  expect(v.isPinned(c)).toBe(true);
+  expect(v.sel).toBe(c);
+  expect(toastText(v)).toMatch(/^Unpinned #/);
+  expect(v.isPinned(b)).toBe(true);
+});
+
+test("the Pinned column: u puts a pin back above a resting pointer and the rows move down: a press there, with no move, selects the pin now under it and keeps it, though the repaint after the press-down gives that row an enter", async () => {
+  const { v, cx, keyOf } = await threePins(390);
+  const [a, b, c] = [0, 1, 2].map(keyOf);
+  v.sel = a;
+  v.key(keyEv("p"), cx);
+  expect(compactPins(v).map((r) => r.key)).toEqual([b, c]);
+  v.sel = c;
+  expect(pressAfterShift(v, cx, 1, () => {
+    v.key(keyEv("u"), cx);
+    expect(v.isPinned(a)).toBe(true);
+    // a is back under the pointer with no enter of its own; b, still the hovered pin, moved down.
+    expect(compactPins(v).map((r) => r.key)).toEqual([a, b, c]);
+    expect(v.sel).not.toBe(a);
+    expect(drawnRows(v, cx)).not.toContain(1);
+  })).toBe(1);
+  expect(v.isPinned(a)).toBe(true);
+  expect(v.sel).toBe(a);
+  expect(toastText(v) ?? "").not.toMatch(/^Unpinned/);
 });
 
 // The header's unpin button in a frame of the header: its own calls, and its click as gpui

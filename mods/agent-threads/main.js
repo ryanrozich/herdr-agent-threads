@@ -1048,6 +1048,9 @@ export default class Threads extends View {
     // The closed pin whose row the pointer is on, by its key (pinHover), so the pane, not
     // gpui's hover style, decides which unpin button is drawn (pinButtons, unpinButton).
     this.hoverPin = null;
+    // The last press-down on a row's unpin button: its pin's key and whether the button was
+    // drawn in the frame the press landed on ({ key, drawn }), which its click goes by.
+    this.unpinDown = null;
     // o: the outline, one row per turn ("line" items). outlineBack is where the list was
     // when it opened, for Esc. Not saved across restarts.
     this.outline = false;
@@ -10609,13 +10612,19 @@ export default class Threads extends View {
   // The unpin buttons over the Pinned view's closed pins (pinButtonRows): each is the heading's
   // button (iconButton) with its own click, so a press unpins only on it, and the press and the
   // release both on it (gpui's click), and goes no further (stop_propagation): the list under
-  // it neither selects nor opens the turn. It takes no press-down, so a drag that starts on it
-  // is not held. It sits in a clear box the size of its row, which tells the pane when the
-  // pointer comes onto the row and leaves it (pinHover). The pane draws the button, in its
-  // box's colour, on the row the pointer is on and on the selected pin, from its own state, not
-  // gpui's hover style, which a key can hide while the pointer rests. Only a drawn button has
-  // the hover fill and the hand. The layer is laid out as the list's items are: the reading
-  // column, centred.
+  // it neither selects nor opens the turn. It sits in a clear box the size of its row, which
+  // tells the pane when the pointer comes onto the row and leaves it (pinHover). The pane draws
+  // the button, in its box's colour, on the row the pointer is on and on the selected pin, from
+  // its own state, not gpui's hover style, which a key hides while the pointer rests. (gpui's
+  // hover callback reports false on the paint after a key; Herdr drops a false while the
+  // pointer is still inside the element, so the row the pointer rests on keeps its button.)
+  // Only a drawn button has the hover fill and the hand. Its press-down only notes whether it
+  // was drawn in the frame the press landed on (unpinDown) and stops nothing, so a drag that
+  // starts on it is not held and Herdr still focuses the pane. The click goes by that note: the
+  // press-down puts gpui back in pointer mode and the window repaints before the release, and
+  // after a key moved the rows (p, u) that repaint can bring the row under the pointer an
+  // enter of its own. The layer is laid out as the list's items are: the reading column,
+  // centred.
   pinButtons(t, btns) {
     // The row the pointer was on is gone from the layer, or the layer is: it is on no button.
     if (this.hoverPin && !btns.some((b) => b.r.key === this.hoverPin)) this.hoverPin = null;
@@ -10634,7 +10643,13 @@ export default class Threads extends View {
               .child(div().id(`th-unpin-${r.pinNo}`).flex_none().size(P.UNPIN).flex().items_center().justify_center().rounded(5)
                 .when(drawn, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)))
                 .tooltip(tip)
-                .on_click((_e, cx) => { cx.stop_propagation(); this.unpinButton(r.key, cx); })
+                .on_mouse_down("left", () => { this.unpinDown = { key: r.key, drawn }; })
+                .on_click((_e, cx) => {
+                  cx.stop_propagation();
+                  const down = this.unpinDown?.key === r.key ? this.unpinDown : null;
+                  this.unpinDown = null;
+                  this.unpinButton(r.key, cx, Boolean(down?.drawn));
+                })
                 .child(svg(ICON("pin-off")).size(14))));
         })))];
   }
@@ -10649,13 +10664,14 @@ export default class Threads extends View {
   // and the turn is neither selected nor opened. The notice offers undo (unpin). Nothing
   // while a card or sheet covers the list. Under the Turn card the press only closes it, as
   // a press anywhere outside it does (click()). A press on a button the pane did not draw
-  // (pinButtons: neither the selected pin's nor the one on the row the pointer is on, as when
-  // a row moved under a pointer at rest) selects that pin, as a press on its row would;
-  // selected, its button is drawn, so a second press on the spot unpins it.
-  unpinButton(key, cx) {
+  // when the press went down (drawn, from pinButtons' press-down note: neither the selected
+  // pin's nor the one on the row the pointer is on, as when a row moved under a pointer at
+  // rest) selects that pin, as a press on its row would; selected, its button is drawn, so a
+  // second press on the spot unpins it. The header's unpin is the selected pin's: drawn.
+  unpinButton(key, cx, drawn = this.sel === key) {
     if (this.covered() || this.view !== "pinned") return;
     if (this.detailsOpen && Popup) { this.detailsOpen = false; cx.notify(); return; }
-    if (this.sel !== key && this.hoverPin !== key) { this.sel = key; cx.notify(); return; }
+    if (!drawn) { this.sel = key; cx.notify(); return; }
     const p = this.pinnedList().find((x) => x.key === key);
     if (p) { this.unpin(p, cx); cx.notify(); }
   }
