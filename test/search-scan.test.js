@@ -6,7 +6,7 @@
 import { test, expect, spyOn } from "bun:test";
 import * as T from "../mods/agent-threads/core/turns.js";
 import { isShown, oneCharTest, searchable } from "../mods/agent-threads/ui.js";
-import { H, PRICE, draw, scripted, settleRows, setup, sliced, theme } from "./render-harness.js";
+import { H, PINS, PRICE, draw, recordFiles, scripted, settleRows, setup, sliced, theme } from "./render-harness.js";
 
 setup();
 
@@ -1352,7 +1352,8 @@ test("a draw going on with an older step, stopped inside the step's slice, leave
 
 // A step going on by itself is called off by a key, here p (the selected turn pinned, the
 // selection left where it is), or by a new selection (a click on a turn): the draws after it
-// leave the selection where that put it.
+// leave the selection where that put it. The pin is taken off pins.json after, so no later
+// test opens with it.
 for (const how of ["a key", "a new selection"]) test(`an older step going on by itself is called off by ${how}, and the draws after it leave the selection there`, async () => {
   const z = await zebraTail();
   const { v, cx, base, last } = z;
@@ -1367,6 +1368,8 @@ for (const how of ["a key", "a new selection"]) test(`an older step going on by 
     r.sel = v.sel;
     for (let k = 0; k < 40; k++) drawOnce(v, cx);
   }); } finally { X = 1; }
+  await new Promise((done) => setTimeout(done, 30)); // the pin's write of pins.json
+  delete recordFiles[PINS];
   expect({ stayed: r.stayed, sel: v.sel }).toEqual({ stayed: true, sel: r.sel });
   expect(r.sel).toBe(how === "a key" ? last : `0:${base + 1200}`);
 }, 300000);
@@ -1515,6 +1518,9 @@ for (const more of [0, 10]) test(`a transcript replaced and read again to ${600 
 // and steps check those, never the session's turns.
 test("the Pinned view with every pin it holds in a 5,600-turn session checks only its pins for a search", async () => {
   const { PIN_LIMIT } = await import("../mods/agent-threads/pins.js");
+  // No pins from an earlier test: the pane reads pins.json as it opens, and the made-up
+  // sessions here all have the same id.
+  delete recordFiles[PINS];
   const { v, cx, s } = await longPane(5600);
   await new Promise((r) => setTimeout(r, 20));
   // As many pins as it holds, two of them on turns with "rename" (5,581 and 5,591), the rest
