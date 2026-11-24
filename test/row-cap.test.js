@@ -1261,8 +1261,21 @@ test("after a render Herdr stopped, a wheel still drops the jump that waits and 
   expect(got).toEqual(want);
 });
 
+// The y of a turn's head in a frame, or null when it is not in the list.
+function headY(f, key) {
+  const at = f.keys.indexOf(key);
+  if (at < 0) return null;
+  let y = -f.off;
+  for (let k = 0; k < at; k++) y += f.sizes[k];
+  return Math.round(y);
+}
+
 // Every frame a reader sees, drawn between the landing's timed asks too (drawBetweenAsks).
-test("past the cap, a jump held while the cut moves lands from the held place: every frame drawn shows the turn, at the held place or the landed one", async () => {
+// A place is where the turn's head is (its y), so a move of the rows above it counts as much
+// as a move of the offset. A rail jump lands with its lift (row 0 that much taller, so the
+// turn lands level with its tick once it is gone) and settles by it 120 ms on: a third place,
+// the lift's 29 px up from the landed one.
+test("past the cap, a jump held while the cut moves lands from the held place: every frame drawn shows the turn, at the held place or the landed one, and a rail jump then settles by its lift", async () => {
   const got = {};
   const want = {};
   for (const [name, go] of [
@@ -1276,9 +1289,11 @@ test("past the cap, a jump held while the cut moves lands from the held place: e
     const from = sim.frames.length;
     settleList(v, cx, sim);
     const frames = sim.frames.slice(from);
-    const places = frames.map((f) => Math.round(f.off)).filter((o, k, a) => k === 0 || o !== a[k - 1]);
-    got[name] = { missing: frames.filter((f) => !shownIn(v, f).includes("0:65")).map((f) => Math.round(f.off)), places: places.length <= 2 ? "two at most" : places };
-    want[name] = { missing: [], places: "two at most" };
+    const places = frames.map((f) => headY(f, "0:65")).filter((y, k, a) => k === 0 || y !== a[k - 1]);
+    const lift = v.landed?.lift ?? 0;
+    const settle = places.length === 3 && lift > 0 && places[1] - places[2] === lift ? `two, then ${lift} px up` : places;
+    got[name] = { missing: frames.filter((f) => !shownIn(v, f).includes("0:65")).map((f) => Math.round(f.off)), places: places.length <= 2 ? "two at most" : settle };
+    want[name] = { missing: [], places: name === "rail" ? "two, then 29 px up" : "two at most" };
     H.drawBetweenAsks = false;
     H.listWindow = null;
   }
