@@ -6768,6 +6768,7 @@ test("an open reply of 18 or 58 parts has every part linked and at its worked-ou
     costLog(`${parts} parts, heights`, r);
     expect(v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length).toBe(parts);
     expect(r.settled).toBeGreaterThan(0);
+    // 14: with the split priced, 58 parts settle at frame 12, the first frame paying the split.
     expect(r.settled).toBeLessThanOrEqual(14);
     // New rules link every part again, the same way, with the split and the heights kept.
     const { parseLinks } = await import("../mods/agent-threads/settings.js");
@@ -6810,6 +6811,30 @@ test("an open reply's links follow a change of the repository or its owner", asy
       expect([r.stops, r.settled > 0]).toEqual([0, true]);
       expect(v.baseRows.find((x) => x.key.startsWith(`md:${key}:`)).md).toContain(want[j]);
     }
+  }
+}, 60000);
+
+test("an open reply whose text changes keeps the links of the parts it still has and links only the new one", async () => {
+  const base = shortParas(980);
+  const { v, cx, key } = await openLong(base);
+  costedFrames(v, cx, 20, await cardDone(v, key));
+  const md = () => v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`));
+  let text = base;
+  // Two changes of the text, then new rules alone, then new rules with a change of the text.
+  for (const [n, rules, grow] of [[1, null, true], [2, null, true], [3, "tickets", false], [4, "issues", true]]) {
+    if (rules) {
+      const { parseLinks } = await import("../mods/agent-threads/settings.js");
+      const l = parseLinks([{ name: "Ticket", pattern: "\\bACME-(\\d+)\\b", url: `https://${rules}.example.com/$1` }]);
+      v.setLinks(l.rules, l.list, 1);
+    }
+    const was = new Map(md().map((x) => [x.src, x.md]));
+    if (grow) text += `\n\nAdded paragraph ${n}: see ACME-${n}.`;
+    v.findTurn(key).after = [text];
+    v.rowsKey = null;
+    const done = await cardDone(v, key);
+    let lost = 0;
+    const r = costedFrames(v, cx, 20, () => { for (const x of md()) if (!rules && was.has(x.src) && x.md !== was.get(x.src)) lost++; return done(); });
+    expect([r.stops, r.settled > 0, lost, r.linked]).toEqual([0, true, 0, rules ? md().length : 1]);
   }
 }, 60000);
 
