@@ -6,7 +6,7 @@
 import { test, expect, spyOn } from "bun:test";
 import * as T from "../mods/agent-threads/core/turns.js";
 import { isShown, oneCharTest, searchable } from "../mods/agent-threads/ui.js";
-import { H, PRICE, draw, scripted, settleRows, setup, theme } from "./render-harness.js";
+import { H, PRICE, draw, scripted, settleRows, setup, sliced, theme } from "./render-harness.js";
 
 setup();
 
@@ -91,8 +91,9 @@ function events(n, { bare = false } = {}) {
 // search's minimum (minimum length, below): the list is not filtered and nothing is checked.
 const QUERIES = ["ar", "rename", "zqxjvk"];
 
-// A pane on a session of n such turns, every row built and shaped (on the real clock, with no
-// budget), its work counted from here on.
+// A pane on a session of n such turns, every row built and shaped (each in one slice, the
+// harness's whole-slice pane, with no budget), its work counted from here on, with its slices
+// cut by the clock again (sliced), as in Herdr.
 async function longPane(n, opts) {
   const { v, cx, s } = await scripted(events(n, opts));
   v.debug = false;
@@ -101,6 +102,7 @@ async function longPane(n, opts) {
   v.shapeBudget = Infinity;
   for (let k = 0; k < 400; k++) { v.render(cx); cx.flush(0); if (settled(v)) break; }
   v.shapeBudget = null;
+  sliced(v);
   for (const [name, n2] of [["reshape", "reshapes"], ["turnRows", "built"], ["frame", "frames"]]) {
     const f = v[name];
     v[name] = function (...a) { paid[n2]++; return f.apply(this, a); };
