@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cardKey, keyAction, ledgerKey, ringKey } from "../mods/agent-threads/ui.js";
 import { trajCompact } from "../mods/agent-threads/ledger.js";
-import { H, draw, drawRange, fixture, keyEv, pane, pinsShown, root, settleRows, setup, simList, state } from "./render-harness.js";
+import { H, draw, drawRange, fixture, keyEv, openAt, pane, pinsShown, probeFrame, root, scripted, settleList, settleRows, setup, simList, state, stillAt } from "./render-harness.js";
 
 setup();
 
@@ -499,6 +499,101 @@ test("debugScroll counts once, through the frames that land it", async () => {
     expect({ debug: v.debug, atCommand, moved: sim.last().key !== top0, asked: v.scrollTo, all: moves(v) - n0 }).toEqual({ debug: true, atCommand: 1, moved: true, asked: null, all: 1 });
   } finally { H.listWindow = null; }
 });
+
+// Two of the pane's own moves of the list, with no wheel and no bar, in the list, the outline
+// and the Pinned view: neither counts.
+// - A held place let go (letGo): after a re-wrap the probe measures the rows above, and the
+//   list is put back at the same row with a scroll the pane asks for. In the list that is a
+//   column step; the outline's rows keep their heights through it, so letGo asks for nothing
+//   there; the narrow Pinned view has one column step, and a text size change takes no place
+//   in it, so nothing is let go.
+// - A row above the view measured again: the list keeps its offset in px, so the row at the
+//   top edge changes, in a frame whose rows are built again for the new size. The outline's
+//   and the Pinned view's rows are not measured by the probe, so it does not happen there.
+// Each run says which of these it met, so a change that makes one happen in a view shows.
+async function wrapPane(n) {
+  const words = "the cart total rounds per line so the order is off by a cent when a coupon applies to a split shipment".split(" ");
+  const say = (i, k) => Array.from({ length: k }, (_, j) => words[(i * 7 + j * 3) % words.length]).join(" ");
+  const ev = [];
+  for (let i = 0; i < n; i++) {
+    const ts = new Date(Date.UTC(2026, 10, 1, 8, 0) + i * 60000).toISOString();
+    ev.push({ k: "p", o: "human", t: `Prompt ${i}: ${say(i, 18 + (i % 5) * 6)}.`, ts }, { k: "t", t: `Reply ${i}: ${say(i + 3, 30 + (i % 7) * 8)}.` }, { k: "d", ts });
+  }
+  return scripted(ev);
+}
+// Per view: how to make it, what changes its wrap, and what each run meets there.
+const OWN_MOVES = {
+  list: {
+    make: async () => (await wrapPane(400)), w: 650, change: (v) => stillAt(v, 750),
+    letGo: { lets: 1, asked: true }, measured: { above: true, moved: true },
+  },
+  outline: {
+    make: async () => (await wrapPane(400)), w: 650, change: (v) => stillAt(v, 750), after: (v, cx) => v.action("outline", cx),
+    letGo: { lets: 1, asked: false }, measured: { above: true, moved: false },
+  },
+  pinned: {
+    make: async () => (await pinsShown(["--extra", "40"], Array.from({ length: 30 }, (_, i) => i + 1))), w: 400, change: (v, cx) => v.command("textSize:17", cx),
+    letGo: { lets: 0, asked: false }, measured: { above: false, moved: false },
+  },
+};
+const viewOf = (v) => (v.view === "pinned" ? "pinned" : v.outlined() ? "outline" : "list");
+// The pane at its width, rows built and measured, away from the end and the top (the list from
+// its end, up half way; the views from their top, down half way), the wheel's count behind it.
+async function ownMovePane(where) {
+  const o = OWN_MOVES[where];
+  const { v, cx } = await o.make();
+  v.debug = false;
+  v.listH = where === "pinned" ? 300 : 600;
+  const sim = simList(v);
+  stillAt(v, o.w);
+  settleList(v, cx, sim);
+  if (o.after) { o.after(v, cx); settleList(v, cx, sim); }
+  if (where === "list") { v.jumpLatest(); settleList(v, cx, sim); sim.wheel(sim.off / 2); }
+  else sim.wheel(-sim.last().sizes.reduce((x, y) => x + y, 0) / 2);
+  sim.wheel(37);
+  settleList(v, cx, sim);
+  return { v, cx, sim, o };
+}
+for (const where of Object.keys(OWN_MOVES)) test(`a held place let go counts nothing, in the ${where}`, async () => {
+  const { v, cx, sim, o } = await ownMovePane(where);
+  try {
+    const n0 = moves(v);
+    const go = v.letGo;
+    const ask = v.askScroll;
+    let inGo = false;
+    const got = { lets: 0, asks: 0 };
+    v.letGo = function (why, c) { got.lets++; inGo = true; try { return go.call(this, why, c); } finally { inGo = false; } };
+    v.askScroll = function (i, how) { if (inGo) got.asks++; return ask.call(this, i, how); };
+    const look = () => `${v.chars()}|${v.prefs.textSize}`;
+    const was = look();
+    o.change(v, cx);
+    settleList(v, cx, sim);
+    v.letGo = go;
+    v.askScroll = ask;
+    expect({ view: viewOf(v), changed: look() !== was, lets: got.lets, asked: got.asks > 0, wheel: v.wheelN === v.stickWheelN, moves: moves(v) - n0 })
+      .toEqual({ view: where, changed: true, ...o.letGo, wheel: true, moves: 0 });
+  } finally { H.listWindow = null; }
+}, 60000);
+for (const where of Object.keys(OWN_MOVES)) test(`a row above the view measured again counts nothing, in the ${where}`, async () => {
+  const { v, cx, sim, o } = await ownMovePane(where);
+  try {
+    const n0 = moves(v);
+    const f0 = sim.last();
+    const top = f0.keys.indexOf(f0.key);
+    // A measured part of a row well above the top edge (of the Chat's list), taller by 400 px.
+    const rowOf = (k) => (k.startsWith("cmd:") ? k.slice(4) : k.startsWith("wyou:") ? k.slice(5) : k);
+    const list = v.baseRows?.map((r) => r.key) ?? [];
+    const part = [...(v.meas ?? new Map()).keys()].find((k) => { const j = list.indexOf(rowOf(k)); return j >= 0 && j < Math.max(0, top - 2); });
+    if (part) {
+      const m = v.meas.get(part);
+      v.probed(part, m.sig, { width: 300, height: (m.h + 400) * v.zoom() }, cx);
+    }
+    for (let k = 0; k < 4; k++) probeFrame(v, cx);
+    const f1 = sim.last();
+    expect({ view: viewOf(v), above: Boolean(part), moved: f1.keys.indexOf(f1.key) !== top, wheel: v.wheelN === v.stickWheelN, moves: moves(v) - n0 })
+      .toEqual({ view: where, ...o.measured, wheel: true, moves: 0 });
+  } finally { H.listWindow = null; }
+}, 60000);
 
 // The outline and the Pinned view scroll on the same list: a scroll it reports with no wheel
 // since the last frame (a drag on its bar) counts once there too, a wheel there counts once
