@@ -580,8 +580,7 @@ function nextStep(k) { const d = 10 ** Math.floor(Math.log10(k)); const m = k / 
 // the strip's end, or touch the first turn's number, has none. Then the last turn's, moved inside
 // the strip's end, in place of any it touches. nti, nx, nw: the turns in view
 // that start before the strip's end, their number's x and their width from it.
-function numbers(out, heads, nti, nx, nw) { runGen(numbersGen(out, heads, nti, nx, nw)); }
-// numbers' work, yielding 0 every TL_BUILD_CHUNK turns it reads (tlBuildGo).
+// A generator: it yields 0 every TL_BUILD_CHUNK turns it reads (tlBuildGo).
 function* numbersGen(out, heads, nti, nx, nw) {
   const cw = out.cw;
   let read = 0;
