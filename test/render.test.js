@@ -6755,10 +6755,16 @@ function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0, scale = 1, onF
   v.expanded = function (item, out) { hook("expanded", item); return ex.call(this, item, out); };
   v.linkOne = function (md) { hook("link", md); if (this.links.length) { linked++; spend(md.split("\n").filter((x) => x.trim()).length * P.line); } return lo.call(this, md); };
   v.wrapped = function (s, ...a) { spend(P.call + s.length * P.char); return wr.call(this, s, ...a); };
-  const ls = v.linkSeg, so = v.segmentsOf;
+  const ls = v.linkSeg, so = v.segmentsOf, sg = v.segsSome;
   v.linkSeg = function (md, ...a) { spend(md.split("\n").filter((x) => x.trim()).length * P.segLine); return ls.call(this, md, ...a); };
   // With no fence the split is two native scans (segments), not priced.
   v.segmentsOf = function (text) { spend((/```|~~~/.test(text) ? text.length : 0) * P.segChar); return so.call(this, text); };
+  // A read of the segments job by the characters it went over; one Herdr stopped is lost.
+  v.segsSome = function (job) {
+    const was = { ...job, out: job.out.slice() };
+    sg.call(this, job);
+    try { spend((job.at - was.at) * P.segChar); } catch (e) { Object.assign(job, was); throw e; }
+  };
   // A read of the split is priced by the work it did, what it scanned and what it made; one
   // Herdr stopped is lost, as its state is written back only at its end (mdSplitOn).
   const ss = v.splitSome, hi = v.height;
@@ -6824,7 +6830,7 @@ function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0, scale = 1, onF
     cx.timer = timer;
     cx.notify = notify;
     cx.timers = timers.map((x) => ({ ms: Math.max(0, x.due - t), fn: x.fn }));
-    delete v.linkOne; delete v.wrapped; delete v.splitSome; delete v.height; delete v.expanded; delete v.linkSeg; delete v.segmentsOf;
+    delete v.linkOne; delete v.wrapped; delete v.splitSome; delete v.height; delete v.expanded; delete v.linkSeg; delete v.segmentsOf; delete v.segsSome;
   }
   const ok = frames.filter((x) => x.ok);
   return { stops: frames.length - ok.length, first: frames.findIndex((x) => x.ok) + 1, open: frames[0]?.ms ?? 0, settled, settledMs, linked, splits, readMost: Math.round(readMost * 100) / 100, most: Math.max(0, ...ok.map((x) => x.ms)), later: Math.max(0, ...ok.slice(1).map((x) => x.ms)), frames };

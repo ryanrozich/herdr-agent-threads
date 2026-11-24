@@ -68,7 +68,7 @@ import {
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
-  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, updatesText, stats, segments, threadMatches, remarkSenders, ruleSender, typedTurn, RULE_TEXT,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, updatesText, stats, segments, segmentsJob, segmentsOn, threadMatches, remarkSenders, ruleSender, typedTurn, RULE_TEXT,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount, turnSums, sumsStats,
   noteSkip, skipNote,
 } from "./core/turns.js";
@@ -4878,25 +4878,33 @@ export default class Threads extends View {
     let used = 0;
     let left = 0;
     const selecting = this.selecting === key && this.selEditor?.key === key && text;
-    // The reply in prose and code, kept with its parts (partMemo) until it changes: on the rig
-    // the pass took 8.6 ms of the open of 120 KB, and the build runs again in each draw that
-    // brings parts in.
+    // The reply in prose and code (segmentsJob), kept with its parts (partMemo) until it
+    // changes, and read in the draw's reshaping time (segsOn): on the rig the pass over every
+    // line took 8.6 ms of the open of 120 KB, and the build runs again in each draw that brings
+    // parts in. Until it is done one row (mdrest) stands for the whole reply.
     const pm = selecting ? null : this.partMemo(key, text);
-    const segs = pm ? (pm.segs ??= this.segmentsOf(text)) : this.segmentsOf(text);
+    const sj = pm ? (pm.segJob ??= segmentsJob(text)) : null;
+    if (sj) this.segsOn(sj);
+    const segs = sj ? (sj.done ? sj.out : null) : this.segmentsOf(text);
     // Editors cannot be made while drawing: note the turn, and flushCode() makes them
     // on the next tick.
-    const stale = segs.some((seg, i) => seg.kind === "code" && this.code.get(`${key}:${i}`)?.text !== seg.text)
-      || [...this.code.keys()].some((k) => k.startsWith(`${key}:`) && segs[Number(k.slice(key.length + 1))]?.kind !== "code");
+    const stale = segs && (segs.some((seg, i) => seg.kind === "code" && this.code.get(`${key}:${i}`)?.text !== seg.text)
+      || [...this.code.keys()].some((k) => k.startsWith(`${key}:`) && segs[Number(k.slice(key.length + 1))]?.kind !== "code"));
     if (stale) (this.codeDue ??= new Set()).add(key);
-    const linked = selecting ? null : this.linkedSegs(key, segs);
+    const linked = selecting || !segs ? null : this.linkedSegs(key, segs);
     if (pm) this.partGeo = this.rowsGeo();
     if (selecting) {
       const per = Math.max(8, Math.floor((this.inner() - 26) / SELECT_CHAR));
       const lines = wrappedLines(this.selEditor.text.slice(0, SELECT_CHARS), per);
       out.push({ ...item, kind: "seltext", key: `sx:${key}`, lines, boxH: Math.min(lines * 18 + 14, 2400) });
     }
+    if (!selecting && !segs) {
+      this.shapeLeft = (this.shapeLeft ?? 0) + 1;
+      this.otherLeft = (this.otherLeft ?? 0) + 1;
+      push({ ...item, kind: "mdrest", key: `mr:${key}:0`, gap: 6, h: 6 + this.restHeight(Math.min(text.length, FULL_REPLY_CHARS), 1) });
+    }
     // An open turn shows the whole reply, up to FULL_REPLY_CHARS.
-    if (!selecting) segs.forEach((seg, i) => {
+    if (!selecting && segs) segs.forEach((seg, i) => {
       if (used >= FULL_REPLY_CHARS) { left += seg.text.length; return; }
       if (seg.kind === "md") {
         let md = seg.text;
@@ -6054,6 +6062,17 @@ export default class Threads extends View {
     }
   }
   splitSome(job) { mdSplitOn(job, SPLIT_LINES, SPLIT_UNITS); }
+  // The reply's segments (segmentsJob) in this draw's reshaping time, as its split (splitOn):
+  // a read of SPLIT_LINES lines and SPLIT_UNITS characters at a time.
+  segsOn(job) {
+    const max = this.partMax();
+    while (!job.done && (this.shapeSpent ?? 0) <= max) {
+      const t0 = now();
+      this.segsSome(job);
+      this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
+    }
+  }
+  segsSome(job) { segmentsOn(job, SPLIT_LINES, SPLIT_UNITS); }
   // One part's row of an open reply. It is kept on the turn's record (rows) with its height
   // (partHs, under the layout it was worked out for, partGeo), so a later build of the card
   // sizes only new parts: building and sizing the 2,086 rows of a reply of 1,040 short
