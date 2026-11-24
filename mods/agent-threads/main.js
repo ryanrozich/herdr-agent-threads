@@ -3196,9 +3196,11 @@ export default class Threads extends View {
       for (const k of now[i]) if (!b.sets[i].has(k)) keys.add(turnOf(k));
       for (const k of b.sets[i]) if (!now[i].has(k)) keys.add(turnOf(k));
     }
-    // New call details, or interim texts and estimates left out of time in open turns.
+    // New call details, or interim texts and estimates left out of time in open turns. The
+    // mark stays until the record below is made: a splice Herdr stopped before it (its stop
+    // falls at any call) left nothing to rebuild the open turns. otherLeft is cleared here, so
+    // what this rebuild leaves out of time is counted again.
     const again = this.againOpen;
-    this.againOpen = false;
     if (again) this.otherLeft = 0;
     if ((this.callVer ?? 0) !== b.callVer || again) {
       for (const k of this.open) keys.add(k);
@@ -3256,6 +3258,7 @@ export default class Threads extends View {
     this.staleRows = [...stale].sort((x, y) => x - y);
     this.buildStale = this.staleRows;
     this.rowBuild = { ...b, rest, marks, sets: now.map((x) => new Set(x)), callVer: this.callVer ?? 0 };
+    this.againOpen = false;
     this.rowsKey = key;
     this.fitKey = null;
     this.probeList();
@@ -3514,7 +3517,9 @@ export default class Threads extends View {
   }
   flushCalls(cx) {
     if (this.callBusy || !this.callDue?.length) return;
-    this.callBusy = true;
+    // The timer is asked for before the read is marked as running: a render Herdr stopped
+    // between the two (its stop falls at any call) left the mark with no timer to clear it, and
+    // no call was read again in the pane. The mark is a plain store, where no stop falls.
     cx.timer.after(0, (cx) => {
       const job = this.callDue.shift();
       if (!job) { this.callBusy = false; return; }
@@ -3548,6 +3553,7 @@ export default class Threads extends View {
         cx.notify();
       });
     });
+    this.callBusy = true;
   }
   // Keeps the cache at CALLS_MAX, dropping the oldest reads first but never a call in an open
   // group, so open groups are not read over and over.
