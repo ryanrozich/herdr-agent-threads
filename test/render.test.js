@@ -6780,6 +6780,18 @@ test("an open reply of 18 or 58 parts has every part linked and at its worked-ou
   }
 }, 60000);
 
+test("two capped replies open: no frame passes Herdr's time while both settle, and each is split once", async () => {
+  const { v, cx, keys } = await openLong([0, 1].map((j) => shortParas(4000).replaceAll("Paragraph", `Card ${j}, paragraph`)), true);
+  const runs = [];
+  for (const k of keys) {
+    v.toggle(k, cx);
+    runs.push(costedFrames(v, cx, 30, await cardDone(v, keys.slice(0, runs.length + 1))));
+    costLog(`card ${runs.length} of 2`, runs.at(-1));
+  }
+  expect(runs.map((r) => [r.stops, r.splits, r.settled > 0 && r.settled <= 12])).toEqual([[0, 1, true], [0, 1, true]]);
+  expect(Math.max(...runs.map((r) => r.most))).toBeLessThan(P121.stop);
+}, 60000);
+
 test("eight replies of 58 parts each opened one after another, 464 parts in all, draw in time and link and split each once", async () => {
   const { v, cx, keys } = await openLong(Array.from({ length: 8 }, (_, j) => shortParas(4000).replaceAll("Paragraph", `Turn ${j}, paragraph`)), true);
   const all = { stops: 0, linked: 0, splits: 0, most: 0, settled: [] };
