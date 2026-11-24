@@ -839,6 +839,29 @@ test("a draw stopped inside the matches' scan counts each match once", async () 
   expect(runs).toEqual(runs.map((r) => ({ q: r.q, landed: r.landed, stops: 1, counted: true, tally: { n: n[r.q], distinct: n[r.q], at: n[r.q], done: true }, places: true, text: `1 of ${n[r.q]} · newest first` })));
 }, 300000);
 
+// ---- a transcript replaced ----
+// A replaced transcript is read again from the top into the same session (restart). Read
+// back to as many turns or more before a draw, the matches are found again, not kept from
+// the old file.
+for (const more of [0, 10]) test(`a transcript replaced and read again to ${600 + more} turns before a draw keeps none of the old file's matches`, async () => {
+  const { v, cx, s } = await longPane(600);
+  v.sel = `0:${s.turns.length}`;
+  v.action("search:rename", cx);
+  settleRows(v, cx);
+  expect(fieldText(v)).toBe("1 of 60 · newest first");
+  // The new file: the same turns with no "rename" in them.
+  v.restart(s);
+  for (const e of events(600 + more)) T.apply(s, e.t ? { ...e, t: e.t.replace("rename", "review") } : e);
+  settleRows(v, cx);
+  expect(direct(v, "rename")).toEqual([]);
+  expect(places(v)).toEqual(want(v, "rename"));
+  expect(fieldText(v)).toBe("No matches");
+  // n finds no match to go to.
+  const sel = v.sel;
+  v.action("olderMatch", cx);
+  expect(v.sel === sel || T.threadMatches(s.turns, v.findTurn(v.sel), "rename")).toBe(true);
+}, 120000);
+
 // ---- the Pinned view ----
 // The Pinned view's matches are among its pins, PIN_LIMIT at most (pins.js): its count, place
 // and steps check those, never the session's turns.
