@@ -20377,11 +20377,11 @@ test("TRD-24: the list box measures its height, and the report says how many row
   handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 740, height: 260 }, cb);
   expect(b.trajReport().rowsLeft).toBe(10);
   // Herdr's zoom: the handler hears zoomed px, the rows are design px.
-  herdrSettings = { font_family: "Mono", zoom: 2 };
+  H.herdrSettings = { font_family: "Mono", zoom: 2 };
   try {
     handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 1480, height: 200 }, cb);
     expect([b.trajReport().listH, b.trajReport().rowsLeft]).toEqual([100, 4]);
-  } finally { herdrSettings = { font_family: "Mono" }; }
+  } finally { H.herdrSettings = { font_family: "Mono" }; }
 });
 
 test("TRD-24: along the bottom a turn's heading drops its figures by the list's width, as a right pane of that width does; on the right they go by the pane's width, as before", async () => {
