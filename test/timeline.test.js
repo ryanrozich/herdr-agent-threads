@@ -879,3 +879,47 @@ test("timeline press: on turns under 1 px whose spans join, a press on a drawn s
   expect(timelineHit(L, heads, T.x + T.w / 2, "tools", T0, 8)).toEqual({ turn: "0:2050", key: "0:2050" });
   expect(timelineHit(L, heads, T.x + T.w / 2, "model", T0, 8)).toEqual({ turn: "0:2050", key: "tr:0:2050:3" });
 });
+
+test("timeline paint: a layer's path is kept while its spans are the same, a new array of the same spans too, and built again when they, the width, the height or the colour change; over events only the changed layers are built", () => {
+  const keep = new Map();
+  let builds = 0;
+  const build = (s) => ({ n: ++builds, s });
+  const before = TL.TL_MADE.paths;
+  const key = "1370|12|#e05050";
+  const p1 = TL.tlPathOf(keep, "x", [[0, 5], [7, 9, 1]], key, build);
+  expect(TL.tlPathOf(keep, "x", [[0, 5], [7, 9, 1]], key, build)).toBe(p1);
+  expect(builds).toBe(1);
+  // A torn end gone, a span moved, one more span, another width, height or colour: built again.
+  for (const [spans, k] of [[[[0, 5], [7, 9]], key], [[[0, 5], [7, 9.5]], key], [[[0, 5], [7, 9.5], [10, 11]], key], [[[0, 5], [7, 9.5], [10, 11]], "1143|12|#e05050"], [[[0, 5], [7, 9.5], [10, 11]], "1143|6|#e05050"], [[[0, 5], [7, 9.5], [10, 11]], "1143|6|#ffffff"]]) {
+    const n = builds;
+    const p = TL.tlPathOf(keep, "x", spans, k, build);
+    expect(builds).toBe(n + 1);
+    expect(p.s).toBe(spans);
+    expect(TL.tlPathOf(keep, "x", spans.map((sp) => sp.slice()), k, build)).toBe(p);
+  }
+  // Each layer by its own id.
+  expect(TL.tlPathOf(keep, "y", [[0, 5]], key, build)).not.toBe(TL.tlPathOf(keep, "x", [[0, 5]], key, build));
+  expect(TL.TL_MADE.paths - before).toBe(builds);
+  // Events arriving in a running turn: the layout's lists are new arrays at each event (tlTail),
+  // but only the lanes the running turn changed are built again.
+  for (const [n, cw] of [[8, 1370], [2000, 1370]]) {
+    const done = strip(n - 1);
+    const t0 = T0 + (n - 1) * 100000;
+    const at = (k) => t0 + 190000 + k * 2000;
+    const lanes = new Map();
+    let b = 0;
+    const paint = (L) => { for (const [k, spans] of L.spans) TL.tlPathOf(lanes, k, spans, `${cw}|12`, () => ({ n: ++b })); };
+    let m = timelineModel(null, [...done, runningHead(n, 1, t0)], cw, "clock", at(1), null);
+    paint(m.L);
+    expect(b).toBe(m.L.spans.size);
+    for (let k = 2; k <= 6; k++) {
+      const was = new Map([...m.L.spans].map(([key, s]) => [key, JSON.stringify(s)]));
+      m = timelineModel(m, [...done, runningHead(n, k, t0)], cw, "clock", at(k), null);
+      const changed = [...m.L.spans].filter(([key, s]) => was.get(key) !== JSON.stringify(s)).length;
+      const b0 = b;
+      paint(m.L);
+      expect(b - b0).toBe(changed);
+      expect(changed).toBeLessThan(m.L.spans.size);
+    }
+  }
+});

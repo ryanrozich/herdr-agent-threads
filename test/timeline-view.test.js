@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import * as TL from "../mods/agent-threads/timeline.js";
 import { ALL_ROWS, SUB_ALPHA, trajInks, LEDGER_KINDS } from "../mods/agent-threads/ledger.js";
 import { keySheet } from "../mods/agent-threads/ui.js";
-import { alphaForTest as alpha, fixture, frame, H, handlerAfterId, keyEv, makeCx, pane, settle, setup, theme, Threads, unsliced } from "./render-harness.js";
+import { alphaForTest as alpha, fixture, frame, H, handlerAfterId, keyEv, makeCx, paintKit, painted, pane, settle, setup, theme, Threads, unsliced } from "./render-harness.js";
 
 setup();
 
@@ -631,5 +631,73 @@ test("timeline view: working on and off on the last turn at 2,000 turns places n
   } finally {
     setSystemTime();
     H.state.terminals[0].status = "idle";
+  }
+});
+
+// The paths one frame paints (window.paint_path, the harness's paintKit), in order.
+function paintedFrame(b, cb) {
+  painted.length = 0;
+  frame(b, cb);
+  return painted.map(([path, color]) => ({ path, color }));
+}
+
+test("timeline paint: each layer's path is built once for a layout and painted again as it is; selection changes, a key move and the tick build none, and the kept paths are the paths built anew", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "300", "--subagents"), "bottom", 1440);
+  paintKit(true);
+  try {
+    const p0 = TL.TL_MADE.paths;
+    shownFrame(b, cb);
+    const one = paintedFrame(b, cb);
+    // The lanes' layers and the fail marks, each one painted path, built once.
+    expect(one.length).toBeGreaterThanOrEqual(b.tlModel.L.spans.size + 1);
+    expect(TL.TL_MADE.paths - p0).toBe(one.length);
+    const rows = b.ledgerRows().filter((r) => r.kind === "tr");
+    const again = () => {
+      const n = paintedFrame(b, cb);
+      expect(n.length).toBe(one.length);
+      n.forEach((p, k) => { expect(p.path).toBe(one[k].path); expect(p.color).toEqual(one[k].color); });
+    };
+    for (const r of rows.slice(0, 5)) { b.tsel = r.key; again(); }
+    b.key(keyEv("j"), cb);
+    again();
+    setSystemTime(new Date(Date.now() + 1000));
+    again();
+    setSystemTime();
+    expect(TL.TL_MADE.paths - p0).toBe(one.length);
+    // The same pixels: with nothing kept, the paths built anew are the kept ones, call for call.
+    b.tlKeep = null;
+    const fresh = paintedFrame(b, cb);
+    expect(fresh.map((p) => p.path.cmds)).toEqual(one.map((p) => p.path.cmds));
+    expect(fresh.map((p) => p.color)).toEqual(one.map((p) => p.color));
+    expect(fresh.every((p, k) => p.path !== one[k].path)).toBe(true);
+    expect(TL.TL_MADE.paths - p0).toBe(2 * one.length);
+    // Hidden, the strip keeps no paths either.
+    b.key(keyEv("b"), cb);
+    frame(b, cb);
+    expect(b.tlKeep ?? null).toBe(null);
+  } finally {
+    setSystemTime();
+    paintKit(false);
+  }
+});
+
+test("timeline paint: the hatch is one stroked path, kept with the layout's breaks, so a selection change neither filters the breaks nor builds it again", async () => {
+  const { b, cb } = await dockPane(fixture("--subagents"), "bottom", 1440);
+  paintKit(true);
+  try {
+    shownFrame(b, cb);
+    const one = paintedFrame(b, cb);
+    const hatch = one.filter((p) => p.path.cmds[0][0] === "stroke");
+    expect(hatch.length).toBe(1);
+    expect(hatch[0].path.cmds.length).toBe(1 + 2 * TL.hatchLines(b.tlModel.L.gaps, b.tlModel.cw, 3 * TL.TL_LANE).lines.length);
+    const p0 = TL.TL_MADE.paths;
+    for (const r of b.ledgerRows().filter((x) => x.kind === "tr").slice(0, 3)) {
+      b.tsel = r.key;
+      const n = paintedFrame(b, cb);
+      expect(n.filter((p) => p.path === hatch[0].path).length).toBe(1);
+    }
+    expect(TL.TL_MADE.paths).toBe(p0);
+  } finally {
+    paintKit(false);
   }
 });
