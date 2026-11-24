@@ -1219,3 +1219,34 @@ test("shaping: a turn never shaped whose run alone was cut shows the pane's unsh
     expect(p.v.baseRows.find((r) => r.turn === big).shape).toEqual(p.v.blankShape());
   } finally { p.end(); }
 }, 300000);
+
+// The mark is set only by the check inside shape() that is followed by its reshape in the same
+// call: every reshape of a turn run alone starts with the turn marked, and a draw that is not
+// stopped leaves no turn marked. Several turns that can never fit, in view and off it, through
+// a new width (every row left to reshape, the walk ending early each draw) and a wheel up. The
+// draw's 8 ms after its rows stop the draws that ran one alone once its reshape has ended: no
+// run is cut, so no mark is left and no cut is counted.
+test("shaping: a turn run alone is marked only as its reshape starts, and a draw not stopped leaves no mark", async () => {
+  const p = await pricedDrain({ after: 8 });
+  try {
+    const big = [p.turns.at(-2), p.turns.at(-5), p.turns.at(-40), p.turns.at(-90)];
+    p.begin();
+    for (const t of big) p.restale(t, 44000);
+    const at = [];
+    const reshape = p.v.reshape;
+    p.v.reshape = function (...a) { if (this.unitAlone) at.push(Boolean(a[0].aloneMark)); return reshape.apply(this, a); };
+    const marked = () => p.turns.filter((t) => t.aloneMark).length;
+    const check = (frames) => { for (const f of frames) if (!f.stopped) expect(marked()).toBe(0); };
+    const each = (n) => { const fs = []; for (let k = 0; k < n; k++) { fs.push(p.step()); check(fs.slice(-1)); } return fs; };
+    // Each run alone here stops its draw, and the 5 s after a stop (312 frames) shape nothing.
+    let frames = each(1600);
+    p.v.width -= 40;
+    frames = frames.concat(each(1600));
+    p.v.wheelN = (p.v.wheelN ?? 0) + 1;
+    p.v.follow = false;
+    frames = frames.concat(each(400));
+    expect(at.length).toBeGreaterThanOrEqual(8);
+    expect(at.every(Boolean)).toBe(true);
+    expect([frames.filter((f) => f.stopped).length > 0, marked(), p.v.aloneCut ?? 0]).toEqual([true, 0, 0]);
+  } finally { p.end(); }
+}, 300000);
