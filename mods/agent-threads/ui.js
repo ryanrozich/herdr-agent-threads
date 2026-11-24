@@ -2553,7 +2553,7 @@ export class RowWindow {
   constructor(cap) { this.cap = cap; this.from = null; this.to = null; this.at = null; }
   // The sessions start over: row keys are a session's index and a turn's number, so the old
   // range could match turns in the new rows.
-  reset() { this.from = null; this.to = null; this.at = null; }
+  reset() { this.from = null; this.to = null; this.at = null; this.outMemo = null; }
   // Every row, keeping the range for later (the Pinned view, which shows five pins at most).
   whole(list) { this.at = { a: 0, z: list.rows.length }; return this.at; }
   // Resolves the range, and moves it as these say:
@@ -2621,15 +2621,21 @@ export class RowWindow {
     const edge = later ? z : a;
     return this.turnFrom(list, edge) ?? this.lastTurnBefore(list, edge);
   }
-  // The turns the range leaves out above and below it.
+  // The turns the range leaves out above and below it. Counted once for the rows (by their
+  // array and ver, which a splice moves on) and the range: every probe batch refits the list,
+  // and the rows outside a window can be tens of thousands.
   outside(list) {
     const { rows } = list;
     const { a, z } = this.at ?? { a: 0, z: rows.length };
+    const m = this.outMemo;
+    if (m && m.rows === rows && m.ver === list.ver && m.n === rows.length && m.a === a && m.z === z) return m.out;
     let earlier = 0;
     let later = 0;
     for (let i = 0; i < a; i++) if (TURN_KINDS.has(rows[i].kind)) earlier++;
     for (let i = z; i < rows.length; i++) if (TURN_KINDS.has(rows[i].kind)) later++;
-    return { earlier, later };
+    const out = { earlier, later };
+    this.outMemo = { rows, ver: list.ver, n: rows.length, a, z, out };
+    return out;
   }
   // The keys up and down step through (keys: every turn's, in order), with "older" (the Show
   // earlier item) before the range's first turn and "newer" (Show later) after its last.

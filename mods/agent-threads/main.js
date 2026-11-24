@@ -2861,7 +2861,8 @@ export default class Threads extends View {
 
   // Every row, in the list's window or not (winPlace): what the keys and the search step through.
   allRows() { this.rows(); return this.baseRows ?? []; }
-  winList() { return { rows: this.baseRows ?? [], index: this.baseIndex ?? new Map() }; }
+  // ver: moved on by each splice of the base rows (spliceRows), which keeps their array.
+  winList() { return { rows: this.baseRows ?? [], index: this.baseIndex ?? new Map(), ver: this.baseVer ?? 0 }; }
   winReport() { return { from: this.win.from, to: this.win.to, ...this.win.outside(this.winList()) }; }
 
   // The list's window (ui.js RowWindow), [a, z) in baseRows: the scroll the pane is about to
@@ -3361,6 +3362,7 @@ export default class Threads extends View {
       const d = out.length - gone;
       for (let i = a; i <= z; i++) this.baseIndex.delete(this.baseRows[i].key);
       this.baseRows.splice(a, gone, ...out);
+      this.baseVer = (this.baseVer ?? 0) + 1;
       this.baseSizes.splice(a, gone, ...sizes);
       // The new rows, and every row after them when the count changed.
       const to = d === 0 ? a + out.length : this.baseRows.length;
