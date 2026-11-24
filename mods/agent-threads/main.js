@@ -4925,18 +4925,27 @@ export default class Threads extends View {
         // one row at a rough height (mdrest) stands for the rest until later frames bring it.
         let job = pm.split.get(i);
         if (!job) pm.split.set(i, (job = mdSplit(md, MD_MAX, true)));
-        this.splitOn(job);
+        // Parts a read made before Herdr stopped it (mdSplitOn) are not the job's.
+        if (job.parts.length > job.n) job.parts.length = job.n;
         const parts = job.parts;
-        const one = job.done && parts.length === 1;
         let j = 0;
         let shown = 0;
-        for (; j < parts.length; j++) {
-          const { text: src, table } = parts[j];
-          const row = this.partRow(pm, item, `md:${key}:${one ? i : `${i}.${j}`}`, src, table, j, one && linked?.[i] && src === seg.text ? linked[i] : null);
-          if (!row) break;
-          push(row);
-          shown += src.length;
-        }
+        const rowsOn = () => {
+          const one = job.done && parts.length === 1;
+          for (; j < parts.length; j++) {
+            const { text: src, table } = parts[j];
+            const row = this.partRow(pm, item, `md:${key}:${one ? i : `${i}.${j}`}`, src, table, j, one && linked?.[i] && src === seg.text ? linked[i] : null);
+            if (!row) return false;
+            push(row);
+            shown += src.length;
+          }
+          return true;
+        };
+        // The rows of the parts split so far first, then the split (in a light draw in its own
+        // time), then the new parts' rows.
+        const all = rowsOn();
+        this.splitOn(job);
+        if (all) rowsOn();
         if (j < parts.length || !job.done) {
           this.shapeLeft = (this.shapeLeft ?? 0) + 1;
           this.otherLeft = (this.otherLeft ?? 0) + 1;
@@ -6046,16 +6055,10 @@ export default class Threads extends View {
   // An open reply's Markdown segment split into its parts (chunks within MD_MAX, tables
   // apart), in this draw's reshaping time: a read at a time (SPLIT_LINES, SPLIT_UNITS) until
   // it is spent, the rest in later frames. On the rig a 120 KB reply's split alone took 44 ms.
-  // A light draw gives it SHAPE_MIN_MS, as it gives a part's new row (partRow).
   splitOn(job) {
     // Parts a read made before Herdr stopped it (mdSplitOn) are not the job's.
     if (job.parts.length > job.n) job.parts.length = job.n;
-    const max = this.partMax();
-    while (!job.done && (this.shapeSpent ?? 0) <= max) {
-      const t0 = now();
-      this.splitSome(job);
-      this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
-    }
+    this.readsOn(job, (x) => this.splitSome(x));
     if (!job.done) {
       this.shapeLeft = (this.shapeLeft ?? 0) + 1;
       this.otherLeft = (this.otherLeft ?? 0) + 1;
@@ -6064,12 +6067,20 @@ export default class Threads extends View {
   splitSome(job) { mdSplitOn(job, SPLIT_LINES, SPLIT_UNITS); }
   // The reply's segments (segmentsJob) in this draw's reshaping time, as its split (splitOn):
   // a read of SPLIT_LINES lines and SPLIT_UNITS characters at a time.
-  segsOn(job) {
-    const max = this.partMax();
-    while (!job.done && (this.shapeSpent ?? 0) <= max) {
+  segsOn(job) { this.readsOn(job, (x) => this.segsSome(x)); }
+  // Reads of an open reply's split or segments in this draw's reshaping time. A light draw
+  // gives them SHAPE_MIN_MS of their own (splitSpent), apart from the parts' rows' (partRow),
+  // which are made first: in one draw's 2 ms the split left no time for a row, and the card
+  // showed none of the parts it had.
+  readsOn(job, read) {
+    const light = this.light;
+    const max = light ? SHAPE_MIN_MS : this.partMax();
+    while (!job.done && ((light ? this.splitSpent : this.shapeSpent) ?? 0) <= max) {
       const t0 = now();
-      this.segsSome(job);
-      this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
+      read(job);
+      const d = now() - t0;
+      if (light) this.splitSpent = (this.splitSpent ?? 0) + d;
+      else this.shapeSpent = (this.shapeSpent ?? 0) + d;
     }
   }
   segsSome(job) { segmentsOn(job, SPLIT_LINES, SPLIT_UNITS); }
@@ -7334,6 +7345,7 @@ export default class Threads extends View {
     if (!this.rowJob) this.shapeSpent = 0;
     const spent = this.shapeSpent ?? 0;
     this.buildSpent = 0;
+    this.splitSpent = 0;
     this.shapeFrame = (this.renders ?? 0) + 1;
     this.renderOpen = true;
     let out;
@@ -7348,7 +7360,7 @@ export default class Threads extends View {
       }
     }
     // The draw's cost apart from reshaping and building rows sets the next draw's time for them.
-    this.frameBase = Math.max(0, now() - this.renderAt - Math.max(0, (this.shapeSpent ?? 0) - spent) - (this.buildSpent ?? 0));
+    this.frameBase = Math.max(0, now() - this.renderAt - Math.max(0, (this.shapeSpent ?? 0) - spent) - (this.buildSpent ?? 0) - (this.splitSpent ?? 0));
     return out;
   }
 

@@ -7091,8 +7091,8 @@ test("a part whose height comes back rough waits behind the placeholder and is s
   v.rows();
   expect([first, shown()]).toEqual([[1, 2, true], parts]);
 }, 60000);
-// The light draw after a stopped draw gives an open reply's split and new rows SHAPE_MIN_MS
-// (2 ms), not the reshaping time of a full draw: it stays short.
+// The light draw after a stopped draw gives an open reply's new rows SHAPE_MIN_MS (2 ms) and
+// its split 2 ms of its own, not the reshaping time of a full draw: it stays short.
 test("the light draw after a stopped draw reshapes for SHAPE_MIN_MS, not a full draw's time", async () => {
   const { v, cx, keys } = await openLong(shortParas(4000));
   v.probeDue = function () { this.probeLeft = 0; return []; };
@@ -7100,8 +7100,8 @@ test("the light draw after a stopped draw reshapes for SHAPE_MIN_MS, not a full 
   const r = costedFrames(v, cx, 400, await cardDone(v, keys), { stopAfter: 1, onFrame: () => light.push(v.light) });
   costLog("capped, the light draw's time", r);
   const ms = r.frames.filter((x, i) => light[i] && x.ok).map((x) => x.ms);
-  // The rest of a draw, 2 ms, and the read or row that crosses it.
-  expect([ms.length > 0, ms.every((x) => x <= P121.rest + 2 + 2)]).toEqual([true, true]);
+  // The rest of a draw, 2 ms each, and the row (2 ms) and the read (1 ms) that cross them.
+  expect([ms.length > 0, ms.every((x) => x <= P121.rest + 2 + 2 + 2 + 1)]).toEqual([true, true]);
 }, 60000);
 
 // A light draw measures no part, so through the light window after a stopped draw the pane does
