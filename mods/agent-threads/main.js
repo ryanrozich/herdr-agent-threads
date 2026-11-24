@@ -161,9 +161,14 @@ const CUT_MS = 5000;
 // How soon a render Herdr stopped is asked for again, and how long a scroll to a place waits
 // for the rows to be built and shaped before it goes ahead with the heights it has.
 const CUT_WATCH_MS = 250;
-// Lines of an open reply's split read between two looks at the draw's time (splitOn): about
-// 2 ms of short paragraphs at the rig's price for the split.
+// How much of an open reply's split is read between two looks at the draw's time (splitOn):
+// at most SPLIT_LINES lines and SPLIT_UNITS of work (mdSplitOn), whatever the text's shape.
+// On the rig 128 lines of short paragraphs (about 4 KB) took 0.61 to 0.83 ms in the open draw;
+// SPLIT_UNITS is about half of that, 0.4 ms at the cold rate (about 0.00005 ms a unit), and a
+// read runs past it by at most one part made (with a table split out, about 1 ms), or by a
+// word longer than MD_MAX, a part of its own (a line with no space).
 const SPLIT_LINES = 128;
+const SPLIT_UNITS = 8192;
 // What a draw should cost. Reshaping and building rows share what the rest of the last draw
 // left of it, each down to its floor, so a machine where the rest of a draw is slow does
 // less of both per frame and stays clear of Herdr's 50 ms stop.
@@ -6011,8 +6016,8 @@ export default class Threads extends View {
     return m;
   }
   // An open reply's Markdown segment split into its parts (chunks within MD_MAX, tables
-  // apart), in this draw's reshaping time: SPLIT_LINES lines at a time until it is spent, the
-  // rest in later frames. A capped reply's split alone took about 64 ms on the rig.
+  // apart), in this draw's reshaping time: a read at a time (SPLIT_LINES, SPLIT_UNITS) until
+  // it is spent, the rest in later frames. On the rig a 120 KB reply's split alone took 44 ms.
   splitOn(job) {
     // Parts a read made before Herdr stopped it (mdSplitOn) are not the job's.
     if (job.parts.length > job.n) job.parts.length = job.n;
@@ -6026,7 +6031,7 @@ export default class Threads extends View {
       this.otherLeft = (this.otherLeft ?? 0) + 1;
     }
   }
-  splitSome(job) { mdSplitOn(job, SPLIT_LINES); }
+  splitSome(job) { mdSplitOn(job, SPLIT_LINES, SPLIT_UNITS); }
   // One part's row of an open reply. It is kept on the turn's record (rows) with its height
   // (partHs, under the layout it was worked out for, partGeo), so a later build of the card
   // sizes only new parts: building and sizing the 2,086 rows of a reply of 1,040 short

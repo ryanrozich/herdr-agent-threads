@@ -438,62 +438,222 @@ export function tableNeed(md, charW) {
 }
 
 export function mdChunks(md, max = MD_MAX) { return mdSplitOn(mdSplit(md, max)).parts; }
+// UTF-8 bytes of s from i to j, as utf8Len counts them, and where the count ended: one past j
+// when a surrogate pair straddles it.
+function utf8Run(s, i, j) {
+  let n = 0;
+  for (; i < j; i++) {
+    const c = s.charCodeAt(i);
+    n++;
+    if (c < 0x80) continue;
+    if (c < 0x800) { n += 1; continue; }
+    if (c >= 0xd800 && c < 0xdc00) {
+      const d = s.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d < 0xe000) { n += 3; i++; continue; }
+    }
+    n += 2;
+  }
+  return [n, i];
+}
+// packed() a piece at a time: { chunk, len } is the run so far, and emit gets each run made.
+function packAdd(pk, p, pLen, sepLen, sep, max, emit) {
+  if (!pk.len) { pk.chunk = [p]; pk.len = pLen; }
+  else if (pk.len + sepLen + pLen > max) { emit(pk.chunk.join(sep), pk.len); pk.chunk = [p]; pk.len = pLen; }
+  else { pk.chunk.push(p); pk.len += sepLen + pLen; }
+}
+function packEnd(pk, sep, emit) {
+  const last = pk.chunk.join(sep);
+  if (last) emit(last, pk.len);
+  pk.chunk = [];
+  pk.len = 0;
+}
+// Work a read may do before it stops (SPLIT_UNITS in the pane): each character it measures,
+// each character of a part it makes (four with a table to split out), and LINE_UNITS for each
+// line it reads or looks at (two for a word of a line split at words). Weighed so that a unit
+// takes about the same time whatever the text's shape (without the JIT, 8 to 27 ns).
+const LINE_UNITS = 16;
 // mdChunks as a job that stops and goes on, so an open reply's split can share a draw's time
-// (a 200,000-character reply took about 64 ms on the rig, past Herdr's 50 ms for a draw).
-// mdSplit(md) starts one; mdSplitOn(job, lines) reads up to that many more of its lines. Its
-// parts so far are job.parts (chunks, or with tables each chunk's splitTables parts), and
-// job.done is set once the whole text is in. A part never changes once made, so the parts made
-// so far are always the first of the whole split's. A Markdown block over max is split when its
-// last line is read, all at once.
+// (on the rig a 120 KB reply's took 44 ms, near Herdr's 50 ms for a draw). mdSplit(md) starts
+// one; mdSplitOn(job, lines, units) goes on with it until that many lines are read or that much
+// work is done (units), whatever the text's shape: a line longer than a read is measured over
+// several, and a block over max is split over several, as mdChunks splits it (splitBlock, or
+// at lines and words). Its parts so far are job.parts (chunks, or with tables each chunk's
+// splitTables parts), and job.done is set once the whole text is in. A part never changes once
+// made, so the parts made so far are always the first of the whole split's.
 export function mdSplit(md, max = MD_MAX, tables = false) {
   const text = String(md ?? "");
-  const job = { text, max, tables, at: 0, n: 0, cur: [], curLen: 0, fence: null, chunk: [], len: 0, parts: [], done: false };
+  const job = {
+    text, max, tables, at: 0, n: 0, cur: [], lens: [], curN: 0, curLen: 0, fence: null, chunk: [], len: 0,
+    line: null, lineLen: 0, lineScan: 0, blk: null, work: 0, parts: [], done: false,
+  };
   if (text.length <= max && utf8Len(text) <= max) { job.parts = tables ? splitTables(text) : [text]; job.n = job.parts.length; job.done = true; }
   return job;
 }
-// What one read of lines changes is written back to the job at its end, in one step: Herdr
-// stops a script that runs too long with no catch, and parts made by a read it stopped are
-// dropped on the next.
-export function mdSplitOn(job, lines = Infinity) {
+// What one read changes is written back to the job at its end, in one step: Herdr stops a
+// script that runs too long with no catch. Arrays it only adds to (parts, the block's lines)
+// are cut back to the job's counts at the next read; the rest is copied.
+export function mdSplitOn(job, lines = Infinity, units = Infinity) {
   if (job.done) return job;
   const { text, max, tables, parts } = job;
   parts.length = job.n;
-  let { at, curLen, fence, len } = job;
-  let cur = job.cur.slice();
-  let chunk = job.chunk.slice();
-  // packed() over the blocks' pieces, one at a time: a chunk is made once the next piece
-  // would not fit in it.
-  const made = (c) => { if (tables) parts.push(...splitTables(c)); else parts.push(c); };
-  const piece = (p, pLen = utf8Len(p)) => {
-    if (!len) { chunk = [p]; len = pLen; }
-    else if (len + 2 + pLen > max) { made(chunk.join("\n\n")); chunk = [p]; len = pLen; }
-    else { chunk.push(p); len += 2 + pLen; }
+  let { at, curLen, fence, line, lineLen, lineScan, work } = job;
+  let cur = job.cur;
+  let lens = job.lens;
+  cur.length = job.curN;
+  lens.length = job.curN;
+  const top = { chunk: job.chunk.slice(), len: job.len };
+  const copyRun = (r) => r && { ...r, out: { chunk: r.out.chunk.slice(), len: r.out.len }, inner: r.inner && { ...r.inner, chunk: r.inner.chunk.slice() }, then: copyRun(r.then) };
+  let blk = job.blk && { ...job.blk, sp: job.blk.sp && { ...job.blk.sp }, run: copyRun(job.blk.run) };
+  let done = false;
+  const start = work;
+  let n = 0;
+  let steps = 0;
+  const spent = () => steps++ > 0 && (n >= lines || work - start >= units);
+  // Work left in this read, for a line or word measured a part at a time.
+  const room = () => (units === Infinity ? Infinity : units - (work - start));
+  // A chunk made, and with tables its table split: a walk of its lines when it has a bar.
+  const made = (c) => {
+    work += c.length;
+    if (!tables) { parts.push(c); return; }
+    work += c.includes("|") ? 3 * c.length : 0;
+    parts.push(...splitTables(c));
   };
-  const block = () => {
-    const b = cur.join("\n");
-    if (curLen <= max) piece(b, curLen);
-    else for (const p of splitBlock(b, max) ?? packed(wordsIn(cur, max), "\n", max)) piece(p);
+  // A block's pieces, joined a paragraph apart into chunks of at most max (packed, "\n\n").
+  const piece = (p, pLen) => packAdd(top, p, pLen, 2, "\n\n", max, (c) => made(c));
+  const close = () => {
+    if (curLen <= max) { const b = cur.join("\n"); work += b.length; piece(b, curLen); }
+    else blk = { L: cur, lens, p: 0, i: 0, sp: null, run: null };
     cur = [];
+    lens = [];
     curLen = 0;
   };
-  for (let n = 0; n < lines && at <= text.length; n++) {
+  // A block over max, a step at a time, as splitBlock(b, max) ?? packed(wordsIn(b's lines,
+  // max), "\n", max) splits it: from p, the first table or closed fence (sp, found from i);
+  // the lines before it, at lines and words; its body in the room its repeated lines leave,
+  // each piece with them; then on from its end. With none, or no room, the rest at lines and
+  // words.
+  const plain = (from) => ({ from, to: blk.L.length, room: max, wrap: null, k: from, out: { chunk: [], len: 0 }, inner: null, next: null });
+  const runStep = () => {
+    const r = blk.run;
+    const { L } = blk;
+    const emit = (part, pLen) => (r.wrap ? piece(`${r.wrap.head}\n${part}${r.wrap.foot}`, r.wrap.extra + pLen) : piece(part, pLen));
+    const add = (p, pLen) => packAdd(r.out, p, pLen, 1, "\n", r.room, emit);
+    if (r.k >= r.to) {
+      packEnd(r.out, "\n", emit);
+      // The lines before a table or fence, then its body; after its body, on from its end.
+      if (r.then) { blk.run = r.then; return; }
+      blk.run = null;
+      if (r.next != null && r.next < L.length) { blk.p = r.next; blk.i = r.next; } else blk = null;
+      return;
+    }
+    const l = L[r.k];
+    if (blk.lens[r.k] <= r.room) { work += LINE_UNITS; add(l, blk.lens[r.k]); r.k++; return; }
+    // A line longer than the room: its words, packed with no space between (wordsIn).
+    if (!r.inner) r.inner = { pos: 0, chunk: [], len: 0, any: false, word: null, wLen: 0, wScan: 0 };
+    const w = r.inner;
+    if (w.word == null) {
+      const re = /\S+\s*/g;
+      re.lastIndex = w.pos;
+      const m = re.exec(l);
+      work += 2 * LINE_UNITS;
+      if (!m) {
+        if (!w.any) add(l, blk.lens[r.k]);
+        else packEnd(w, "", (c, cLen) => add(c, cLen));
+        r.inner = null;
+        r.k++;
+        return;
+      }
+      w.any = true;
+      w.pos = re.lastIndex;
+      w.word = m[0];
+      w.wLen = 0;
+      w.wScan = 0;
+    }
+    // A word measured a part at a time too: a line with no space is one word.
+    const [k, end] = utf8Run(w.word, w.wScan, Math.min(w.word.length, w.wScan + Math.max(256, room())));
+    work += end - w.wScan;
+    w.wLen += k;
+    w.wScan = end;
+    if (w.wScan < w.word.length) return;
+    const word = w.word;
+    w.word = null;
+    packAdd(w, word, w.wLen, 0, "", r.room, (c, cLen) => add(c, cLen));
+  };
+  const findStep = () => {
+    const { L, lens: ls } = blk;
+    const sp = blk.sp;
+    work += LINE_UNITS;
+    if (sp?.ch) {
+      // A fence's lines, to the one that closes it.
+      if (sp.j >= L.length) { blk.run = plain(blk.p); blk.sp = null; return; }
+      if (L[sp.j].match(FENCE)?.[1][0] !== sp.ch) { sp.j++; return; }
+      return found(sp.at, sp.j + 1, L[sp.at], `\n${L[sp.j]}`, ls[sp.at], 1 + ls[sp.j]);
+    }
+    if (sp?.table) {
+      if (sp.end < L.length && PIPE_ROW.test(L[sp.end])) { sp.end++; return; }
+      return found(sp.at, sp.end, `${L[sp.at]}\n${L[sp.at + 1]}`, "", ls[sp.at] + 1 + ls[sp.at + 1], 0);
+    }
+    const i = blk.i;
+    if (i >= L.length) { blk.run = plain(blk.p); return; }
+    if (PIPE_ROW.test(L[i]) && i + 1 < L.length && TABLE_RULE.test(L[i + 1]) && L[i + 1].includes("-")) { blk.sp = { table: true, at: i, end: i + 2 }; return; }
+    const f = L[i].match(FENCE);
+    if (f) { blk.sp = { ch: f[1][0], at: i, j: i + 1 }; return; }
+    blk.i++;
+  };
+  const found = (a, end, head, foot, headLen, footLen) => {
+    const topN = head.split("\n").length;
+    const from = a + topN;
+    const to = foot ? end - 1 : end;
+    const extra = headLen + 1 + footLen;
+    blk.sp = null;
+    if (extra * 2 > max || to <= from) { blk.run = plain(blk.p); return; }
+    const own = { from, to, room: max - extra, wrap: { head, foot, extra }, k: from, out: { chunk: [], len: 0 }, inner: null, next: end };
+    // The lines before it first, as their own run, then its body.
+    blk.run = a > blk.p ? { ...plain(blk.p), to: a, then: own } : own;
+  };
+  for (;;) {
+    if (blk) {
+      if (spent()) break;
+      if (blk.run) runStep();
+      else findStep();
+      continue;
+    }
+    if (line != null) {
+      // The line being read, measured a part at a time (a single line can be longer than a read).
+      if (spent()) break;
+      const lim = Math.min(line.length, lineScan + Math.max(256, room()));
+      const [k, end] = utf8Run(line, lineScan, lim);
+      work += end - lineScan;
+      lineLen += k;
+      lineScan = end;
+      if (lineScan < line.length) continue;
+      curLen += (cur.length ? 1 : 0) + lineLen;
+      cur.push(line);
+      lens.push(lineLen);
+      line = null;
+      continue;
+    }
+    if (at > text.length) {
+      if (cur.length) { close(); continue; }
+      packEnd(top, "\n\n", (c) => made(c));
+      done = true;
+      break;
+    }
+    if (spent()) break;
     let nl = text.indexOf("\n", at);
     if (nl < 0) nl = text.length;
-    const line = text.slice(at, nl);
+    const s = text.slice(at, nl);
     at = nl + 1;
-    const f = line.match(FENCE);
+    n++;
+    work += LINE_UNITS;
+    const f = s.match(FENCE);
     if (f) { if (!fence) fence = f[1][0]; else if (f[1][0] === fence) fence = null; }
-    else if (!fence && !line.trim()) { if (cur.length) block(); continue; }
-    curLen += (cur.length ? 1 : 0) + utf8Len(line);
-    cur.push(line);
+    else if (!fence && !s.trim()) { if (cur.length) close(); continue; }
+    line = s;
+    lineLen = 0;
+    lineScan = 0;
   }
-  const done = at > text.length;
-  if (done) {
-    if (cur.length) block();
-    const last = chunk.join("\n\n");
-    if (last) made(last);
-  }
-  Object.assign(job, { at, n: parts.length, cur, curLen, fence, chunk, len, done });
+  Object.assign(job, { at, n: parts.length, cur, lens, curN: cur.length, curLen, fence, chunk: top.chunk, len: top.len, line, lineLen, lineScan, blk, work, done });
   return job;
 }
 
