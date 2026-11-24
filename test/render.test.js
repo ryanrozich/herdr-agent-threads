@@ -7042,6 +7042,51 @@ test("an open reply's part record goes when its card closes, when the session is
   expect(got).toEqual([["close", 1, 0], ["restart", 1, 0], ["pick", 1, 0]]);
 }, 60000);
 
+// While a card's parts come in, the placeholder stands at a rough height for the text not shown
+// yet, so the card is about as tall as it will be (the list's end and its bar are about right):
+// at least a third of its settled height in every frame, not the parts shown and one line.
+test("while an open card's parts come in, the card is at least a third of its settled height", async () => {
+  const { v, cx, key } = await openLong(shortParas(4000));
+  v.probeDue = function () { this.probeLeft = 0; return []; };
+  const cardH = () => v.baseRows.reduce((h, x, i) => h + ((x.kind === "md" || x.kind === "mdrest") && (x.key.startsWith(`md:${key}:`) || x.key.startsWith(`mr:${key}:`)) ? v.baseSizes[i] : 0), 0);
+  const seen = [];
+  const r = costedFrames(v, cx, 400, await cardDone(v, key), { onFrame: () => seen.push(cardH()) });
+  const settled = cardH();
+  costLog("58 parts, the card's height", { ...r, ratio: seen.map((h) => Math.round((h / settled) * 100) / 100) });
+  expect([r.settled > 2, Math.min(...seen) >= settled / 3]).toEqual([true, true]);
+}, 60000);
+// A part whose height came back rough (out of time inside its sizing) is not shown: the
+// placeholder stands for it and the parts after it, and the next build sizes and shows it.
+test("a part whose height comes back rough waits behind the placeholder and is shown once sized", async () => {
+  const { v, cx, key } = await openLong(shortParas(300), true);
+  const md = v.mdHeight;
+  let rough = 0;
+  // The third part's first sizing runs out of time.
+  const parts = await splitOf(shortParas(300));
+  v.mdHeight = function (text) { if (!rough && text === parts[2]) { rough++; this.shapeLeft = (this.shapeLeft ?? 0) + 1; return 18; } return md.call(this, text); };
+  v.toggle(key, cx);
+  v.rows();
+  const shown = () => v.baseRows.filter((x) => x.kind === "md" && x.key.startsWith(`md:${key}:`)).map((x) => x.src);
+  const first = [rough, shown().length, v.baseRows.some((x) => x.kind === "mdrest" && x.key.startsWith(`mr:${key}:`))];
+  v.againOpen = true;
+  v.rowsKey = "again";
+  v.shapeSpent = 0;
+  v.rows();
+  expect([first, shown()]).toEqual([[1, 2, true], parts]);
+}, 60000);
+// The light draw after a stopped draw gives an open reply's split and new rows SHAPE_MIN_MS
+// (2 ms), not the reshaping time of a full draw: it stays short.
+test("the light draw after a stopped draw reshapes for SHAPE_MIN_MS, not a full draw's time", async () => {
+  const { v, cx, keys } = await openLong(shortParas(4000));
+  v.probeDue = function () { this.probeLeft = 0; return []; };
+  const light = [];
+  const r = costedFrames(v, cx, 400, await cardDone(v, keys), { stopAfter: 1, onFrame: () => light.push(v.light) });
+  costLog("capped, the light draw's time", r);
+  const ms = r.frames.filter((x, i) => light[i] && x.ok).map((x) => x.ms);
+  // The rest of a draw, 2 ms, and the read or row that crosses it.
+  expect([ms.length > 0, ms.every((x) => x <= P121.rest + 2 + 2)]).toEqual([true, true]);
+}, 60000);
+
 // Parts held through the light window after a stopped draw go on in the draw after it: a
 // timer asks for the open turns to be built again (againOpen), for the work left in them
 // (otherLeft). Herdr stops that draw inside the rebuild (stopAt, once, in the first draw after
