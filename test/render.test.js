@@ -21054,25 +21054,23 @@ async function cutScene() {
   expect(v.rows().at(-1).key).toBe("capped-later");
   return r;
 }
-// The frames after a jump until it settles: each shows the view before it or the row it goes
-// to, never a third place; the last shows the row.
-function noThirdPlace(v, cx, sim, before, key, n = 8, then = () => {}) {
+// The frames after a jump until it settles: each shows the row it goes to, never the old view
+// or a third place.
+function noThirdPlace(v, cx, sim, key, n = 8, then = () => {}) {
   const seen = [];
   for (let k = 0; k < n; k++) { probeFrame(v, cx); seen.push(shownIn(v, sim.last())); }
   then();
   settleList(v, cx, sim);
   seen.push(shownIn(v, sim.last()));
-  for (const [k, s] of seen.entries()) if (!s.includes(key) && !s.some((x) => before.includes(x))) throw new Error(`frame ${k + 1} shows ${s.join(", ")}`);
-  expect(seen.at(-1)).toContain(key);
+  for (const [k, s] of seen.entries()) if (!s.includes(key)) throw new Error(`frame ${k + 1} shows ${s.join(", ")}`);
 }
 
 test("past the cap, a pin's return past the cut, which waits for the card's measures, never shows a third place while it waits", async () => {
   const { v, cx, sim } = await cutScene();
   v.pinnedList = () => [{ key: "0:65", turn: v.findTurn("0:65"), pin: { n: 65 }, s: v.current(), state: "done" }];
-  const before = shownIn(v, sim.last());
   v.goPin(0, cx);
   expect(v.scrollTo?.until).toBeGreaterThan(0);
-  noThirdPlace(v, cx, sim, before, "0:65");
+  noThirdPlace(v, cx, sim, "0:65");
   listWindow = null;
 });
 
@@ -21085,14 +21083,12 @@ test("past the cap, Enter from the outline on a turn past the cut, which waits, 
   v.action("open", cx);
   expect(v.outlined()).toBe(false);
   expect(v.scrollTo?.until).toBeGreaterThan(0);
-  // The view before was the outline's, so every frame of the list shows the turn.
-  noThirdPlace(v, cx, sim, [], "0:65");
+  noThirdPlace(v, cx, sim, "0:65");
   listWindow = null;
 });
 
 test("past the cap, a jump past the cut while the rows are still reshaping (the scroll's 2 s wait) never shows a third place", async () => {
   const { v, cx, sim } = await cutScene();
-  const before = shownIn(v, sim.last());
   // As in a slow draw: the rows are built and reshaped over many frames.
   v.buildMax = () => 0;
   v.shapeBudget = 0;
@@ -21102,7 +21098,7 @@ test("past the cap, a jump past the cut while the rows are still reshaping (the 
   v.sel = "0:41";
   v.action("next", cx);
   expect(v.sel).toBe("0:42");
-  noThirdPlace(v, cx, sim, before, "0:42", 4, () => { delete v.buildMax; v.shapeBudget = null; });
+  noThirdPlace(v, cx, sim, "0:42", 4, () => { delete v.buildMax; v.shapeBudget = null; });
   listWindow = null;
 });
 
@@ -21237,4 +21233,49 @@ test("latest while a jump waits for the rows to reshape shows the end in the nex
   settleList(v, cx, sim);
   expect([v.follow, sim.last().end]).toEqual([true, true]);
   listWindow = null;
+});
+
+test("past the cap, a pin's place that is gone falls back to the turn's head while the return waits, under a moved cut", async () => {
+  const { v, cx, sim } = await cutScene();
+  v.pinnedList = () => [{ key: "0:65", turn: v.findTurn("0:65"), pin: { n: 65, anchor: ["md", "99.3"] }, s: v.current(), state: "done" }];
+  v.goPin(0, cx);
+  v.goPin(0, cx);
+  expect(v.scrollTo).toMatchObject({ key: "md:0:65:99.3", head: "0:65" });
+  noThirdPlace(v, cx, sim, "0:65");
+  listWindow = null;
+});
+
+test("past the cap, a jump that waits to a turn with pasted images holds the same item as it lands on: the tiles over the row", async () => {
+  const { v, cx, sim } = await cutScene();
+  Object.assign(v.findTurn("0:65"), { images: [{ path: "x.png" }], shapeKey: null });
+  v.rowsKey = null;
+  settleList(v, cx, sim);
+  // The jump waits on a rows build in slices, at the same width: no row changes its height.
+  v.buildMax = () => 0;
+  v.rowsKey = null;
+  probeFrame(v, cx);
+  v.sel = "0:64";
+  v.action("next", cx);
+  const waiting = offs(v, cx, sim, 3);
+  expect(v.scrollTo?.key).toBe("0:65");
+  delete v.buildMax;
+  settleList(v, cx, sim);
+  expect(shownIn(v, sim.last())).toContain("imgs:0:65");
+  expect(waiting).toEqual(Array(3).fill(Math.round(sim.last().off)));
+  listWindow = null;
+});
+
+test("a wheel up ends the end's own asks: the one 16 ms after the end is taken, and the end held through a re-wrap", async () => {
+  for (const rewrap of [false, true]) {
+    const { v, cx, sim } = await cutScene();
+    if (rewrap) { v.action("latest", cx); settleList(v, cx, sim); slowRows(v, cx); expect(v.anchor?.end).toBe(true); }
+    else { v.action("latest", cx); draw(v, cx); }
+    sim.wheel(600);
+    const at = Math.round(sim.off);
+    cx.flush(120, 3);
+    dropTimers(v, cx);
+    expect(offs(v, cx, sim, 3)).toEqual([at, at, at]);
+    fastRows(v);
+    listWindow = null;
+  }
 });
