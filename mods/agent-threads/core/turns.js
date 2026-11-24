@@ -840,8 +840,10 @@ export function shortModel(m) {
   return parts.length ? `${name} ${parts.join(".")}` : name;
 }
 
-// Markdown split into prose and fenced code blocks, in order.
+// Markdown split into prose and fenced code blocks, in order. With no fence anywhere it is one
+// prose segment, found without the pass over every line (an open turn's build of a long reply).
 export function segments(md) {
+  if (!md.includes("```") && !md.includes("~~~")) { const t = md.trim(); return t ? [{ kind: "md", text: t }] : []; }
   const out = [];
   const lines = md.split("\n");
   let prose = [];

@@ -6757,7 +6757,8 @@ function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0, scale = 1, onF
   v.wrapped = function (s, ...a) { spend(P.call + s.length * P.char); return wr.call(this, s, ...a); };
   const ls = v.linkSeg, so = v.segmentsOf;
   v.linkSeg = function (md, ...a) { spend(md.split("\n").filter((x) => x.trim()).length * P.segLine); return ls.call(this, md, ...a); };
-  v.segmentsOf = function (text) { spend(text.length * P.segChar); return so.call(this, text); };
+  // With no fence the split is two native scans (segments), not priced.
+  v.segmentsOf = function (text) { spend((/```|~~~/.test(text) ? text.length : 0) * P.segChar); return so.call(this, text); };
   // A read of the split is priced by the work it did, what it scanned and what it made; one
   // Herdr stopped is lost, as its state is written back only at its end (mdSplitOn).
   const ss = v.splitSome, hi = v.height;

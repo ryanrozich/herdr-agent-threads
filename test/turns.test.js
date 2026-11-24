@@ -105,6 +105,10 @@ test("formatting", () => {
   expect(fmtTokens(950)).toBe("950");
   expect(fmtDuration(102000)).toBe("1m 42s");
   expect(segments("a\n```\nx\n```").map((s) => s.kind)).toEqual(["md", "code"]);
+  // With no fence, one prose segment, trimmed, as the pass over each line gives it.
+  expect(segments("  a\n\n  b ``c`` ~~d~~\n\n")).toEqual([{ kind: "md", text: "a\n\n  b ``c`` ~~d~~" }]);
+  expect([segments(""), segments(" \n\n ")]).toEqual([[], []]);
+  expect(segments("a\n  ~~~\nx")).toEqual([{ kind: "md", text: "a" }, { kind: "code", lang: "", text: "x" }]);
 });
 
 // ---- fixtures made on the fly by make-fixture.js ----

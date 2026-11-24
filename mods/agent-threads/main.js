@@ -4877,15 +4877,18 @@ export default class Threads extends View {
     if (!text) out.push({ ...item, kind: "noreply", key: `nr:${key}` });
     let used = 0;
     let left = 0;
-    const segs = this.segmentsOf(text);
+    const selecting = this.selecting === key && this.selEditor?.key === key && text;
+    // The reply in prose and code, kept with its parts (partMemo) until it changes: on the rig
+    // the pass took 8.6 ms of the open of 120 KB, and the build runs again in each draw that
+    // brings parts in.
+    const pm = selecting ? null : this.partMemo(key, text);
+    const segs = pm ? (pm.segs ??= this.segmentsOf(text)) : this.segmentsOf(text);
     // Editors cannot be made while drawing: note the turn, and flushCode() makes them
     // on the next tick.
     const stale = segs.some((seg, i) => seg.kind === "code" && this.code.get(`${key}:${i}`)?.text !== seg.text)
       || [...this.code.keys()].some((k) => k.startsWith(`${key}:`) && segs[Number(k.slice(key.length + 1))]?.kind !== "code");
     if (stale) (this.codeDue ??= new Set()).add(key);
-    const selecting = this.selecting === key && this.selEditor?.key === key && text;
     const linked = selecting ? null : this.linkedSegs(key, segs);
-    const pm = selecting ? null : this.partMemo(key, text);
     if (pm) this.partGeo = this.rowsGeo();
     if (selecting) {
       const per = Math.max(8, Math.floor((this.inner() - 26) / SELECT_CHAR));
@@ -5957,7 +5960,10 @@ export default class Threads extends View {
   }
 
   // Link rules on a reply's prose segments, kept per turn until the reply, the rules or the
-  // repo change. The caps (20,000 characters, 25 links) are for the whole reply.
+  // repo change. The caps (20,000 characters, 25 links) are for the segments linked here. A
+  // segment over MD_MAX is left out (null): it is shown in parts, each linked on its own
+  // (partLinks) in the reshaping time, and a pass over it here is never read. On the rig that
+  // pass took 18.2 ms of a 46.9 ms open of 120 KB, in one call.
   linkedSegs(key, segs) {
     if (!this.links.length) return null;
     const sig = `${this.linksVer}|${this.repoSig()}|${segs.map((x) => `${x.kind}${x.text.length}`).join(",")}`;
@@ -5968,6 +5974,7 @@ export default class Threads extends View {
     let chars = 20000;
     let matches = 25;
     const out = segs.map((seg) => {
+      if (seg.kind === "md" && seg.text.length > MD_MAX) { chars -= seg.text.length; return null; }
       if (seg.kind !== "md" || chars <= 0 || matches <= 0) { chars -= seg.text.length; return seg.kind === "md" ? { md: seg.text, links: 0 } : null; }
       const r = this.linkSeg(seg.text, ctx, { maxChars: chars, maxMatches: matches });
       chars -= seg.text.length;
