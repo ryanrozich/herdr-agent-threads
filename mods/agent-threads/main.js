@@ -2860,13 +2860,12 @@ export default class Threads extends View {
       const from = this.rowsKey != null && this.baseRows?.length ? this.keptFrom(rest) : null;
       const index = from ? new Map(this.baseIndex) : new Map();
       if (from) for (let i = from.row; i < this.baseRows.length; i++) index.delete(this.baseRows[i].key);
-      // An open card's rows kept unbuilt keep the work their placeholders (mdrest) stand for: the
-      // open turns' rebuild is asked for only while some is counted.
+      // An open card's rows kept unbuilt keep whatever work they wait on (a placeholder, a part
+      // still to link, a height still to work out), which only a build of the card counts: each
+      // such card counts as work left, so the open turns' rebuild is asked for and counts it.
       if (from) for (const k of this.open) {
-        let at = this.baseIndex.get(k);
-        if (at == null || at >= from.row) continue;
-        const turn = this.baseRows[at].turn;
-        for (; at < from.row && this.baseRows[at].turn === turn; at++) if (this.baseRows[at].kind === "mdrest") { this.shapeLeft++; this.otherLeft++; }
+        const at = this.baseIndex.get(k);
+        if (at != null && at < from.row) { this.shapeLeft++; this.otherLeft++; }
       }
       job = this.rowJob = {
         key, rest, other, sessions: this.sessions.slice(), vers: this.sessions.map((x) => x.version),
