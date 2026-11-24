@@ -368,24 +368,6 @@ function utf8Len(s) {
   return n;
 }
 const FENCE = /^\s*(`{3,}|~{3,})/;
-// Pieces joined by sep into runs of at most max UTF-8 bytes (a longer piece alone). Each run's
-// length is kept as it grows: measuring the whole run again for every piece made a reply with
-// long tables cost more than Herdr's time for a draw.
-function packed(pieces, sep, max) {
-  const out = [];
-  const sepLen = utf8Len(sep);
-  let chunk = [];
-  let len = 0;
-  for (const p of pieces) {
-    const pLen = utf8Len(p);
-    if (!len) { chunk = [p]; len = pLen; }
-    else if (len + sepLen + pLen > max) { out.push(chunk.join(sep)); chunk = [p]; len = pLen; }
-    else { chunk.push(p); len += sepLen + pLen; }
-  }
-  const last = chunk.join(sep);
-  if (last) out.push(last);
-  return out;
-}
 // A Markdown table: lines that start with "|", the second of them a rule (TABLE_RULE).
 const tableLine = (l) => l.trim().startsWith("|");
 // A Markdown block split into its tables and the text around them, in order:
@@ -455,7 +437,10 @@ function utf8Run(s, i, j) {
   }
   return [n, i];
 }
-// packed() a piece at a time: { chunk, len } is the run so far, and emit gets each run made.
+// Pieces joined by sep into runs of at most max UTF-8 bytes (a longer piece alone), a piece at
+// a time: { chunk, len } is the run so far, and emit gets each run made. Each run's length is
+// kept as it grows: measuring the whole run again for every piece made a reply with long
+// tables cost more than Herdr's time for a draw.
 function packAdd(pk, p, pLen, sepLen, sep, max, emit) {
   if (!pk.len) { pk.chunk = [p]; pk.len = pLen; }
   else if (pk.len + sepLen + pLen > max) { emit(pk.chunk.join(sep), pk.len); pk.chunk = [p]; pk.len = pLen; }
@@ -476,8 +461,8 @@ const LINE_UNITS = 16;
 // (on the rig a 120 KB reply's took 44 ms, near Herdr's 50 ms for a draw). mdSplit(md) starts
 // one; mdSplitOn(job, lines, units) goes on with it until that many lines are read or that much
 // work is done (units), whatever the text's shape: a line longer than a read is measured over
-// several, and a block over max is split over several, as mdChunks splits it (splitBlock, or
-// at lines and words). Its parts so far are job.parts (chunks, or with tables each chunk's
+// several, and a block over max is split over several, as mdChunks splits it (a table or
+// fenced code piece by piece with its head lines again, else at lines and words). Its parts so far are job.parts (chunks, or with tables each chunk's
 // splitTables parts), and job.done is set once the whole text is in. A part never changes once
 // made, so the parts made so far are always the first of the whole split's.
 export function mdSplit(md, max = MD_MAX, tables = false) {
@@ -502,7 +487,7 @@ export function mdSplitOn(job, lines = Infinity, units = Infinity) {
   cur.length = job.curN;
   lens.length = job.curN;
   const top = { chunk: job.chunk.slice(), len: job.len };
-  const copyRun = (r) => r && { ...r, out: { chunk: r.out.chunk.slice(), len: r.out.len }, inner: r.inner && { ...r.inner, chunk: r.inner.chunk.slice() }, then: copyRun(r.then) };
+  const copyRun = (r) => r && { ...r, out: { chunk: r.out.chunk.slice(), len: r.out.len }, inner: r.inner && { ...r.inner, chunk: r.inner.chunk.slice() }, rest: copyRun(r.rest) };
   let blk = job.blk && { ...job.blk, sp: job.blk.sp && { ...job.blk.sp }, run: copyRun(job.blk.run) };
   let done = false;
   const start = work;
@@ -527,11 +512,11 @@ export function mdSplitOn(job, lines = Infinity, units = Infinity) {
     lens = [];
     curLen = 0;
   };
-  // A block over max, a step at a time, as splitBlock(b, max) ?? packed(wordsIn(b's lines,
-  // max), "\n", max) splits it: from p, the first table or closed fence (sp, found from i);
-  // the lines before it, at lines and words; its body in the room its repeated lines leave,
-  // each piece with them; then on from its end. With none, or no room, the rest at lines and
-  // words.
+  // A block over max, a step at a time, so that every chunk still draws as one: from p, the
+  // first table or closed fence (sp, found from i); the lines before it, at lines and words;
+  // its body in the room its repeated lines leave, each piece with them (a table's header and
+  // rule rows, or the fence's opening and closing lines); then on from its end. With none, or
+  // when the repeated lines would take half the room, the rest at lines and words.
   const plain = (from) => ({ from, to: blk.L.length, room: max, wrap: null, k: from, out: { chunk: [], len: 0 }, inner: null, next: null });
   const runStep = () => {
     const r = blk.run;
@@ -541,14 +526,14 @@ export function mdSplitOn(job, lines = Infinity, units = Infinity) {
     if (r.k >= r.to) {
       packEnd(r.out, "\n", emit);
       // The lines before a table or fence, then its body; after its body, on from its end.
-      if (r.then) { blk.run = r.then; return; }
+      if (r.rest) { blk.run = r.rest; return; }
       blk.run = null;
       if (r.next != null && r.next < L.length) { blk.p = r.next; blk.i = r.next; } else blk = null;
       return;
     }
     const l = L[r.k];
     if (blk.lens[r.k] <= r.room) { work += LINE_UNITS; add(l, blk.lens[r.k]); r.k++; return; }
-    // A line longer than the room: its words, packed with no space between (wordsIn).
+    // A line longer than the room: its words, packed with no space between.
     if (!r.inner) r.inner = { pos: 0, chunk: [], len: 0, any: false, word: null, wLen: 0, wScan: 0 };
     const w = r.inner;
     if (w.word == null) {
@@ -609,7 +594,7 @@ export function mdSplitOn(job, lines = Infinity, units = Infinity) {
     if (extra * 2 > max || to <= from) { blk.run = plain(blk.p); return; }
     const own = { from, to, room: max - extra, wrap: { head, foot, extra }, k: from, out: { chunk: [], len: 0 }, inner: null, next: end };
     // The lines before it first, as their own run, then its body.
-    blk.run = a > blk.p ? { ...plain(blk.p), to: a, then: own } : own;
+    blk.run = a > blk.p ? { ...plain(blk.p), to: a, rest: own } : own;
   };
   for (;;) {
     if (blk) {
@@ -659,49 +644,6 @@ export function mdSplitOn(job, lines = Infinity, units = Infinity) {
 
 const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 const PIPE_ROW = /^\s*\|/;
-// A block too long for one chunk that holds a table or fenced code, split so that every chunk
-// still draws as one: each later piece of a table starts with its header and rule rows again,
-// and each piece of a fenced block is closed and opened again with the same fence line. The
-// lines before and after it split as other text. Null for a block with neither, or when the
-// repeated lines would take half the room.
-function splitBlock(b, max) {
-  const ls = b.split("\n");
-  let at = -1;
-  let end = -1;
-  let head;
-  let foot = "";
-  for (let i = 0; i < ls.length && at < 0; i++) {
-    if (PIPE_ROW.test(ls[i]) && i + 1 < ls.length && TABLE_RULE.test(ls[i + 1]) && ls[i + 1].includes("-")) {
-      at = i;
-      end = i + 2;
-      while (end < ls.length && PIPE_ROW.test(ls[end])) end++;
-      head = `${ls[i]}\n${ls[i + 1]}`;
-    }
-    const f = ls[i].match(FENCE);
-    if (f) {
-      let j = i + 1;
-      while (j < ls.length && ls[j].match(FENCE)?.[1][0] !== f[1][0]) j++;
-      if (j >= ls.length) return null;
-      at = i;
-      end = j + 1;
-      head = ls[i];
-      foot = `\n${ls[j]}`;
-    }
-  }
-  if (at < 0) return null;
-  const top = head.split("\n").length;
-  const body = ls.slice(at + top, foot ? end - 1 : end);
-  const extra = utf8Len(head) + 1 + utf8Len(foot);
-  if (extra * 2 > max || !body.length) return null;
-  const room = max - extra;
-  const pre = ls.slice(0, at);
-  const tail = ls.slice(end);
-  const rest = (part) => (part.length ? packed(wordsIn(part, max), "\n", max) : []);
-  const own = packed(wordsIn(body, room), "\n", room).map((part) => `${head}\n${part}${foot}`);
-  return [...rest(pre), ...own, ...(tail.length ? splitBlock(tail.join("\n"), max) ?? rest(tail) : [])];
-}
-// Lines, with any line longer than the room split at words.
-function wordsIn(ls, room) { return ls.flatMap((l) => (utf8Len(l) <= room ? [l] : packed(l.match(/\S+\s*/g) ?? [l], "", room))); }
 
 // Herdr's Markdown reads $…$ as inline math and shows the text between as written, so a
 // **bold** span between two prices keeps its asterisks. Dollar signs outside code are
