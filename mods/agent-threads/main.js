@@ -6024,10 +6024,12 @@ export default class Threads extends View {
   // An open reply's Markdown segment split into its parts (chunks within MD_MAX, tables
   // apart), in this draw's reshaping time: a read at a time (SPLIT_LINES, SPLIT_UNITS) until
   // it is spent, the rest in later frames. On the rig a 120 KB reply's split alone took 44 ms.
+  // A light draw gives it SHAPE_MIN_MS, as it gives a part's new row (partRow).
   splitOn(job) {
     // Parts a read made before Herdr stopped it (mdSplitOn) are not the job's.
     if (job.parts.length > job.n) job.parts.length = job.n;
-    while (!job.done && (this.shapeSpent ?? 0) <= this.shapeMax()) {
+    const max = this.light ? SHAPE_MIN_MS : this.shapeMax();
+    while (!job.done && (this.shapeSpent ?? 0) <= max) {
       const t0 = now();
       this.splitSome(job);
       this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
