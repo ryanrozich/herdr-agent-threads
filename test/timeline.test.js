@@ -534,6 +534,41 @@ test("timeline press: looks at the turns that start within 4 px right of the pre
   expect(late).toBeLessThan(14 + 2 * Math.ceil(4 / pitch + 2) + 6);
 });
 
+test("timeline press: on turns under 2 px, drawn as one span per lane from the turn's x and at least 1 px wide, a press on a span gets that turn, and its failed call where the span is drawn red", () => {
+  // 500 short turns across 1,370 px with a 0.4 px break, under 2 px each and many under 1 px,
+  // whose span runs 1 px from its turn's x, past the turn's own width into the break. Every
+  // 50th turn is 60 s long, wide enough for its own bars; presses within 6 px of one are left
+  // out.
+  const heads = Array.from({ length: 500 }, (_, i) => {
+    const k = i % 4;
+    const calls = k === 0 ? [["Read", "a", 100, 300], ["Bash", "x", 400, 900, true]] : k === 1 ? [["Read", "a", 100, 300]] : k === 3 ? [["Bash", "x", 100, 600, true]] : null;
+    return { ...head(turn(i + 1, calls ? ["a", calls] : ["a"], { end: T0 + (i % 50 === 0 ? 60000 : 1000 + (i % 3) * 500) })), t0: T0 + i * 120000 };
+  });
+  const L = timelineLayout(heads, 1370, "clock", T0 + 1e9);
+  const wide = L.turns.filter((t) => t.w >= 2);
+  expect(wide.length).toBe(10);
+  expect(L.turns.filter((t) => t.w < 1).length).toBeGreaterThan(100);
+  const span = (t) => [t.x, t.x + Math.max(t.w, 1)];
+  let pressed = 0;
+  let past = 0;
+  for (let x = 0.05; x < 600; x += 0.1) {
+    if (wide.some((t) => x > t.x - 6 && x < t.x + t.w + 6)) continue;
+    const under = L.turns.map((t, ti) => ti).filter((ti) => L.turns[ti].w < 2 && heads[ti].cnt?.tools && x >= span(L.turns[ti])[0] && x <= span(L.turns[ti])[1]);
+    if (!under.length) continue;
+    pressed++;
+    const got = timelineHit(L, heads, x, "tools");
+    const ti = heads.findIndex((h) => h.key === got.turn);
+    const st = stepsOf(heads[ti]).find((it) => it.key === got.key);
+    const failed = Boolean(heads[ti].cnt.failed);
+    expect([x, under.includes(ti), st?.lane, st?.failed === failed]).toEqual([x, true, "tools", true]);
+    if (x > L.turns[ti].x + L.turns[ti].w) past++;
+  }
+  // Presses past a turn's own width, inside its drawn span, come up too.
+  expect(pressed).toBeGreaterThan(1000);
+  expect(past).toBeGreaterThan(100);
+});
+
+
 test("timeline press: a press at no number finds nothing", () => {
   const h = head(turn(1, [[["Read", "a", 30000, 40000]]]));
   const L = timelineLayout([h], 400, "clock");
