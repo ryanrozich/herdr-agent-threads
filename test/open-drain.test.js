@@ -935,15 +935,40 @@ test("the opening: a row on screen refused 64 draws runs alone once, as its draw
 // 44 ms of fixed work in every draw ahead of the owed row (ahead: in react, before payOwed, as
 // on this branch applyStick, fitColumn and react are), 2 after it, rows of 8 ms. A row on
 // screen fits no such draw (44 + 8 and the margin pass 50), and from the 64th draw the lightest
-// draw is one of these too, so the rows can never fit and are owed 64 draws. A run alone
-// would start at 44 ms and be cut at 50: one stop a row, and the row held blank for its text.
-// So none starts where the time already spent and its estimate pass the limit less the margin,
-// while a lighter draw could fit it: no row is run and no draw is stopped, and the rows stay as
-// they were (blank) for as long as every draw is this heavy.
-test("the opening: with 44 ms of work ahead of the owed row in every draw, a row that can end in no such draw is not run, and no draw is stopped", async () => {
+// draw is one of these too, so the rows can never fit and are owed. A run alone that starts at
+// 44 ms is expected to be cut at 50, so none starts where the time already spent and its
+// estimate pass the limit less the margin: no row is run and no draw is stopped for a second
+// 64 draws the row is refused in. The estimate may be too high, so then the row runs alone
+// once all the same, as the draw's first unit. Here the estimate is right: the run is cut, one
+// stop, and the row is held, blank, for its text. The other rows on screen do the same, one
+// after each 5 s of plain draws.
+test("the opening: with 44 ms of work ahead of the owed row in every draw, a row that can end in no such draw waits a second 64 draws, then runs alone once, at one stop", async () => {
   const { v, frames } = await costlyWheel(8, 44, 450, wheelUp, { stop: true, after: 2, ahead: true });
-  expect([frames.filter((f) => f.stopped).length, frames.reduce((n, f) => n + f.starts.length, 0), frames.reduce((n, f) => n + f.over, 0), v.aloneCut ?? 0]).toEqual([0, 0, 0, 0]);
+  const ran = frames.flatMap((f, k) => (f.starts.length ? [k] : []));
+  expect(ran[0]).toBeGreaterThanOrEqual(126);
+  expect(ran[0]).toBeLessThanOrEqual(130);
+  expect(frames.slice(0, ran[0]).filter((f) => f.stopped).length).toBe(0);
+  expect(frames.map((f) => f.starts.length).filter((n) => n > 1)).toEqual([]);
+  // Each run cut, each a stop, each leaving its turn's mark; the next row about 5 s after.
+  const held = v.sessions[0].turns.filter((t) => t.shapeMark?.alone).length;
+  expect([ran.length, frames.filter((f) => f.stopped).length, frames.reduce((n, f) => n + f.over, 0), held]).toEqual([2, 2, 2, 2]);
+  expect(ran[1] - ran[0]).toBeGreaterThan(5000 / 16 - 10);
   expect(frames.slice(-10).filter((f) => f.blank === 0)).toEqual([]);
+}, 300000);
+
+// A rate four times too high, 40 ms of work ahead of the owed row in every draw, rows that
+// really cost 4 ms (40 + 4 and the 2 after fit in 50): estimated at about 18 ms, each row looks
+// as if no such draw could end it, so the time spent holds it. Nothing teaches the rate down:
+// only a long turn that is shaped does. Before, the rows stayed blank for good. After a second
+// 64 draws refused, a row runs alone all the same, ends in time, and is kept, with no stop; the
+// rows on screen fill, one a draw.
+test("the opening: with a rate four times too high and 40 ms of work ahead in every draw, a row the time spent holds runs alone after a second 64 draws, and is kept", async () => {
+  const { v, frames } = await costlyWheel(4, 40, 220, (v, cx, host) => { wheelUp(v, cx, host); v.shapeRate *= 4; }, { stop: true, after: 2, ahead: true });
+  const ran = frames.flatMap((f, k) => (f.starts.length ? [k] : []));
+  expect(ran[0]).toBeGreaterThanOrEqual(126);
+  expect(ran[0]).toBeLessThanOrEqual(130);
+  expect([frames.filter((f) => f.stopped).length, frames.reduce((n, f) => n + f.over, 0), v.aloneCut ?? 0, frames.at(-1).blank]).toEqual([0, 0, 0, 0]);
+  expect(frames.slice(0, ran[0]).filter((f) => f.blank === 0)).toEqual([]);
 }, 300000);
 
 // The same with one draw in every 40 of 2 ms (frames 39, 79, ...): that light draw keeps the

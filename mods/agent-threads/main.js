@@ -4890,7 +4890,12 @@ export default class Threads extends View {
     }
     if (alone) {
       if ((this.unitsRun ?? 0) > 0 || spent > 0 || max < 0 || live || (!this.lineScreen && this.pastLine())) return true;
-      if (this.cutWhereNow(est)) { if (this.lineScreen) this.oweRow(); return true; }
+      // Held by the time spent for a second OWED_DRAWS draws on screen: run all the same, as the
+      // estimate may be too high and nothing else would teach it down. One stop at most.
+      if (this.cutWhereNow(est) && (turn.refused?.n ?? 0) < 2 * OWED_DRAWS) {
+        if (this.lineScreen) { this.oweRow(); this.refuse(turn); }
+        return true;
+      }
       this.unitAlone = true;
       this.aloneRun = (this.aloneRun ?? 0) + 1;
       if (this.owedRun === turn) this.owedAlone = (this.owedAlone ?? 0) + 1;
@@ -5003,8 +5008,10 @@ export default class Threads extends View {
   // Whether a run alone of est ms, started now, would be cut while a lighter draw could fit it:
   // the time this draw has spent, read from the clock, and est pass Herdr's limit less the margin,
   // and est with the margin alone does not. It waits, with no stop, for a draw with less work
-  // ahead of it (one on screen is owed). A turn no draw can fit (est and the margin past the
-  // limit) still runs once, as a draw's first unit: its estimate may be wrong.
+  // ahead of it (one on screen is owed and counts the draw as refused), up to a second
+  // OWED_DRAWS draws: then it runs alone once all the same (shapeHeld), as the estimate may be
+  // too high. A turn no draw can fit (est and the margin past the limit) still runs once, as a
+  // draw's first unit: its estimate may be wrong.
   cutWhereNow(est) {
     return est != null && est + HOST_MARGIN_MS <= HOST_MS && now() - (this.renderAt ?? 0) + est + HOST_MARGIN_MS > HOST_MS;
   }
