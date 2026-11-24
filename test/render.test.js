@@ -55,6 +55,7 @@ import {
   never,
   openAt,
   openingPane,
+  pinsIdle,
   overlays,
   ownOf,
   pane,
@@ -1423,7 +1424,7 @@ test("the Pinned view: every pin is a stop for up and down, a pinned agent messa
     { k: "p", o: "peer", t: peer("Tests are green on helper-a"), ts: at(2) }, { k: "t", t: "Good." }, { k: "d", ms: 800, ts: at(3) },
     { k: "p", o: "human", t: "Add the line", ts: at(4) }, { k: "t", t: "Added." }, { k: "d", ms: 600, ts: at(5) },
   ]);
-  await new Promise((r) => setTimeout(r, 20)); // the first read of pins.json
+  await until(() => v.pinsRead, "the first read of pins.json");
   v.prefs = { ...v.prefs, agentTurns: true, agentRail: false };
   draw(v, cx);
   try {
@@ -4513,7 +4514,7 @@ test("pins.json that does not parse is left alone, and pins still work until it 
   expect(v.pinnedList().length).toBe(1);
   delete recordFiles[PINS];
 });
-const saved0 = () => new Promise((r) => setTimeout(r, 30));
+const saved0 = () => pinsIdle();
 
 // Where the pin icon is drawn in the strip under an open turn's message, at a 500 px body.
 const pinX = (v, key) => { const L = stripLayout(500, v.stripText(v.findTurn(key), true), !v.findTurn(key).agent); return (L.pin[0] + L.pin[1]) / 2; };
@@ -4867,12 +4868,12 @@ test("pins saved in the order they were pinned load oldest first, all of them, w
   const first = await pinPane("--extra", "6");
   const k = first.keys();
   for (const i of [5, 1, 3]) { first.v.sel = k[i]; first.v.action("pin", first.cx); }
-  const saved = await new Promise((r) => setTimeout(r, 30)).then(() => recordFiles[PINS]);
+  const saved = await pinsIdle().then(() => recordFiles[PINS]);
   const order = (j) => allPins(JSON.parse(j)).map((p) => p.n);
   expect(order(saved)).toEqual([6, 2, 4]); // the file keeps the order they were pinned in
   // A new pane reads that file as an older build wrote it.
   const { v } = await pane(fixture("--extra", "6"));
-  await new Promise((r) => setTimeout(r, 20));
+  await until(() => v.pinsRead, "the first read of pins.json");
   expect(v.pinnedList().map((p) => p.turn?.n)).toEqual([2, 4, 6]);
   expect(v.pinnedList().map((p) => p.state)).not.toContain("gone");
   expect(order(recordFiles[PINS])).toEqual([6, 2, 4]); // loading changed nothing

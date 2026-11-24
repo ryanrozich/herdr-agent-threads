@@ -14,6 +14,21 @@ import {
   keySheet, fitHints, hintWidth, agentState, htmlLine, htmlChunks, promptParts, pinPromptText, outlineText,
 } from "../mods/agent-threads/ui.js";
 
+// Tests of the themes installed in the person's own Herdr folder are off unless
+// THREADS_TEST_HOST_THEMES=1: a test's result must not depend on what is in a person's own
+// folder, and tests do not read a person's files unasked. Off, they show as skipped.
+const HOST_THEMES = process.env.THREADS_TEST_HOST_THEMES === "1";
+const hostTest = test.skipIf(!HOST_THEMES);
+function hostThemes() {
+  const dir = join(homedir(), ".config/herdr-app/themes");
+  if (!existsSync(dir)) return [];
+  const out = [];
+  for (const f of readdirSync(dir).filter((x) => x.endsWith(".json"))) {
+    try { out.push(JSON.parse(readFileSync(join(dir, f), "utf8"))); } catch { /* not a theme */ }
+  }
+  return out;
+}
+
 const key = (key, mods = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...mods } });
 
 test("keys: plain keys act, chords with cmd, ctrl, alt or fn never do", () => {
@@ -117,20 +132,20 @@ test("alpha: every colour form", () => {
   expect(alpha("transparent", 0.5)).toBe("transparent");
 });
 
-test("alpha: every colour of a synthetic theme, and of every installed theme, parses", () => {
-  // The synthetic set always runs, so the test does not depend on the machine (A7); the
-  // installed themes (read only) are checked too when the folder exists.
+test("alpha: every colour of a synthetic theme parses", () => {
+  // The synthetic set always runs, so the test does not depend on the machine (A7). The
+  // installed themes are checked by the host-theme test below, when it is switched on.
   const colours = new Set(["#1e1e1e", "#FFF", "#e6e6e6cc", "rgb(30, 30, 30)", "rgba(255,255,255,0.4)", "rgb(10 20 30 / 25%)"]);
   for (const c of colours) expect(alpha(c, 0.5)).toMatch(/^#[0-9a-f]{8}$/);
-  const dir = join(homedir(), ".config/herdr-app/themes");
-  if (!existsSync(dir)) return;
+});
+
+hostTest("alpha: every colour of every installed theme parses", () => {
+  const colours = new Set();
   const walk = (v) => {
     if (typeof v === "string" && /^(#|rgb)/i.test(v.trim())) colours.add(v.trim());
     else if (v && typeof v === "object") Object.values(v).forEach(walk);
   };
-  for (const f of readdirSync(dir).filter((f) => f.endsWith(".json"))) {
-    try { walk(JSON.parse(readFileSync(join(dir, f), "utf8"))); } catch { /* not a theme */ }
-  }
+  for (const c of hostThemes()) walk(c);
   for (const c of colours) expect(alpha(c, 0.5)).toMatch(/^#[0-9a-f]{8}$/);
 });
 
@@ -207,12 +222,10 @@ test("the day band: raised in a dark theme, darker than raised in a light one, n
   expect(bandFill({ ...light, background: "var(--bg)" })).toBe(light.raised);
   expect(over("#00000080", "#ffffff")).toBe("#7f7f7f");
   expect(over("#123456", "#ffffff")).toBe("#123456");
-  // Installed themes (read only): dark ones keep raised; light ones stay within selected.
-  const dir = join(homedir(), ".config/herdr-app/themes");
-  if (!existsSync(dir)) return;
-  for (const f of readdirSync(dir).filter((x) => x.endsWith(".json"))) {
-    let c;
-    try { c = JSON.parse(readFileSync(join(dir, f), "utf8")); } catch { continue; }
+});
+
+hostTest("bandFill: every installed theme with the colours it needs gives a colour", () => {
+  for (let c of hostThemes()) {
     c = c.colors ?? c;
     if (!c.background || !c.foreground || !c.raised) continue;
     expect(typeof bandFill(c)).toBe("string");
@@ -771,13 +784,13 @@ test("cardLabelColor: muted where it reads at 4.5:1 on the card, else foreground
   const light = { raised: "#f2f2f2", background: "#ffffff", muted: "#5c5c5c", foreground: "#1a1a1a" };
   expect(cardLabelColor(light)).toBe(light.muted);
   expect(cardLabelColor({ ...light, muted: "#9a9a9a" })).toBe(light.foreground);
-  // Installed theme files that carry these colours (read only); Herdr derives them for
-  // palette-only files, which the debug report's contrast list covers at run time.
-  const dir = join(homedir(), ".config/herdr-app/themes");
-  if (!existsSync(dir)) return;
-  for (const f of readdirSync(dir).filter((x) => x.endsWith(".json"))) {
-    let c;
-    try { c = JSON.parse(readFileSync(join(dir, f), "utf8")); } catch { continue; }
+});
+
+// Installed theme files that carry these colours; Herdr derives them for palette-only files,
+// which the debug report's contrast list covers at run time.
+hostTest("cardLabelColor: on every installed theme that carries the colours, the label reads at 4.5:1 or is foreground", async () => {
+  const { cardLabelColor, contrast } = await import("../mods/agent-threads/ui.js");
+  for (let c of hostThemes()) {
     c = c.colors ?? c;
     if (!c.muted || !c.raised || !c.foreground) continue;
     const ink = cardLabelColor(c);

@@ -18,6 +18,8 @@ shellcheck -S warning $(git ls-files '*.sh') # shell scripts
 sh test/scan-private.sh                      # no home paths, names, emails or real ids, in text and in PNGs
 ```
 
+Test switches (all off by default): `THREADS_TEST_HOST_THEMES=1` also runs the three tests in `test/ui.test.js` that read the themes installed in your own Herdr folder (`~/.config/herdr-app/themes`, read only). They show as skipped otherwise, because a test's result must not depend on what is in a person's own folder.
+
 Fixtures and screenshots are synthetic (the staged `acme-web` session, `test/make-hero.js`). Never commit a real transcript, path or name.
 
 ## Pull requests
