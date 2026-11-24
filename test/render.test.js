@@ -21171,7 +21171,7 @@ test("under a cut that does not move, a rail jump keeps the view for its first f
 function slowRows(v, cx) { v.buildMax = () => 0; v.shapeBudget = 0; stillAt(v, 380); probeFrame(v, cx); }
 const fastRows = (v) => { delete v.buildMax; v.shapeBudget = null; };
 // The offset of each of n frames.
-const offs = (v, cx, sim, n) => Array.from({ length: n }, () => (probeFrame(v, cx), Math.round(sim.last().off)));
+const offs = (v, cx, sim, n) => Array.from({ length: n }, () => { probeFrame(v, cx); return Math.round(sim.last().off); });
 
 test("past the cap, a reader's wheel while a jump waits for the rows to reshape moves the view, and it stays: the jump is dropped", async () => {
   const { v, cx, sim } = await cutScene();
