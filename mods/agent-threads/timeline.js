@@ -141,7 +141,7 @@ function roomOf(heads, scale, nowMs) {
 export function timelineGeo(heads, cw, scale = "clock", nowMs = Date.now()) {
   TL_MADE.geo++;
   const n = heads.length;
-  const geo = { cw, scale, turns: [], index: new Map(), walls: [], gap: 0, total: 0, steps: 0, live: -1, room: 0 };
+  const geo = { cw, scale, turns: [], index: new Map(), walls: [], gap: 0, total: 0, steps: 0, live: -1, room: 0, m: 0, min: 0 };
   if (!n || !(cw > 0)) return geo;
   const GAP = cw < 700 ? 14 : 30;
   const MIN = cw < 700 ? 30 : 48;
@@ -177,6 +177,8 @@ export function timelineGeo(heads, cw, scale = "clock", nowMs = Date.now()) {
     widths = walls.map((w) => Math.max(min, w * m));
     // No turn has a length: each gets an even share.
     if (!(all > 0)) widths = walls.map(() => target / n);
+    // The px per ms and the least width, for tlLastLength.
+    else { geo.m = m; geo.min = min; }
   }
   let x = 0;
   heads.forEach((h, ti) => {
@@ -188,6 +190,27 @@ export function timelineGeo(heads, cw, scale = "clock", nowMs = Date.now()) {
   geo.gap = gap;
   geo.total = x;
   return geo;
+}
+// How far the last turn's end may move on the strip before the turns are placed again
+// (tlLastLength), in px of the view.
+export const TL_SLACK = 1;
+// The places G with only the last turn's length changed to wall (room: the running room, 0
+// when it does not run), at G's px per ms: the other turns keep their places, so the strip
+// may end up to TL_SLACK px short of or past its edge. Null when that turn's end would move
+// more than TL_SLACK px at zoom z, or G has no px per ms (by steps, or no turn has a length).
+// was: the last heading G was placed for.
+function tlLastLength(G, heads, wall, room, z, was) {
+  const n = heads.length;
+  if (!(G.m > 0) || G.turns.length !== n) return null;
+  const t = G.turns[n - 1];
+  const w = Math.max(G.min, wall * G.m);
+  if (Math.abs(w - t.w) * z > TL_SLACK) return null;
+  const turns = G.turns.slice();
+  turns[n - 1] = { ...t, w };
+  const walls = G.walls.slice();
+  walls[n - 1] = wall;
+  const steps = G.steps - Math.max(1, stepN(was)) + Math.max(1, stepN(heads[n - 1]));
+  return { ...G, turns, walls, total: G.total - t.w + w, steps, live: room > 0 ? n - 1 : -1, room };
 }
 // How far the timeline zooms: until four steps fill it (the reference's limit), so it grows
 // with the session.
@@ -270,13 +293,16 @@ function cutOf(S) {
 // The layout P with its last turn laid out again from heads, whose other headings are P's
 // (timelineModel checks): the lists cut back to before that turn, copied, then that turn
 // alone. The places, the numbers and the breaks stay P's. The tracks are P's (a copy) less
-// the old last heading's (was), and the new one's worked out: one track pass an event. With
-// no cut (the last turn out of view), P itself.
-function tlTail(P, heads, was) {
+// the old last heading's (was), and the new one's worked out: one track pass an event. G: the
+// places, P's or P's with only the last turn's length changed (tlLastLength), whose number
+// then gets that turn's width and length text again. With no cut (the last turn out of view),
+// P itself on G.
+function tlTail(P, heads, was, G = P.geo) {
   TL_MADE.tail++;
   const c = P.cut;
-  if (!c) return P;
-  const out = { ...P, spans: new Map(), fails: P.fails.slice(0, c.fails), grow: P.grow.slice(0, c.grow), ticks: P.ticks.slice(0, c.ticks), gaps: P.gaps.slice(0, c.gaps), to: c.to, tracks: new Map(P.tracks) };
+  const on = G === P.geo ? null : { geo: G, turns: G.turns, total: G.total, zmax: tlMaxZoom(G) };
+  if (!c) return on ? { ...P, ...on } : P;
+  const out = { ...P, ...on, spans: new Map(), fails: P.fails.slice(0, c.fails), grow: P.grow.slice(0, c.grow), ticks: P.ticks.slice(0, c.ticks), gaps: P.gaps.slice(0, c.gaps), to: c.to, tracks: new Map(P.tracks) };
   out.tracks.delete(was);
   for (const [k, list] of P.spans) {
     const s = c.spans.get(k);
@@ -285,9 +311,15 @@ function tlTail(P, heads, was) {
     l[s[0] - 1] = s[1].slice();
     out.spans.set(k, l);
   }
-  const G = P.geo;
   const S = { out, heads, G, z: P.z, x0: P.x0, cw: P.cw, scale: P.scale, range: null, walls: G.walls, add: spanAdder(out), M: TL_MARGIN, kept: null, failEnd: c.failEnd, nti: [], nx: [], nw: [] };
-  layTurn(S, heads.length - 1);
+  const n = heads.length;
+  layTurn(S, n - 1);
+  const j = P.labels.length - 1;
+  if (on && j >= 0 && P.labels[j].ti === n - 1 && S.nti[0] === n - 1) {
+    out.labels = P.labels.slice();
+    out.labels[j] = { ...P.labels[j], tw: S.nw[0] };
+    roomOfNumbers([out.labels[j]], heads, out);
+  }
   return out;
 }
 // One turn of a layout: its number's place, its spans (or one per lane under 2 px), its fail
@@ -703,7 +735,8 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now(), ly = null) {
 // The timeline for a draw: the turns placed and the view laid out, each made again only when
 // what it depends on changes, and the running turn's growing bars at nowMs. prev: the last
 // model (or null). The places are kept for the same heads (the ledger's, by identity), width,
-// scale and running room; the layout for the same places and view. So while a turn runs, a
+// scale and running room, and, but for the last turn's length, at working on or off
+// (tlLastLength); the layout for the same places and view. So while a turn runs, a
 // draw does only tlGrow, and the rest of the strip stays where it was. A layout made again
 // takes the last one's tracks for the headings it still has (timelineLayout kept).
 export function timelineModel(prev, heads, cw, scale = "clock", nowMs = Date.now(), view = null) {
@@ -713,10 +746,18 @@ export function timelineModel(prev, heads, cw, scale = "clock", nowMs = Date.now
   // ledger() makes a new heads array at every change to the session, but keeps each finished
   // turn's heading. When only the last heading is new and its length on the strip is the
   // same (its room while it runs), the places hold, and only that turn is laid out again.
-  const tail = base && !same && scale === "clock" && lastOnly(prev.heads, heads) && prev.geo.walls[heads.length - 1] === (room > 0 ? room : wallOf(heads[heads.length - 1]));
-  const geo = same || tail ? prev.geo : timelineGeo(heads, cw, scale, nowMs);
+  const n = heads.length;
+  const wall = room > 0 ? room : wallOf(heads[n - 1]);
+  const only = !same && scale === "clock" && prev && prev.cw === cw && prev.scale === scale && lastOnly(prev.heads, heads);
+  const tail = only && base && prev.geo.walls[n - 1] === wall;
+  // Working on or off (the room comes or goes) with only the last heading new: only that turn's
+  // length changes, so the others keep their places while its end moves TL_SLACK px or less.
+  // At Fit that holds from a few hundred turns, where placing them all again costs most.
   const vk = view ? `${view.z}|${view.x0}` : "";
-  const L = same && prev.vk === vk ? prev.L : tail && prev.vk === vk ? tlTail(prev.L, heads, prev.heads[heads.length - 1]) : timelineLayout(heads, cw, scale, nowMs, view, geo, null, prev?.L?.tracks ?? null);
+  const was = only ? prev.heads[n - 1] : null;
+  const regeo = only && !tail && (prev.geo.room > 0) !== (room > 0) && prev.vk === vk ? tlLastLength(prev.geo, heads, wall, room, prev.L.z ?? 1, was) : null;
+  const geo = same || tail ? prev.geo : (regeo ?? timelineGeo(heads, cw, scale, nowMs));
+  const L = same && prev.vk === vk ? prev.L : (tail || regeo) && prev.vk === vk ? tlTail(prev.L, heads, was, geo) : timelineLayout(heads, cw, scale, nowMs, view, geo, null, prev?.L?.tracks ?? null);
   return { heads, cw, scale, geo, vk, L, grow: tlGrow(L, nowMs) };
 }
 // Whether b is a with only its last heading new (the same turn): every other heading the same

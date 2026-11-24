@@ -820,9 +820,9 @@ test("timeline model: working on or off on the last turn alone places nothing ag
     const m1 = timelineModel(m0, [...done, { ...run }], cw, "clock", at, null);
     const c1 = count(before);
     expect([m1.geo.room, m1.geo.live, m1.geo.walls[n - 1]]).toEqual([room, n - 1, room]);
-    // A whole placing of these heads, to bound how far the kept places are from it.
+    // A whole placing of these heads, and how far it would move the turns from their places.
     const fresh = timelineGeo(m1.heads, cw, "clock", at);
-    const moved = Math.abs(fresh.turns[n - 1].x + fresh.turns[n - 1].w - (m0.geo.turns[n - 1].x + m0.geo.turns[n - 1].w));
+    const moved = Math.max(...fresh.turns.map((t, ti) => Math.abs(t.x - m0.geo.turns[ti].x)));
     const wide = (m) => (tlBox(m.L, n - 1).w >= 2 ? 1 : 0);
     if (kept) {
       expect(moved).toBeLessThanOrEqual(1);
