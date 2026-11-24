@@ -1220,11 +1220,10 @@ test("a step from a match in a long tail being checked again goes the way it is 
   expect(places(v)).toEqual(want(v, "please look"));
 }, 120000);
 
-// An older step from a match in a tail much longer than a slice, being checked again: the
-// match has no place, and the turns between the tail's next turn and it are not checked
-// again yet. The step goes back from the selection itself, so it lands on the nearest older
-// match, with none passed over.
-test("an older step from a match near the end of a 4,000-turn tail being checked again lands on the nearest older match, with none passed over", async () => {
+// An older step from a match near the end of a 4,000-turn tail, a turn coming in just
+// before: no match is passed over. The tail is longer than HITS_TAIL_MAX, so the set is found
+// again from the newest turn down, and the step goes from the selection's new place.
+test("an older step from a match near the end of a 4,000-turn tail, a turn coming in just before, lands on the nearest older match, with none passed over", async () => {
   const { v, cx, s } = await longPane(5600);
   tailMore(s, 4000);
   settleRows(v, cx);
@@ -1239,33 +1238,35 @@ test("an older step from a match near the end of a 4,000-turn tail being checked
     const from = v.sel;
     tailMore(s, 1);
     v.hitsNow();
-    r.checking = v.hitsNow().cur.tail != null && !v.hitsNow().at.has(from);
     v.action("olderMatch", cx);
     const nearest = direct(v, "please look").find((k) => n(k) < n(from));
     r.from = n(from);
     r.passedOver = n(nearest) - n(v.sel);
   });
-  expect(r).toEqual({ checking: true, from: 9598, passedOver: 0 });
+  expect(r).toEqual({ from: 9598, passedOver: 0 });
 }, 300000);
 
-// When the turns back from the selection to the nearest older match are more than one slice
-// can check, the step stays where it is and says nothing passed over: the next press goes on
-// from where the last one stopped, and lands on that match. No press lands past it.
+// An older step from a match in a tail being checked again, with the turns back from it to
+// the nearest older match not checked again yet and more than one slice can check (a 2,400
+// -turn tail, under HITS_TAIL_MAX, at twice the prices): the step stays where it is, the next
+// press goes on from where the last one stopped, and one lands on that match. No press lands
+// past it.
 test("an older step whose slice ends before it reaches a match stays, and the next press goes on from there to the nearest older match", async () => {
   const { v, cx, s } = await longPane(5600);
   const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
   const base = s.turns.length;
-  // 6,000 turns with no reply: "zebra" in the 2,000th and the last, nowhere between.
-  for (let i = 0; i < 6000; i++) {
-    T.apply(s, { k: "p", o: "human", t: i === 2000 || i === 5999 ? `Tail ${i}: the zebra list.` : `Tail ${i}: nothing here.`, ts });
+  // 2,400 turns with no reply: "zebra" in the 800th and the last, nowhere between.
+  for (let i = 0; i < 2400; i++) {
+    T.apply(s, { k: "p", o: "human", t: i === 800 || i === 2399 ? `Tail ${i}: the zebra list.` : `Tail ${i}: nothing here.`, ts });
     T.apply(s, { k: "d", ms: 1000, ts });
   }
   settleRows(v, cx);
-  const last = `0:${base + 6000}`;
-  const nearest = `0:${base + 2001}`;
+  const last = `0:${base + 2400}`;
+  const nearest = `0:${base + 801}`;
   v.sel = last;
   const r = { moves: [] };
-  priced(v, () => {
+  X = 2;
+  try { priced(v, () => {
     v.action("search:zebra", cx);
     for (let k = 0; k < 200 && counting(v); k++) drawOnce(v, cx);
     v.sel = last;
@@ -1273,9 +1274,9 @@ test("an older step whose slice ends before it reaches a match stays, and the ne
     T.apply(s, { k: "p", o: "human", t: "One more: nothing here.", ts });
     T.apply(s, { k: "d", ms: 1000, ts });
     v.hitsNow();
-    r.checking = v.hitsNow().cur.tail != null && v.hitsNow().cur.tail.next < base + 2000;
+    r.checking = v.hitsNow().cur.tail != null && v.hitsNow().cur.tail.next < base + 800;
     for (let k = 0; k < 20 && v.sel === last; k++) { v.action("olderMatch", cx); r.moves.push(v.sel); }
-  });
+  }); } finally { X = 1; }
   r.presses = r.moves.length;
   r.stays = r.moves.slice(0, -1).every((k) => k === last);
   r.landed = r.moves.at(-1);
