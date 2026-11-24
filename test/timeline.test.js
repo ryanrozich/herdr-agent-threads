@@ -35,7 +35,7 @@ function turn(n, steps, o = {}) {
 const S = { agents: new Map(), agentIds: new Map() };
 const head = (t, live = false, s = S) => ledgerTurn(s, t, 0, live).rows[0];
 // A heading's steps read back, one object each, for the tests only (the pane keeps none).
-const stepsOf = (h) => h.steps.map((_, i) => tlStep(h, i));
+const stepsOf = (h) => h.stepRows.map((_, i) => tlStep(h, i));
 
 test("timeline steps: a heading keeps its steps' times as one plain number array, three a step, made in the turn's own pass", () => {
   const { rows } = ledgerTurn(S, turn(3, ["Looking first.", [["Read", "src/a.ts", 2000, 2300], ["Bash", "bun test", 2100, 45000, true]]]), 0);
@@ -45,8 +45,8 @@ test("timeline steps: a heading keeps its steps' times as one plain number array
   // plain array of [a, b, flags] a step: ms from the turn's start, NaN for none; flags 1 for
   // the second track, 2 for an unfinished call, 4 for a failed one.
   expect(h.items).toBe(undefined);
-  expect(h.steps.length).toBe(steps.length);
-  expect(h.steps.every((r, i) => r === steps[i])).toBe(true);
+  expect(h.stepRows.length).toBe(steps.length);
+  expect(h.stepRows.every((r, i) => r === steps[i])).toBe(true);
   expect(Array.isArray(h.tl)).toBe(true);
   expect(h.tl.length).toBe(3 * steps.length);
   expect(h.tl.every((x) => typeof x === "number")).toBe(true);
@@ -66,10 +66,10 @@ test("timeline steps: a heading keeps its steps' times as one plain number array
   expect(tlStep(h, at("tool")).sk).toEqual(["tools|tools|0", "tools|tools|1"]);
   // An interrupted turn's Interrupted row is no bar.
   const sh = head(turn(5, [[["Read", "a", 2000, 2500]]], { interrupted: true, reply: null, end: T0 + 40000 }));
-  expect(tlStep(sh, sh.steps.findIndex((r) => r.lk === "stop"))).toMatchObject({ lane: null, sk: null });
+  expect(tlStep(sh, sh.stepRows.findIndex((r) => r.lk === "stop"))).toMatchObject({ lane: null, sk: null });
   // A call with no result yet: flag 2.
   const oh = head(turn(6, [[["Bash", "sleep", 6000, null]]], { done: false, end: null, reply: null }), true);
-  const oi = oh.steps.findIndex((r) => r.open);
+  const oi = oh.stepRows.findIndex((r) => r.open);
   expect(oh.tl.slice(3 * oi, 3 * oi + 3)).toEqual([6000, Number.NaN, 2]);
   expect(tlStep(oh, oi).open).toBe(true);
 });
@@ -98,7 +98,7 @@ test("timeline: a turn as wide as it took, a break between turns, bars on Input,
   expect(timelineHit(L, [a, b], L.turns[1].x + L.turns[1].w - 1, "input").key).toBe(b.key);
   // Steps: every step the same width.
   const St = timelineLayout([a, b], 600, "steps");
-  expect(St.turns[0].w / a.steps.length).toBeCloseTo(St.turns[1].w / b.steps.length, 6);
+  expect(St.turns[0].w / a.stepRows.length).toBeCloseTo(St.turns[1].w / b.stepRows.length, 6);
   expect(St.ticks.every((t) => t.step)).toBe(true);
 });
 
@@ -237,7 +237,7 @@ test("timeline running turn: only the last turn moves; the strip keeps its place
 
 test("timeline view: zoom from 1 to four steps across, the pan kept inside the session, a zoom about a point, a turn's box", () => {
   const heads = Array.from({ length: 10 }, (_, i) => head(turn(i + 1, ["a", [["Read", "x", 2000, 3000], ["Bash", "y", 4000, 9000]]])));
-  const steps = heads.reduce((n, h) => n + h.steps.length, 0);
+  const steps = heads.reduce((n, h) => n + h.stepRows.length, 0);
   const geo = timelineGeo(heads, 500, "clock");
   expect(geo.steps).toBe(steps);
   expect(tlMaxZoom(geo)).toBe(steps / 4);
@@ -263,14 +263,14 @@ test("timeline view: zoom from 1 to four steps across, the pan kept inside the s
 test("timeline band: the first and last steps whose bars start inside a band, in order; none when no bar starts there", () => {
   const heads = [1, 2, 3].map((n) => head(turn(n, ["a", [["Read", "x", 2000, 3000], ["Bash", "y", 30000, 40000]]])));
   const L = timelineLayout(heads, 600, "clock");
-  const box = (ti, it) => itemBox(heads[ti].tl, it.i, L.turns[ti].x, L.turns[ti].w, L.geo.walls[ti], "clock", heads[ti].steps.length);
+  const box = (ti, it) => itemBox(heads[ti].tl, it.i, L.turns[ti].x, L.turns[ti].w, L.geo.walls[ti], "clock", heads[ti].stepRows.length);
   const read2 = stepsOf(heads[1]).find((it) => it.lk === "tool");
   const bash2 = stepsOf(heads[1]).filter((it) => it.lk === "tool")[1];
   const b = bandRows(L, heads, box(1, read2).x0 - 0.5, box(1, bash2).x0 + 0.5);
   expect(b).toEqual({ a: read2.key, b: bash2.key });
   const across = bandRows(L, heads, L.turns[0].x, L.turns[2].x + L.turns[2].w);
-  expect(across.a).toBe(heads[0].steps[0].key);
-  expect(across.b).toBe(heads[2].steps.at(-1).key);
+  expect(across.a).toBe(heads[0].stepRows[0].key);
+  expect(across.b).toBe(heads[2].stepRows.at(-1).key);
   // A band inside the break between turns holds nothing.
   expect(bandRows(L, heads, L.gaps[0][0] + 1, L.gaps[0][1] - 1)).toBe(null);
   expect(bandRows(L, heads, 10, 5)).toBe(null);

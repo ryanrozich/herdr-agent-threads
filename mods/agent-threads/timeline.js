@@ -8,7 +8,7 @@ import { durText, startText, LEDGER_KINDS, spanKeys, TL_TRACK, TL_OPEN, TL_FAILE
 // A heading's step count, and its i-th step read back as one object: the row's key, kind,
 // lane, ink and span keys, with the start, end and flags from tl (a and b null for none). The
 // layout reads tl in place; this is for a caller that wants one step (the hit's answer, tests).
-const stepN = (h) => h?.steps?.length ?? 0;
+const stepN = (h) => h?.stepRows?.length ?? 0;
 // A row's span keys by its kind, looked up once per kind (no string made per step).
 const KIND_KEYS = new Map();
 const laneKeys = (r) => {
@@ -20,7 +20,7 @@ const laneKeys = (r) => {
   return v;
 };
 export function tlStep(h, i) {
-  const r = h?.steps?.[i];
+  const r = h?.stepRows?.[i];
   if (!r) return null;
   const k = LEDGER_KINDS[r.lk];
   const a = h.tl[3 * i];
@@ -168,8 +168,8 @@ export function bandRows(L, heads, lo, hi) {
     for (let i = 0; i < len; i++) {
       const bx = itemBox(h.tl, i, T[ti].x * z - x0, T[ti].w * z, wall, L.scale, len);
       if (!bx || bx.x0 < lo || bx.x0 > hi) continue;
-      if (a == null) a = h.steps[i].key;
-      b = h.steps[i].key;
+      if (a == null) a = h.stepRows[i].key;
+      b = h.stepRows[i].key;
     }
   }
   return a == null ? null : { a, b };
@@ -234,7 +234,7 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
       const live = ti === G.live;
       const len = stepN(h);
       for (let i = 0; i < len; i++) {
-        const sk = laneKeys(h.steps[i]);
+        const sk = laneKeys(h.stepRows[i]);
         if (!sk) continue;
         const b = itemBox(h.tl, i, x, w, walls[ti], scale, len);
         if (!b || b.x1 < -M || b.x0 > cw + M) continue;
@@ -243,7 +243,7 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
           out.grow.push({ k, x0: b.x0, tx: x, w, wall: walls[ti], t0: h.t0 });
           continue;
         }
-        const ip = range ? range.pos.get(h.steps[i].key) : null;
+        const ip = range ? range.pos.get(h.stepRows[i].key) : null;
         add(range && !(ip != null && ip >= range.ia && ip <= range.ib) ? `${k}|o` : k, b.x0, b.x1, Boolean(b.open));
         if (h.tl[3 * i + 2] & TL_FAILED && b.x0 >= failEnd) { out.fails.push((b.x0 + b.x1) / 2); failEnd = b.x0 + 6; }
       }
@@ -373,13 +373,13 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
   let bestD = 4;
   const len = stepN(h);
   for (let i = 0; i < len; i++) {
-    if (lane && LEDGER_KINDS[h.steps[i].lk]?.lane !== lane) continue;
+    if (lane && LEDGER_KINDS[h.stepRows[i].lk]?.lane !== lane) continue;
     const b = itemBox(h.tl, i, tx, tw, wall, L.scale, len, upTo);
     if (!b) continue;
     const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
     if (d < bestD || (d === 0 && bestD === 0 && b.track === 1)) { best = i; bestD = d; }
   }
-  return { turn: h.key, key: best != null ? h.steps[best].key : h.key };
+  return { turn: h.key, key: best != null ? h.stepRows[best].key : h.key };
 }
 // The timeline for a draw: the turns placed and the view laid out, each made again only when
 // what it depends on changes, and the running turn's growing bars at nowMs. prev: the last

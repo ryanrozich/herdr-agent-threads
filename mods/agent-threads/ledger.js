@@ -413,8 +413,9 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
   // timeline (timeline.js): tl, one plain number array of three a step, in the rows' order:
   // the start and end (ms from the turn's start, NaN for none: an instant has no end) and the
   // flags (TL_TRACK: in the Tools lane it started while another call ran, drawn half height;
-  // TL_OPEN: a call with no result yet; TL_FAILED). Its key, kind, lane and ink are the row's
-  // at the same index (timeline.js tlStep), so a long session keeps no object per step.
+  // TL_OPEN: a call with no result yet; TL_FAILED). Its key, kind, lane and ink are those of the
+  // row at the same index in stepRows (the turn's step rows, the array they are built in;
+  // timeline.js tlStep), so a long session keeps no object per step.
   const cnt = { steps: 0, input: 0, model: 0, tools: 0, failed: 0, user: 0, agent: 0 };
   // Pushed in order, so it stays a dense array of numbers.
   const tl = [];
@@ -443,7 +444,7 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
     interrupted: Boolean(tr.interrupted), agent: Boolean(turn.agent), line, stale, lastAt, reading,
     // Calls past what the reader keeps: their failures are not known, so the count is a floor.
     partial: cells.some((c) => c.kind === "more"),
-    t0, span, cnt, steps: rows, tl,
+    t0, span, cnt, stepRows: rows, tl,
     // The keys of its failed calls and of the user's messages, for the session's lists.
     failKeys: rows.filter((r) => r.failed).map((r) => r.key), userKeys: rows.filter((r) => r.lk === "you").map((r) => r.key),
   };
