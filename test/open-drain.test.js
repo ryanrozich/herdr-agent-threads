@@ -634,7 +634,7 @@ test("a jump in the same frame as a pending scroll to the end lands on its turn"
 // draw's own time, so the 5 s of plain draws after a stop end.
 const wheelUp = (v, _cx, host) => { host.off = Math.max(0, host.off - 30000 / v.zoom()); v.listWheel({ delta: { y: 30000 } }); };
 const STOP = new Error("stopped at 50 ms");
-async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, stop = false, stream = false, after = 0, liveMs = 0, ahead = false } = {}) {
+async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, stop = false, stream = false, after = 0, liveMs = 0, ahead = false, each = null } = {}) {
   const realPerf = performance.now.bind(performance);
   let clock = 0;
   performance.now = () => (clock += 0.001);
@@ -735,6 +735,8 @@ async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, st
     const out = [];
     for (let k = 0; k < frames; k++) {
       fk = k;
+      // each(v, k): a test's change before frame k.
+      each?.(v, k);
       if (stream) live.after.push(`More of the reply, line ${k}.`);
       const stale = new Set(v.staleRows);
       const s = step();
@@ -976,6 +978,45 @@ test("the opening: a row released after a second 64 draws runs alone, and its cu
   expect([...runs.keys()].filter((t) => !t.shapeMark?.alone)).toEqual([]);
   expect(each.length).toBeGreaterThanOrEqual(3);
   expect([frames.filter((f) => f.stopped).length, frames.reduce((n, f) => n + f.over, 0)]).toEqual([each.length, each.length]);
+}, 300000);
+
+// The count of draws a row on screen is refused is for its text. In the 44 ms-ahead cell the
+// first row released runs alone, is cut, and is held for its text with its count past 128.
+// Its text then changes (a new chunk of the session read), which drops the mark: it waits a
+// second 64 draws again for that text, counted from 0, and is not run as the first draw after
+// the 5 s of plain draws begins, as a count carried over from the old text would have it.
+test("the opening: a row's refused draws count for its text: a released row cut and held, whose text then changes, waits a second 64 draws again", async () => {
+  let turn = null;
+  let changed = -1;
+  let fresh = null;
+  const runs = [];
+  let cur = -1;
+  const { frames } = await costlyWheel(8, 44, 900, (v, cx, host) => {
+    wheelUp(v, cx, host);
+    const reshape = v.reshape;
+    v.reshape = function (...a) {
+      if (this.renderOpen && !turn) turn = a[0];
+      if (this.renderOpen && a[0] === turn) runs.push(cur);
+      return reshape.apply(this, a);
+    };
+  }, {
+    stop: true, after: 2, ahead: true, each: (v, k) => {
+      cur = k;
+      if (turn && changed < 0 && turn.shapeMark?.cut) {
+        changed = k;
+        expect([turn.shapeMark.alone, turn.refused.n >= 2 * 64 - 2]).toEqual([true, true]);
+        turn.prompt = `${turn.prompt} zerb quil`;
+      }
+      // Twenty draws after the 5 s of plain draws that follow the stop.
+      if (changed >= 0 && k === changed + 313 + 20) fresh = turn.refused?.n ?? 0;
+    },
+  });
+  expect(changed).toBeGreaterThan(120);
+  expect(runs[0]).toBeLessThan(changed);
+  expect(fresh).toBeLessThanOrEqual(24);
+  // Its next run, if any here: not before a second 64 draws refused on the new text.
+  expect(runs.slice(1).filter((k) => k < changed + 5000 / 16 + 2 * 64 - 4)).toEqual([]);
+  expect(frames.filter((f) => f.stopped).length).toBeGreaterThanOrEqual(1);
 }, 300000);
 
 // A rate four times too high, 40 ms of work ahead of the owed row in every draw, rows that
