@@ -780,8 +780,8 @@ export function tlBar(L, heads, ti, si, nowMs = Date.now()) {
 }
 // The step of turn ti a press at x (and ly, px down the lane, or null) gets in a lane:
 // { ti, i, top, r, w, d }, or null. top: its bar is under the press, the one drawn on top
-// there (r: failed over the rest, half height over full, the view's order; then the
-// narrowest, w); else the nearest bar within 4 px (d).
+// there (r: a growing bar over all, failed over the rest, half height over full, the view's
+// order; then the narrowest, w); else the nearest bar within 4 px (d).
 function stepIn(L, heads, ti, x, lane, nowMs, ly) {
   const t = L.turns[ti];
   const h = heads[ti];
@@ -803,7 +803,9 @@ function stepIn(L, heads, ti, x, lane, nowMs, ly) {
     const b = barAt(h, i, tx, tw, wall, L.scale, len, upTo, tk);
     if (!b) continue;
     const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
-    const r = (b.track ? 1 : 0) + (k?.ink === "failed" ? 2 : 0);
+    // The running turn's growing bars are drawn last, over all (4); then failed over the rest,
+    // half height over full.
+    const r = upTo != null && b.open ? 4 : (b.track ? 1 : 0) + (k?.ink === "failed" ? 2 : 0);
     const w = b.x1 - b.x0;
     // A full bar is 2 to 14 px down its lane, a half one 8 to 14 (the view's rectLayer).
     if (d === 0 && (ly == null || (ly >= (b.track ? 8 : 2) && ly <= 14))) {
@@ -824,7 +826,8 @@ function hitWins(c, a) {
 // or the turn's heading when no step's bar is within 4 px). heads in the layout's order; x in
 // px of the view (zoomed and panned); ly, px down the lane (null: any). Where bars overlap
 // (calls running at once share the half-height track), the bar drawn on top at x and ly:
-// failed over the rest, half height over full (the view's order), then the narrowest. With
+// a running call's growing bar over all, failed over the rest, half height over full (the
+// view's order), then the narrowest. With
 // none there, the nearest within 4 px. The turn under the press is looked at first, then the
 // turns within 4 px of it each side, nearest first: on turns under 1 px each lane is one span
 // a turn, and neighbours' spans join, so the bar under the press can be a neighbour's. With
