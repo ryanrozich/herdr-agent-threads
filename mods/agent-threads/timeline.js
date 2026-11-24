@@ -1,15 +1,44 @@
 // agent-threads: the Trajectory's timeline as data (TRD-23). Pure JavaScript with no Herdr
 // imports, tested under bun (test/timeline.test.js); main.js draws what this returns.
-// Carried from draft 107 (ledger.js there); the items it reads are made by ledger.js ledgerTurn.
+// Carried from draft 107 (ledger.js there). The steps it reads are each heading's steps (its
+// step rows) and tl (three numbers a step), made by ledger.js ledgerTurn.
 
-import { durText, startText } from "./ledger.js";
+import { durText, startText, LEDGER_KINDS, spanKeys, TL_TRACK, TL_OPEN, TL_FAILED } from "./ledger.js";
+
+// A heading's step count, and its i-th step read back as one object: the row's key, kind,
+// lane, ink and span keys, with the start, end and flags from tl (a and b null for none). The
+// layout reads tl in place; this is for a caller that wants one step (the hit's answer, tests).
+const stepN = (h) => h?.steps?.length ?? 0;
+// A row's span keys by its kind, looked up once per kind (no string made per step).
+const KIND_KEYS = new Map();
+const laneKeys = (r) => {
+  const lk = r?.lk;
+  if (KIND_KEYS.has(lk)) return KIND_KEYS.get(lk);
+  const k = LEDGER_KINDS[lk];
+  const v = k?.lane ? spanKeys(k.lane, k.ink ?? "context") : null;
+  KIND_KEYS.set(lk, v);
+  return v;
+};
+export function tlStep(h, i) {
+  const r = h?.steps?.[i];
+  if (!r) return null;
+  const k = LEDGER_KINDS[r.lk];
+  const a = h.tl[3 * i];
+  const b = h.tl[3 * i + 1];
+  const f = h.tl[3 * i + 2];
+  return {
+    i, key: r.key, lk: r.lk, lane: k?.lane ?? null, ink: k?.ink ?? "context", sk: laneKeys(r),
+    a: Number.isNaN(a) ? null : a, b: Number.isNaN(b) ? null : b,
+    track: f & TL_TRACK ? 1 : 0, open: Boolean(f & TL_OPEN), failed: Boolean(f & TL_FAILED),
+  };
+}
 
 // ---- the timeline (round 3 and round 7) ----
 // The session as bars on three lanes, Input, Model and Tools, in a strip cw px wide. Two
 // scales: "clock", where a turn is as wide as it took (never under a minimum) and the idle
 // time between turns is folded into a fixed break, hatched; "steps", where every step gets
-// the same width. heads are the ledger's headings in order (each carries its turn's steps,
-// items, from ledgerTurn).
+// the same width. heads are the ledger's headings in order (each carries its turn's steps
+// and tl, from ledgerTurn).
 // It is made in two parts. timelineGeo places the turns with the whole session fitted to the
 // strip (it walks the turns, not the steps). timelineLayout draws a view of that: zoomed z
 // times and x0 px in (in zoomed px), the steps only of the turns in view, and of those only a
@@ -56,11 +85,11 @@ export function timelineGeo(heads, cw, scale = "clock", nowMs = Date.now()) {
   const walls = heads.map(wallOf);
   const room = roomOf(heads, scale, nowMs);
   if (room > 0) { walls[n - 1] = room; geo.live = n - 1; geo.room = room; }
-  for (const h of heads) geo.steps += Math.max(1, h.items?.length ?? 1);
+  for (const h of heads) geo.steps += Math.max(1, stepN(h));
   let widths;
   if (scale === "steps") {
     const sw = target / geo.steps;
-    widths = heads.map((h) => Math.max(1, h.items?.length ?? 1) * sw);
+    widths = heads.map((h) => Math.max(1, stepN(h)) * sw);
   } else {
     // The px per ms that fills the strip, each turn at least min wide: the turns held at min
     // and the px per ms for the rest found in turn until neither moves (a few passes; the
@@ -135,11 +164,12 @@ export function bandRows(L, heads, lo, hi) {
   for (let ti = i; ti < T.length && T[ti].x <= f1; ti++) {
     const h = heads[ti];
     const wall = G.walls[ti] ?? wallOf(h);
-    for (const it of h?.items ?? []) {
-      const bx = itemBox(it, T[ti].x * z - x0, T[ti].w * z, wall, L.scale, h.items.length);
+    const len = stepN(h);
+    for (let i = 0; i < len; i++) {
+      const bx = itemBox(h.tl, i, T[ti].x * z - x0, T[ti].w * z, wall, L.scale, len);
       if (!bx || bx.x0 < lo || bx.x0 > hi) continue;
-      if (a == null) a = it.key;
-      b = it.key;
+      if (a == null) a = h.steps[i].key;
+      b = h.steps[i].key;
     }
   }
   return a == null ? null : { a, b };
@@ -195,29 +225,33 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
       const x1 = x + Math.max(w, 1);
       // A turn too narrow for its steps is inside the range when any of its rows is.
       const ih = range ? range.pos.get(h.key) : null;
-      const o = range && !(ih != null && ih <= range.ib && ih + (h.items?.length ?? 0) >= range.ia) ? "|o" : "";
+      const o = range && !(ih != null && ih <= range.ib && ih + stepN(h) >= range.ia) ? "|o" : "";
       if (c.input) add(`${c.user ? "input|user|0" : c.agent ? "input|agent|0" : "input|context|0"}${o}`, x, x1);
       if (c.model) add(`model|model|0${o}`, x, x1);
       if (c.tools) add(`${c.failed ? "tools|failed|0" : "tools|tools|0"}${o}`, x, x1);
       if (c.failed && x >= failEnd) { out.fails.push(x + w / 2); failEnd = x + 6; }
     } else {
       const live = ti === G.live;
-      for (const it of h.items ?? []) {
-        const b = itemBox(it, x, w, walls[ti], scale, h.items.length);
-        if (!b || !it.sk || b.x1 < -M || b.x0 > cw + M) continue;
-        const ip = range ? range.pos.get(it.key) : null;
+      const len = stepN(h);
+      for (let i = 0; i < len; i++) {
+        const sk = laneKeys(h.steps[i]);
+        if (!sk) continue;
+        const b = itemBox(h.tl, i, x, w, walls[ti], scale, len);
+        if (!b || b.x1 < -M || b.x0 > cw + M) continue;
+        const k = sk[b.track ? 1 : 0];
         if (live && b.open) {
-          out.grow.push({ k: it.sk[b.track ? 1 : 0], x0: b.x0, tx: x, w, wall: walls[ti], t0: h.t0 });
+          out.grow.push({ k, x0: b.x0, tx: x, w, wall: walls[ti], t0: h.t0 });
           continue;
         }
-        add(range && !(ip != null && ip >= range.ia && ip <= range.ib) ? `${it.sk[b.track ? 1 : 0]}|o` : it.sk[b.track ? 1 : 0], b.x0, b.x1, Boolean(b.open));
-        if (it.failed && b.x0 >= failEnd) { out.fails.push((b.x0 + b.x1) / 2); failEnd = b.x0 + 6; }
+        const ip = range ? range.pos.get(h.steps[i].key) : null;
+        add(range && !(ip != null && ip >= range.ia && ip <= range.ib) ? `${k}|o` : k, b.x0, b.x1, Boolean(b.open));
+        if (h.tl[3 * i + 2] & TL_FAILED && b.x0 >= failEnd) { out.fails.push((b.x0 + b.x1) / 2); failEnd = b.x0 + 6; }
       }
       // Ticks inside a wide turn: on the clock its time from the start, by steps its step
       // numbers. Only those in view.
       if (w >= 120) {
         if (scale === "steps") {
-          const len = h.items.length;
+          const len = stepN(h);
           const every = Math.max(1, Math.ceil(36 / (w / len)));
           for (let i = 0; i < len; i += every) { const tx = x + ((i + 0.5) * w) / len; if (tx >= -M && tx <= cw) out.ticks.push({ x: tx, text: `${i + 1}`, step: true }); }
         } else if (walls[ti] > 0) {
@@ -287,25 +321,30 @@ function growEnd(tx, w, wall, t0, nowMs) {
 export function tlGrow(L, nowMs = Date.now()) {
   return (L?.grow ?? []).map((g) => ({ k: g.k, x0: g.x0, x1: Math.max(g.x0 + 6, Math.min(g.tx + g.w, growEnd(g.tx, g.w, g.wall, g.t0, nowMs))) }));
 }
-// One step's box on the strip: x0 and x1 in px, and its track. A turn tx px in, w px wide, wall
-// ms long, with len steps. null for a step with no time on the clock scale. upTo: where an
-// unfinished call's bar ends (px), when not at the turn's end (the running turn's, at now).
-export function itemBox(it, tx, w, wall, scale, len, upTo = null) {
+// Step i's box on the strip, from a heading's tl: x0 and x1 in px, and its track. A turn tx px
+// in, w px wide, wall ms long, with len steps. null for a step with no time on the clock scale.
+// upTo: where an unfinished call's bar ends (px), when not at the turn's end (the running
+// turn's, at now).
+export function itemBox(tl, i, tx, w, wall, scale, len, upTo = null) {
+  const f = tl[3 * i + 2];
+  const open = Boolean(f & TL_OPEN);
   if (scale === "steps") {
     const sw = w / Math.max(1, len);
     const pad = sw > 4 ? 1 : 0;
     // An unfinished call fills its step, with the torn end as on the clock.
-    const box = { x0: tx + it.i * sw + pad, x1: tx + (it.i + 1) * sw - pad, track: 0 };
-    if (it.open) box.open = true;
+    const box = { x0: tx + i * sw + pad, x1: tx + (i + 1) * sw - pad, track: 0 };
+    if (open) box.open = true;
     return box;
   }
-  if (it.a == null || !(wall > 0)) return null;
+  const a = tl[3 * i];
+  const b = tl[3 * i + 1];
+  if (Number.isNaN(a) || !(wall > 0)) return null;
   // An unfinished call (open) is never under 6 px wide, so its torn end keeps its shape.
-  const least = it.open ? 6 : 3;
-  const x0 = Math.min(tx + (it.a / wall) * w, tx + w - least);
-  const end = it.b != null ? tx + (it.b / wall) * w : it.open ? upTo ?? tx + w : x0 + 3;
-  const box = { x0, x1: Math.max(x0 + least, Math.min(end, tx + w)), track: it.track };
-  if (it.open) box.open = true;
+  const least = open ? 6 : 3;
+  const x0 = Math.min(tx + (a / wall) * w, tx + w - least);
+  const end = !Number.isNaN(b) ? tx + (b / wall) * w : open ? upTo ?? tx + w : x0 + 3;
+  const box = { x0, x1: Math.max(x0 + least, Math.min(end, tx + w)), track: f & TL_TRACK ? 1 : 0 };
+  if (open) box.open = true;
   return box;
 }
 // The turn and step under px x of the strip in a lane: { turn, key } (key: the step's row,
@@ -332,14 +371,15 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
   const upTo = lo === L.geo?.live && h.t0 != null ? growEnd(tx, tw, wall, h.t0, nowMs) : null;
   let best = null;
   let bestD = 4;
-  for (const it of h.items ?? []) {
-    if (lane && it.lane !== lane) continue;
-    const b = itemBox(it, tx, tw, wall, L.scale, h.items.length, upTo);
+  const len = stepN(h);
+  for (let i = 0; i < len; i++) {
+    if (lane && LEDGER_KINDS[h.steps[i].lk]?.lane !== lane) continue;
+    const b = itemBox(h.tl, i, tx, tw, wall, L.scale, len, upTo);
     if (!b) continue;
     const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
-    if (d < bestD || (d === 0 && bestD === 0 && it.track === 1)) { best = it; bestD = d; }
+    if (d < bestD || (d === 0 && bestD === 0 && b.track === 1)) { best = i; bestD = d; }
   }
-  return { turn: h.key, key: best ? best.key : h.key };
+  return { turn: h.key, key: best != null ? h.steps[best].key : h.key };
 }
 // The timeline for a draw: the turns placed and the view laid out, each made again only when
 // what it depends on changes, and the running turn's growing bars at nowMs. prev: the last
