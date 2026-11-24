@@ -1705,34 +1705,39 @@ test("shaping: a turn cut after a neighbour overran in its draw runs alone next,
   } finally { p.end(); }
 }, 300000);
 
-// 1.2.0's cost rule holds for a turn never shaped too, outside the walk: in a rows build, a
-// turn whose expected cost would take the draw past its shaping time waits for a later draw
-// (its blank row drawn meanwhile), unless it is the draw's first. Two turns made never shaped,
-// of about 8 and 35 ms at the rate learned (1 us a character), then a rebuild: the first is
-// shaped in the build; the second, expected to end at about 44 ms of a 12 ms budget, waits
-// and is shaped as a later draw's first, with no draw stopped. Before, it ran 9 ms into the
-// build's draw and the draw was stopped.
-test("shaping: in a rows build, a turn never shaped whose expected cost would take the draw past its shaping time waits for a later draw, and no draw is stopped", async () => {
-  const p = await pricedDrain();
-  try {
-    const [a, b] = [p.turns.at(-8), p.turns.at(-5)];
-    p.begin();
-    for (const [t, n] of [[a, 8000], [b, 35000]]) {
-      t.prompt = `${t.prompt} ${"kaz vel orin tam ".repeat(Math.ceil(n / 17))}`;
-      Object.assign(t, { shapeKey: null, shapeFast: null, shapesKept: null });
-    }
-    // A rebuild of every row, as turning agent messages on makes.
-    p.v.rowsKey = null;
-    const built = p.step();
-    const who = (f) => f.log.map((x) => (x.turn === a ? `a@${Math.round(x.at)}` : x.turn === b ? `b@${Math.round(x.at)}` : "other"));
-    expect([who(built).filter((x) => x !== "other").map((x) => x[0]), built.stopped]).toEqual([["a"], false]);
-    expect(b.shapeKey).toBeNull();
-    const frames = [built, ...untilDone(p.v, p.step)];
-    const k = frames.findIndex((f) => f.log.some((x) => x.turn === b));
-    expect(k).toBeGreaterThan(0);
-    expect([frames[k].log[0].turn === b, frames[k].stopped]).toEqual([true, false]);
-    expect([frames.filter((f) => f.stopped).length, b.shapeKey != null, p.v.staleRows.length]).toEqual([0, true, 0]);
-  } finally { p.end(); }
+// Outside the walk nothing else checks a draw's end, so a turn never shaped, after the draw's
+// first unit, goes ahead only if it is expected to end in time (fitsHost): in a rows build it
+// otherwise waits for a later draw (its blank row drawn meanwhile). Two turns made never
+// shaped, of about 8 and 35 ms at the rate learned (1 us a character), then a rebuild: the
+// first is shaped in the build; the second, 9 ms in and expected to end at about 57 ms with
+// the 10 ms after the rows, waits and is shaped as a later draw's first, with no draw stopped.
+// Before, it ran 9 ms into the build's draw and the draw was stopped. Of 5 and 25 ms, the
+// second is expected to end by about 44 ms and is shaped in the build all the same.
+test("shaping: in a rows build, a turn never shaped after another unit is shaped if it is expected to end in time, and else waits for a later draw, and no draw is stopped", async () => {
+  for (const [na, nb, inBuild] of [[8000, 35000, false], [5000, 25000, true]]) {
+    const p = await pricedDrain();
+    try {
+      const [a, b] = [p.turns.at(-8), p.turns.at(-5)];
+      p.begin();
+      for (const [t, n] of [[a, na], [b, nb]]) {
+        t.prompt = `${t.prompt} ${"kaz vel orin tam ".repeat(Math.ceil(n / 17))}`;
+        Object.assign(t, { shapeKey: null, shapeFast: null, shapesKept: null });
+      }
+      // A rebuild of every row, as turning agent messages on makes.
+      p.v.rowsKey = null;
+      const built = p.step();
+      const who = (f) => f.log.map((x) => (x.turn === a ? "a" : x.turn === b ? "b" : "other")).filter((x) => x !== "other");
+      expect([nb, who(built), built.stopped]).toEqual([nb, inBuild ? ["a", "b"] : ["a"], false]);
+      expect([nb, b.shapeKey != null]).toEqual([nb, inBuild]);
+      const frames = [built, ...untilDone(p.v, p.step)];
+      if (!inBuild) {
+        const k = frames.findIndex((f) => f.log.some((x) => x.turn === b));
+        expect(k).toBeGreaterThan(0);
+        expect([frames[k].log[0].turn === b, frames[k].stopped]).toEqual([true, false]);
+      }
+      expect([nb, frames.filter((f) => f.stopped).length, b.shapeKey != null, p.v.staleRows.length]).toEqual([nb, 0, true, 0]);
+    } finally { p.end(); }
+  }
 }, 300000);
 
 // A limit, pinned as it is: the owed row is paid before the draw's rows build (payOwed, then
