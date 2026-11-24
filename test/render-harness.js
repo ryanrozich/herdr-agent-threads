@@ -38,7 +38,7 @@ export const el = new Proxy(() => {}, {
     if (lacking.has(String(name))) return undefined;
     if (name === "when") return (cond, fn) => { if (cond) fn(el); return el; };
     if (name === "hover") return (fn) => { fn(el); return el; };
-    return (...args) => { calls++; if (rec) rec.push([String(name), ...args]); for (const a of args) if (a === undefined) throw new Error(`undefined passed to .${String(name)}()`); return el; };
+    return (...args) => { if (stopDraw && !inList && stopDraw()) throw new Error("interrupted"); calls++; if (rec) rec.push([String(name), ...args]); for (const a of args) if (a === undefined) throw new Error(`undefined passed to .${String(name)}()`); return el; };
   },
   apply() { return el; },
 });
@@ -110,6 +110,12 @@ export let keepSettings = false;
 // With settingsStale set, a settings write whose expected text is not what the file holds is
 // rejected, as Herdr rejects a stale snapshot.
 export let settingsStale = false;
+// Herdr's stop of a draw that runs past its time, modelled: while stopDraw() answers true,
+// every element made throws "interrupted". Not the rows the virtual list draws (inList), which
+// Herdr draws outside render() and whose errors the mod catches. A priced test sets it
+// (search-scan.test.js).
+export let stopDraw = null;
+let inList = false;
 // A script that has not ended in 4 s is killed with everything it started, and the call fails
 // with a line naming it: a hung child ends before bun's 5 s test limit kills it as a dangling
 // process, which says nothing of which call it was (once in CI). The script runs in a process
@@ -199,6 +205,8 @@ export function reset() {
   extractHook = null;
   keepSettings = false;
   settingsStale = false;
+  stopDraw = null;
+  inList = false;
   lacking.clear();
   stubHas.clear();
   for (const list of [mdSources, overlays, closed, views, editors, scrollHandles, settingsWrites]) list.length = 0;
@@ -224,7 +232,8 @@ export function setup() {
       const size = (i) => (typeof sizes === "number" ? sizes : sizes[i]);
       lastList = { sizes: typeof sizes === "number" ? Array.from({ length: n }, () => sizes) : [...sizes], keys: [], draw };
       for (let i = 0; i < n; i++) { if (!(size(i) > 0)) throw new Error(`item ${keyOf(i)} has height ${size(i)}`); lastList.keys.push(keyOf(i)); }
-      draw(listWindow ? listWindow(n) : { start: 0, end: n });
+      inList = true;
+      try { draw(listWindow ? listWindow(n) : { start: 0, end: n }); } finally { inList = false; }
       return el;
     },
     TextView: { html: (id, html) => { const calls = []; views.push({ id, html, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); }, markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: (opts) => { const st = { opts, handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
@@ -442,4 +451,6 @@ export const H = {
   set keepSettings(x) { keepSettings = x; },
   get settingsStale() { return settingsStale; },
   set settingsStale(x) { settingsStale = x; },
+  get stopDraw() { return stopDraw; },
+  set stopDraw(x) { stopDraw = x; },
 };
