@@ -626,6 +626,31 @@ test("a full build Herdr stops after its rows are in and before its record is ma
   expect([armed, r.stops, keyAfter ?? null, agree, got === v.baseRows.map((x) => x.key).join("\n")]).toEqual([false, 1, null, true, true]);
 }, 60000);
 
+// A closed row built with an old shape is reshaped where it is (reshapeStale): its new row, then
+// its height, which is a call, where Herdr's stop can fall. Stopped there, the row had its new
+// shape and its old height, and the next pass, finding the shape already new, left the height
+// as it was. The height is worked out before the row changes.
+test("a closed row's reshape that Herdr stops as it works out the height leaves the row to be reshaped, and it ends at its new height", async () => {
+  const { v, cx, keys } = await openLong(["Short reply one.", "Short reply two, with a longer prompt above it."], true);
+  const rows = v.baseRows;
+  const i = rows.findIndex((x) => x.kind === "turn" && x.key === keys[0]);
+  const j = rows.findIndex((x, k) => x.kind === "turn" && k !== i && v.height(x) !== v.height(rows[i]));
+  const real = rows[i].shape;
+  // The row as a build out of time leaves it: another row's shape, at that shape's height.
+  rows[i] = { ...rows[i], shape: rows[j].shape };
+  v.baseSizes[i] = v.height(rows[i]);
+  v.staleRows = [i];
+  v.reshapeDue = true;
+  v.fitKey = null;
+  const MARK = { key: "stop-here", kind: "md" };
+  let armed = true;
+  const ht = v.height;
+  v.height = function (r) { if (armed && r?.key === keys[0] && r.kind === "turn" && r.shape === real) { armed = false; this.height(MARK); } return ht.call(this, r); };
+  const r = costedFrames(v, cx, 40, () => !armed && !v.staleRows?.length && v.baseRows[i].shape === real && v.baseSizes[i] === ht.call(v, v.baseRows[i]), { stopAt: (_w, x) => x === MARK, secs: 20 });
+  delete v.height;
+  expect([j >= 0, armed, r.stops, r.settled > 0, v.baseRows[i].shape === real, v.baseSizes[i] === v.height(v.baseRows[i])]).toEqual([true, false, 1, true, true, true]);
+}, 60000);
+
 // Herdr's stop is the script engine's interrupt, which falls at any call: a full build can be
 // stopped after it has sized a row and before it has put the row in its index. The build goes
 // on from its next row, so that row was in no index: here the open card's head, which every
