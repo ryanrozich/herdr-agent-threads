@@ -6616,11 +6616,13 @@ export default class Threads extends View {
     const keys = this.turnKeys(this.allRows());
     // A selection the list's window left out (it moved on while following, or a block came in
     // the other way) stays selected, and the first key that acts on it brings the window back
-    // around it (winPlace), so nothing selected is lost from view.
+    // around it (winPlace), so nothing selected is lost from view. The rows are fitted to it at
+    // once, so the key acts on rows that hold it: i finds the line its Turn card shows beside.
     if (SEL_KEYS.has(name) && this.sel && this.view !== "pinned" && this.baseIndex?.has(this.sel) && !this.win.has(this.winList(), this.sel)) {
       this.follow = false;
       this.toBottom = false;
       this.scrollTo = { key: this.sel, how: "center" };
+      this.rows();
     }
     const steps = name === "prev" || name === "next" ? this.stepKeys(keys) : keys;
     const at = steps.indexOf(this.sel);

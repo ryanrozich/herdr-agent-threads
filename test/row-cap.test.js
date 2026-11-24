@@ -1540,3 +1540,21 @@ test("with Show later on screen, a card opened above the view keeps the turns on
     expect(inList(v, last)).toBe(true);
   } finally { H.listWindow = null; }
 });
+
+test("a selection the window leaves out opens its Turn card on the first i, as the window comes back around it", async () => {
+  const { v, cx, s } = await capSession(150, SMALL);
+  v.jumpLatest(true);
+  frames(v, cx);
+  const first = v.turnKeys(v.rows())[0];
+  v.sel = first;
+  v.follow = true;
+  await addCapTurns(s, 150, 30);
+  frames(v, cx);
+  expect(inList(v, first)).toBe(false);
+  expect(v.action("legend", cx)).toBe(true);
+  expect(v.detailsOpen).toBe(true);
+  frames(v, cx);
+  expect(inList(v, first)).toBe(true);
+  expect(v.sel).toBe(first);
+  expect(v.detailsOpen).toBe(true);
+});
