@@ -409,6 +409,32 @@ test("the open turn's record of which parts fit one view stays its parts' size t
   expect([most(sizes.grow) <= 2, most(sizes.rules) <= 2, sizes.rules.at(-1) > 0]).toEqual([true, true, true]);
 }, 60000);
 
+// A part of at most one view's 4,096 characters is never cut. Its dollar escapes ("$" drawn as
+// "\\$") can take it past a view as Markdown, and then it shows whole as plain text under main's
+// own line for a part Herdr could not draw as Markdown. The line that only its start is shown
+// is for a part with text left out.
+test("a part of 3,900 or 4,050 characters with dollar signs, past one view only by its escapes, shows whole as plain text under the line that Herdr could not draw it as Markdown", async () => {
+  const seen = [];
+  for (const text of [`${"a$".repeat(1800)}${"b".repeat(300)}`, `${"x".repeat(3900)}${"$".repeat(150)}`]) {
+    const { v, cx, last } = await oneRun(text);
+    const lines = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+    seen.push([text.length, last.kind, last.shown?.length ?? null, lines.some((x) => x.startsWith("Herdr could not draw this part as Markdown")), lines.some((x) => x.includes("only its start is shown"))]);
+  }
+  expect(seen).toEqual([[3900, "mdlong", 3900, true, false], [4050, "mdlong", 4050, true, false]]);
+}, 60000);
+
+// A paragraph of Japanese or Chinese prose that one view holds is one Markdown part, as main
+// hands it to Herdr; one longer splits after its marks into parts a paragraph gap apart.
+test("a paragraph of Japanese or Chinese prose of 1,200 or 4,096 characters is one Markdown part, as on main; one of 4,097 splits after its marks", async () => {
+  const seen = [];
+  for (const n of [1200, 4096, 4097]) {
+    const para = cjkProse(["今日は配送ルートの確認を朝のうちに終えました。", "仓库的订单按线路分配给每一位司机，"], n).slice(0, n);
+    const { card } = await oneRun(para);
+    seen.push([n, card.length, card.every((x) => x.kind === "md"), card.map((x) => x.src).join("") === para]);
+  }
+  expect(seen).toEqual([[1200, 1, true, true], [4096, 1, true, true], [4097, 4, true, true]]);
+}, 60000);
+
 // In a full draw the rows of the parts split in the draws before are made first, then the split
 // goes on: the other way round the split took the draw's whole reshaping time, and no part of a
 // split that ran over several draws was shown until it had finished (at twice the price, none
@@ -1009,9 +1035,9 @@ test.skip("following, a read that brings a new turn drops a scroll still waiting
 // whole, in Markdown parts, with no line saying that only its start is shown. Made-up prose,
 // about 5,000 characters with no ASCII space or line break: with full stops, and on commas
 // alone with no full stop (a long list of clauses).
-const cjkProse = (s) => {
+const cjkProse = (s, n = 5000) => {
   let out = "";
-  for (let i = 0; out.length < 5000; i++) out += s[i % s.length];
+  for (let i = 0; out.length < n; i++) out += s[i % s.length];
   return out;
 };
 async function shownWhole(para) {

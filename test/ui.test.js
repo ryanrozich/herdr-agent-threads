@@ -1068,11 +1068,22 @@ test("mdChunks: a paragraph of Japanese or Chinese prose with no space splits af
 });
 
 test("mdChunks: a paragraph of Japanese or Chinese prose with ASCII words and spaces splits within the limit, at marks and spaces, its ASCII words whole", () => {
-  const cjk = prose(["今日は配送ルートの確認を朝のうちに終えました。", "仓库的订单按线路分配给每一位司机，"], 2500);
+  const cjk = prose(["今日は配送ルートの確認を朝のうちに終えました。", "仓库的订单按线路分配给每一位司机，"], 4500);
   const md = `Release v2.1 notes: ${cjk} see ACME-12 and ACME-13 for the routes ${cjk}ACME-14の件は済みました。 Done.`;
   expect(splitAtMarks(md, MD_MAX)).toEqual([true, true, true, true]);
   const parts = mdChunks(md, MD_MAX);
   expect(["v2.1", "ACME-12", "ACME-13", "ACME-14の件は済みました。"].every((w) => parts.some((p) => p.includes(w)))).toBe(true);
+});
+
+// The split packs by UTF-8 bytes (MD_MAX), and a Japanese or Chinese character is three, so a
+// paragraph of it over about 1,166 characters is longer than the room. Main kept one that one
+// view holds (4,096 characters, MD_VIEW_CHARS) as one piece, and so does this: it breaks after
+// its marks only when it would not fit one view. Breaking it sooner drew a paragraph gap inside
+// it, where a drag cannot select across.
+test("mdChunks: a paragraph of Japanese or Chinese prose that one view holds stays one piece, as on main; past a view it splits after its marks", () => {
+  const para = (n) => prose(["今日は配送ルートの確認を朝のうちに終えました。", "仓库的订单按线路分配给每一位司机，"], n).slice(0, n);
+  const seen = [1200, 4096, 4097].map((n) => { const md = para(n); const parts = mdChunks(md, MD_MAX); return [n, parts.length, parts.join("") === md, parts.length > 1 && parts.every((p) => Buffer.byteLength(p) <= MD_MAX)]; });
+  expect(seen).toEqual([[1200, 1, true, false], [4096, 1, true, false], [4097, 4, true, true]]);
 });
 
 // With none of the seven marks, text splits as before at spaces alone (mdChunksBefore, the old
