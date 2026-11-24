@@ -224,11 +224,14 @@ test("timeline running turn: only the last turn moves; the strip keeps its place
   const hitX = (m2.grow[0].x0 + m2.grow[0].x1) / 2;
   expect(timelineHit(m2.L, heads, hitX, "tools", at + 1000).key).toBe(stepsOf(live).find((it) => it.open).key);
   expect(timelineHit(m2.L, heads, tx + T.w - 1, "tools", at + 1000).key).toBe(live.key);
-  // Past its room the turn gets the next one, and the strip is placed again, once.
+  // Past its room the turn gets the next one: its length changes and the others keep their
+  // places, marked the old scale's, so tlDraw places them again by the bounded build
+  // (test/timeline-off.test.js).
   expect(tx + T.w - 1 - m2.grow[0].x1).toBeGreaterThan(4);
   const m3 = timelineModel(m2, heads, 600, "clock", live.t0 + 16000);
   expect(m3.geo).not.toBe(m2.geo);
-  expect(m3.geo.room).toBe(22500);
+  expect([m3.geo.room, m3.geo.stale]).toEqual([22500, true]);
+  expect(m3.geo.turns.slice(0, 2)).toEqual(m2.geo.turns.slice(0, 2));
   expect(timelineModel(m3, heads, 600, "clock", live.t0 + 17000).geo).toBe(m3.geo);
   // A new width, scale or session places it again; a turn that is not running never grows.
   // A new heads array alone is not a new session: ledger() makes one at every change, with
@@ -793,10 +796,14 @@ test("timeline model: with events arriving in the running turn, the finished tur
     // Its open call grows where the turn is 2 px or wider; under 2 px it is the lane's span.
     expect(m2.grow.length).toBe(tlBox(m2.L, n - 1).w >= 2 ? 1 : 0);
     expect(drawn(m2.L)).toEqual(drawn(timelineLayout(m2.heads, cw, "clock", at(32), null)));
-    // Past its room the strip is placed again, once.
-    const g0 = TL.TL_MADE.geo;
+    // Past its room (a step of liveRoom): nothing placed, the running turn laid out alone, the
+    // places kept; marked the old scale's for the bounded build (test/timeline-off.test.js)
+    // where its end moved more than 1 px, as working on.
+    const b3 = { ...TL.TL_MADE };
     const m3 = timelineModel(m2, [...done, runningHead(n, 33, t0)], cw, "clock", t0 + 260000, null);
-    expect(TL.TL_MADE.geo - g0).toBe(1);
+    expect([TL.TL_MADE.geo - b3.geo, TL.TL_MADE.layout - b3.layout, TL.TL_MADE.tail - b3.tail]).toEqual([0, 0, 1]);
+    const moved = Math.abs(m3.geo.turns[n - 1].w - m2.geo.turns[n - 1].w);
+    expect([n, m3.geo.room, m3.geo.stale, moved > 1]).toEqual([n, liveRoom(260000), n === 5600 ? undefined : true, n !== 5600]);
     // A finished heading that is new (another session, or the turn before the running one
     // just ended) places it again.
     const g1 = TL.TL_MADE.geo;

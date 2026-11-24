@@ -868,11 +868,12 @@ export function timelineModel(prev, heads, cw, scale = "clock", nowMs = Date.now
   // Working off, or on with that end moving more than TL_SLACK px, the places are kept by any
   // amount and marked the old scale's (stale): tlDraw places the turns again with the bounded
   // build over the draws after this one. So working off is exact once that build ends, and
-  // while a turn runs its end may be TL_SLACK px off.
+  // while a turn runs its end may be TL_SLACK px off. The running turn's room growing a step
+  // (liveRoom) is the same: only that turn's length changes.
   const vk = view ? `${view.z}|${view.x0}` : "";
   const was = only ? prev.heads[n - 1] : null;
   let regeo = null;
-  if (only && !tail && (prev.geo.room > 0) !== (room > 0) && prev.vk === vk) {
+  if (only && !tail && prev.geo.room !== room && prev.vk === vk) {
     const z = prev.L.z ?? 1;
     regeo = room > 0 ? tlLastLength(prev.geo, heads, wall, room, z, was) : null;
     if (!regeo) {
