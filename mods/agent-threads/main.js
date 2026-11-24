@@ -94,7 +94,7 @@ import {
   BAR_W, BAR_H, BAR_SLANT, trajLayout, rowsLeft,
 } from "./ledger.js";
 import {
-  timelineModel, timelineHit, tlBox, itemBox, tornPoints, polyRows, tlStrip,
+  timelineModel, timelineHit, tlBox, itemBox, tornPoints, polyRows, tlStrip, hatchLines, TL_MADE,
   TL_LANES, TL_MIN_W, TL_H, TL_GUT, TL_AX, TL_TK, TL_LT, TL_LANE, TL_PT, TL_ROWS_MIN,
 } from "./timeline.js";
 import { VERSION, versionLine, parseBuild } from "./version.js";
@@ -12095,7 +12095,8 @@ export default class Threads extends View {
   // The debug report's traj.timeline: whether it shows and why, and what the last draw laid
   // out (timeline.js timelineModel): the turns placed and drawn, the spans, the layers (one
   // painted path each, the growing bars' own included), the running turn's growing bars, and
-  // the ms of the last draw that placed or laid out the turns again.
+  // the ms of the last draw that placed or laid out the turns again, and how many times every
+  // pane has placed (geo) and laid out (layout) turns since the mod loaded (timeline.js TL_MADE).
   tlReport() {
     const M = this.tlModel;
     const T = M?.L;
@@ -12107,6 +12108,7 @@ export default class Threads extends View {
       cw: M?.cw ?? null, turns: T?.turns.length ?? 0, drawn: T ? T.to - T.from + 1 : 0, spans,
       layers: T ? T.spans.size + new Set(M.grow.map((g) => g.k)).size : 0, live: M?.geo.live ?? -1,
       grow: (M?.grow ?? []).map((g) => ({ k: g.k, x0: Math.round(g.x0), x1: Math.round(g.x1) })), labels: T?.labels.length ?? 0, ms: this.tlMs ?? null,
+      made: { geo: TL_MADE.geo, layout: TL_MADE.layout },
     };
   }
   // A press on the lanes: the nearest step in that lane within 4 px, else its turn's heading
@@ -12203,15 +12205,17 @@ export default class Threads extends View {
     const lanes = div().id("th-tl-lanes").relative().w(cw).h(laneH).cursor_pointer().overflow_hidden()
       .on_mouse_down("left", (e, cx) => this.tlPress(e, cx))
       .children(kids);
+    // Every number, tick and fail mark the layout gives: it keeps them 24, 62 and 6 px apart, so
+    // there are never more than fit (test/timeline.test.js). The marks are one layer.
     const labels = div().id("th-tl-labels").relative().w(cw).h(TL_AX).overflow_hidden()
-      .children(T.labels.slice(0, 80).map((l) => h_flex().absolute().top(0).left(l.x).w(Math.min(l.w, 160)).h(TL_AX).pl(5).gap(5).items_center()
+      .children(T.labels.map((l) => h_flex().absolute().top(0).left(l.x).w(Math.min(l.w, 160)).h(TL_AX).pl(5).gap(5).items_center()
         .border_l(1).border_color(t.border).text_size(10.5)
         .child(div().flex_none().text_color(t.foreground).child(l.text))
         .when(Boolean(l.total), (el) => el.child(div().flex_none().text_color(t.dim).child(l.total)))));
     const ticks = div().id("th-tl-ticks").relative().w(cw).h(TL_TK).overflow_hidden()
-      .children(T.ticks.slice(0, 80).map((k) => div().absolute().top(0).left(k.x).h(TL_TK).pl(3).border_l(1).border_color(t.dim)
+      .children(T.ticks.map((k) => div().absolute().top(0).left(k.x).h(TL_TK).pl(3).border_l(1).border_color(t.dim)
         .text_size(9.5).font_family(this.mono()).text_color(t.dim).child(k.text)))
-      .children(T.fails.slice(0, 120).map((x) => div().absolute().bottom(0).left(Math.max(0, x - 3)).w(6).h(4).rounded(1).bg(inks.failed)));
+      .child(this.rectLayer(T.fails.map((x) => [x - 3, x + 3]), inks.failed, "th-tl-fails", cw, TL_TK - 4, 4));
     const name = (word) => div().h(TL_LANE).flex().items_center().text_size(10.5).text_color(t.dim).child(word);
     return box(h_flex()).items_start()
       .child(v_flex().id("th-tl-gutter").flex_none().w(TL_GUT).pl(12).pt(TL_PT + TL_AX + TL_TK + TL_LT)
@@ -12252,8 +12256,9 @@ export default class Threads extends View {
       .children(few.map(([a, z]) => div().absolute().top(0).h_full().left(a).w(Math.max(1, z - a)).rounded(1).bg(color)))
       .children(torn.map((r) => div().absolute().top(r.y).h(r.h).left(Math.max(0, r.x0)).w(Math.max(0.5, r.x1 - Math.max(0, r.x0))).bg(color)));
   }
-  // The breaks between turns, hatched: 45 degree lines 5 px apart in each break 4 px or wider,
-  // one stroked path; a faint fill where Herdr has no stroked path.
+  // The breaks between turns, hatched (timeline.js hatchLines: 45 degree lines 5 px apart in
+  // each break 4 px or wider, at most TL_HATCH_MAX), one stroked path; a faint fill where
+  // Herdr has no stroked path.
   hatchLayer(gaps, color, cw, h) {
     const wide = gaps.filter(([a, z]) => z - a >= 4 && z > 0 && a < cw).map(([a, z]) => [Math.max(0, a), Math.min(cw, z)]);
     if (!wide.length) return null;
@@ -12263,14 +12268,7 @@ export default class Threads extends View {
         const px = (v) => `${((v / cw) * 100).toFixed(3)}%`;
         const py = (v) => `${((v / h) * 100).toFixed(3)}%`;
         let b = STROKE.PathBuilder.stroke(1);
-        // Lines x - (h - y) = c, cut to each break.
-        for (const [x0, x1] of wide) {
-          for (let c = x0 - h; c < x1; c += 5) {
-            const a = Math.max(x0, c);
-            const z = Math.min(x1, c + h);
-            if (z > a) b = b.move_to(px(a), py(h - (a - c))).line_to(px(z), py(h - (z - c)));
-          }
-        }
+        for (const [x0, y0, x1, y1] of hatchLines(gaps, cw, h).lines) b = b.move_to(px(x0), py(y0)).line_to(px(x1), py(y1));
         return win.paint_path(b.build(), color).absolute().top(0).left(0).size_full();
       } catch { /* the fills below */ }
     }

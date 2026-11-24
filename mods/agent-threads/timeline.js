@@ -69,6 +69,9 @@ export const TL_PB = 7;
 export const TL_ROWS_MIN = 4;
 // The strip's width in a pane w px wide: the pane less the gutter and a 12 px margin.
 export function tlStrip(w) { return Math.max(40, Math.floor(w - TL_GUT - 12)); }
+// How many times the turns were placed (timelineGeo) and laid out (timelineLayout) since the
+// module loaded, for the tests and the debug report: a draw that changes neither adds none.
+export const TL_MADE = { geo: 0, layout: 0 };
 export const TL_ROOM_MIN = 10000;
 export const TL_ROOM_GROW = 1.5;
 export function liveRoom(ms) {
@@ -90,6 +93,7 @@ function roomOf(heads, scale, nowMs) {
   return liveRoom(Math.max(h.span ?? 0, nowMs - h.t0));
 }
 export function timelineGeo(heads, cw, scale = "clock", nowMs = Date.now()) {
+  TL_MADE.geo++;
   const n = heads.length;
   const geo = { cw, scale, turns: [], index: new Map(), walls: [], gap: 0, total: 0, steps: 0, live: -1, room: 0 };
   if (!n || !(cw > 0)) return geo;
@@ -195,6 +199,7 @@ export function bandRows(L, heads, lo, hi) {
 // The running turn's unfinished bars are not spans: each is in out.grow ({ k, x0, tx, w, wall,
 // t0 }), whose right end tlGrow finds at a given time, so a layout holds while the turn runs.
 export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), view = null, geo = null, range = null) {
+  TL_MADE.layout++;
   const G = geo ?? timelineGeo(heads, cw, scale, nowMs);
   const { z, x0 } = tlClamp(G, view);
   const out = { cw, scale, z, x0, geo: G, turns: G.turns, index: G.index, total: G.total, zmax: tlMaxZoom(G), gaps: [], spans: new Map(), labels: [], ticks: [], fails: [], grow: [], from: 0, to: -1 };
@@ -289,6 +294,42 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
     }
   }
   return out;
+}
+// The breaks' hatch: 45 degree lines TL_HATCH px apart in each break 4 px or wider (gaps from
+// timelineLayout, [x0, x1, ms]), cut to the break and to a strip cw px wide and h px tall, as
+// segments [x0, y0, x1, y1] in px. One painted path draws them all, so their count is the
+// path's size: past TL_HATCH_MAX the lines are spaced wider, so there are never more. At Fit
+// the breaks take at most 15% of the strip and a break is 4 px or wider only while the turns
+// are few (52 on a 1,370 px strip), so the count stays near 0.4 of the strip's width; the cap
+// is for a zoomed view (part 3). every: the spacing used.
+export const TL_HATCH = 5;
+export const TL_HATCH_MAX = 800;
+export function hatchLines(gaps, cw, h) {
+  const wide = [];
+  let len = 0;
+  for (const [a, z] of gaps ?? []) {
+    if (!(z - a >= 4 && z > 0 && a < cw)) continue;
+    const x0 = Math.max(0, a);
+    const x1 = Math.min(cw, z);
+    wide.push([x0, x1]);
+    len += x1 - x0 + h;
+  }
+  // Each break gets at most len_i / every + 1 lines, so this spacing keeps the sum to the cap.
+  let every = TL_HATCH;
+  let n = 0;
+  for (const [x0, x1] of wide) n += Math.ceil((x1 - x0 + h) / TL_HATCH);
+  if (n > TL_HATCH_MAX) every = len / Math.max(1, TL_HATCH_MAX - wide.length);
+  const lines = [];
+  for (const [x0, x1] of wide) {
+    // The first line half a spacing in, so none is a point at the break's left edge.
+    for (let c = x0 - h + every / 2; c < x1; c += every) {
+      const a = Math.max(x0, c);
+      const z = Math.min(x1, c + h);
+      // Rounded to the strip: a line's end at the lanes' top or foot is 0 or h, not 1e-14 past it.
+      if (z > a) lines.push([a, Math.min(h, Math.max(0, h - (a - c))), z, Math.min(h, Math.max(0, h - (z - c)))]);
+    }
+  }
+  return { lines, every };
 }
 // The torn end (round 7 decisions, section 2) as a polygon in px, for a bar a to z px and h
 // px tall: the right end cut into teeth (3, each 4 px tall and 5 px deep; 3 px deep under 12
