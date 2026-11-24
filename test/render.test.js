@@ -9425,6 +9425,168 @@ test("level 3: an OpenCode shell call that exits 1 is failed, in 1.x and 2.x; ex
   }
 });
 
+test("level 3: an OpenCode call that is not the shell is not failed by an exit code in its metadata, in 1.x and 2.x; status error still is", async () => {
+  // Only the shell tool's exit code says a call failed; any other tool is read by its status.
+  // Synthetic databases, made-up words.
+  const { Database } = await import("bun:sqlite");
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
+  const T0 = Date.UTC(2026, 10, 1, 9, 0, 0);
+  const ts = (s) => new Date(T0 + s * 1000).toISOString();
+  const SID = "ses_000001";
+  const calls = [["call_000001", "completed", { exit: 1 }, "plum"], ["call_000002", "completed", {}, "pear"], ["call_000003", "error", {}, null]];
+  const build = (version) => {
+    const dir = mkdtempSync(join(tmpdir(), "threads-calls-oc-"));
+    const path = join(dir, "opencode.db");
+    const db = new Database(path);
+    if (version === "1.x") {
+      db.run("create table session (id text primary key, parent_id text, directory text, title text, time_created integer, time_updated integer, time_archived integer)");
+      db.run("create table message (id text primary key, session_id text, time_created integer, data text)");
+      db.run("create table part (id text primary key, message_id text, session_id text, data text)");
+      db.run("insert into message values ('msg_000001', ?, ?, ?)", [SID, T0, JSON.stringify({ role: "user" })]);
+      db.run("insert into message values ('msg_000002', ?, ?, ?)", [SID, T0 + 1000, JSON.stringify({ role: "assistant", parentID: "msg_000001", finish: "stop", time: { created: T0 + 1000, completed: T0 + 9000 } })]);
+      calls.forEach(([id, status, metadata, output], i) => db.run("insert into part values (?, 'msg_000002', ?, ?)", [`prt_00000${i + 1}`, SID,
+        JSON.stringify({ type: "tool", tool: "read", callID: id, state: { status, input: { filePath: "fruit.txt" }, ...(output == null ? { error: "File not found: fruit.txt" } : { output }), metadata, time: { start: T0 + (i + 1) * 1000, end: T0 + (i + 2) * 1000 } } })]));
+    } else {
+      db.run(`create table session_v2 (id text primary key, project_id text, parent_id text, directory text, title text,
+        time_created integer, time_updated integer, time_archived integer, time_busy integer, time_idle integer)`);
+      db.run("create table session_message (id text primary key, session_id text, type text, seq integer, time_created integer, time_updated integer, data text)");
+      db.run("insert into session_message values ('msg_000001', ?, 'user', 1, ?, ?, ?)", [SID, T0, T0, JSON.stringify({ text: "Read the fruit" })]);
+      db.run("insert into session_message values ('msg_000002', ?, 'assistant', 2, ?, ?, ?)", [SID, T0 + 1000, T0 + 1000, JSON.stringify({ time: { created: T0 + 1000, completed: T0 + 9000 },
+        content: calls.map(([id, status, metadata, output], i) => ({ type: "tool", id, name: "read", state: { status, input: { filePath: "fruit.txt" },
+          ...(output == null ? { error: { type: "unknown", message: "File not found: fruit.txt" } } : { content: [{ type: "text", text: output }] }), metadata },
+          time: { created: T0 + (i + 1) * 1000, completed: T0 + (i + 2) * 1000 } })) })]);
+    }
+    db.close();
+    return `${path}#${SID}`;
+  };
+  for (const version of ["1.x", "2.x"]) {
+    const file = build(version);
+    const { v, cx } = await pane(fixture("--only", "1"));
+    const s = newSession(SID, file);
+    for (const e of [{ k: "p", o: "human", t: "Read the fruit", ts: ts(0) }, ...calls.map(([id]) => ({ k: "u", n: "read", id })),
+      { k: "t", t: "No fruit." }, { k: "d", ms: 9000, ts: ts(9) }]) apply(s, e);
+    s.loaded = true;
+    v.sessions = [s];
+    cx.pending = [];
+    const a = "0:1";
+    const settled = async () => { for (let i = 0; i < 6; i++) { draw(v, cx); cx.flush(0); await settleCx(cx); } };
+    v.sel = a;
+    v.action("deeper", cx);
+    await settled();
+    v.action("deeper", cx);
+    await settled();
+    const detail = (k) => v.rowDetail(v.rows().find((r) => r.key === k));
+    expect([version, detail(`cl:${a}:0:0`)]).toEqual([version, "call#1 fruit.txt · 1s [closed]"]);
+    expect([version, detail(`cl:${a}:0:1`)]).toEqual([version, "call#1 fruit.txt · 1s [closed]"]);
+    expect([version, detail(`cl:${a}:0:2`)]).toEqual([version, "call#1 fruit.txt · 1s [failed] [closed]"]);
+    expect([version, detail(`gp:${a}:0`)]).toEqual([version, "grp#1 Read 3 files · 1 failed [failed] [open]"]);
+    draw(v, cx);
+  }
+});
+
+test("level 3: an Antigravity call whose step is still RUNNING shows no result, not a finished call with the running note as its output", async () => {
+  // agy writes a call's GENERIC step as RUNNING while it runs, and a stopped turn keeps it so;
+  // the call's result is that step once it is DONE or ERROR. Synthetic transcript, made-up words.
+  const { mkdirSync } = await import("node:fs");
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
+  const ID = "00000000-0000-4000-8000-000000000098";
+  const dir = join(mkdtempSync(join(tmpdir(), "threads-calls-agy-")), "brain", ID, ".system_generated", "logs");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "transcript_full.jsonl");
+  const ts = (s) => `2026-01-05T15:07:${String(s).padStart(2, "0")}Z`;
+  writeFileSync(file, `${[
+    { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", status: "DONE", created_at: ts(0), content: "<USER_REQUEST>\nSort the widgets\n</USER_REQUEST>" },
+    { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", status: "DONE", created_at: ts(1),
+      tool_calls: [{ name: "run_command", args: { CommandLine: "wc -l widgets.txt" } }, { name: "run_command", args: { CommandLine: "sort widgets.txt" } }] },
+    { step_index: 2, source: "MODEL", type: "GENERIC", status: "DONE", created_at: ts(3), content: `Created At: ${ts(1)}\nCompleted At: ${ts(3)}\nCommand output:\n3 widgets.txt` },
+    { step_index: 3, source: "MODEL", type: "GENERIC", status: "RUNNING", created_at: ts(8), content: `Created At: ${ts(3)}\nTool is running as a background task with task id: task-000001` },
+  ].map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const a = "0:1";
+  const rows = async (done) => {
+    const { v, cx } = await pane(fixture("--only", "1"));
+    const s = newSession(ID, file);
+    for (const e of [{ k: "p", o: "human", t: "Sort the widgets", ts: ts(0) },
+      { k: "u", n: "run_command", id: "s1.0" }, { k: "u", n: "run_command", id: "s1.1" }, ...(done ? [{ k: "d", ms: 9000, ts: ts(9) }] : [])]) apply(s, e);
+    s.loaded = true;
+    v.sessions = [s];
+    cx.pending = [];
+    const settled = async () => { for (let i = 0; i < 6; i++) { draw(v, cx); cx.flush(0); await settleCx(cx); } };
+    v.sel = a;
+    v.action("deeper", cx);
+    await settled();
+    v.action("deeper", cx);
+    await settled();
+    v.toggleCall(`${a}:0:0`);
+    v.toggleCall(`${a}:0:1`);
+    await settled();
+    const out = v.rows().filter((r) => /^(gp|cl|co):/.test(r.key ?? "")).map((r) => [r.key, v.rowDetail(r)]);
+    draw(v, cx);
+    return out;
+  };
+  // A stopped turn: the group claims no check, and the call has no time and no output. Before,
+  // the group read "[ok]", the call "· 7s" (to the step's created_at), and its output was the
+  // running note.
+  expect(await rows(true)).toEqual([
+    [`gp:${a}:0`, "grp#1 Ran 2 commands [open]"],
+    [`cl:${a}:0:0`, "call#1 wc -l widgets.txt · 2s [open]"],
+    [`co:${a}:0:0`, "cout#1 ok lines 2/2 plain h54 | Command output: ⏎ 3 widgets.txt"],
+    [`cl:${a}:0:1`, "call#1 sort widgets.txt [open]"],
+    [`co:${a}:0:1`, "cout#1 ok lines 0/0 plain h38"],
+  ]);
+  // A turn still going: the group names the call that runs, which has no time yet.
+  expect((await rows(false)).filter(([k]) => !k.startsWith("co:"))).toEqual([
+    [`gp:${a}:0`, "grp#1 Running 2 commands · sort widgets.txt [open]"],
+    [`cl:${a}:0:0`, "call#1 wc -l widgets.txt · 2s [closed]"],
+    [`cl:${a}:0:1`, "call#1 sort widgets.txt [closed]"],
+  ]);
+});
+
+test("level 3: an Antigravity FAILED step is failed and shows its error; a step rewritten from ERROR to DONE shows as DONE; a PENDING one shows no result", async () => {
+  // Synthetic transcript, made-up words.
+  const { mkdirSync } = await import("node:fs");
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
+  const ID = "00000000-0000-4000-8000-000000000099";
+  const dir = join(mkdtempSync(join(tmpdir(), "threads-calls-agy-")), "brain", ID, ".system_generated", "logs");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "transcript_full.jsonl");
+  const ts = (s) => `2026-01-05T15:07:${String(s).padStart(2, "0")}Z`;
+  const run = (CommandLine) => ({ name: "run_command", args: { CommandLine } });
+  writeFileSync(file, `${[
+    { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", status: "DONE", created_at: ts(0), content: "<USER_REQUEST>\nSort the widgets\n</USER_REQUEST>" },
+    { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", status: "DONE", created_at: ts(1), tool_calls: [run("sort gadget.txt"), run("sort widgets.txt"), run("wc -l widgets.txt")] },
+    { step_index: 2, source: "MODEL", type: "GENERIC", status: "FAILED", created_at: ts(2), error: "no such file: gadget.txt", content: `Created At: ${ts(1)}\nCompleted At: ${ts(2)}` },
+    { step_index: 3, source: "MODEL", type: "GENERIC", status: "ERROR", created_at: ts(3), error: "busy", content: `Created At: ${ts(2)}\nCompleted At: ${ts(3)}\nEncountered error in step execution: busy` },
+    { step_index: 3, source: "MODEL", type: "GENERIC", status: "DONE", created_at: ts(5), content: `Created At: ${ts(2)}\nCompleted At: ${ts(5)}\nCommand output:\nsorted` },
+    { step_index: 4, source: "MODEL", type: "GENERIC", status: "PENDING", created_at: ts(8), content: `Created At: ${ts(5)}\nWaiting for approval` },
+  ].map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const { v, cx } = await pane(fixture("--only", "1"));
+  const s = newSession(ID, file);
+  for (const e of [{ k: "p", o: "human", t: "Sort the widgets", ts: ts(0) },
+    { k: "u", n: "run_command", id: "s1.0" }, { k: "u", n: "run_command", id: "s1.1" }, { k: "u", n: "run_command", id: "s1.2" }, { k: "d", ms: 9000, ts: ts(9) }]) apply(s, e);
+  s.loaded = true;
+  v.sessions = [s];
+  cx.pending = [];
+  const a = "0:1";
+  const settled = async () => { for (let i = 0; i < 6; i++) { draw(v, cx); cx.flush(0); await settleCx(cx); } };
+  v.sel = a;
+  v.action("deeper", cx);
+  await settled();
+  v.action("deeper", cx);
+  await settled();
+  for (const c of [0, 1, 2]) v.toggleCall(`${a}:0:${c}`);
+  await settled();
+  expect(v.rows().filter((r) => /^(gp|cl|co):/.test(r.key ?? "")).map((r) => [r.key, v.rowDetail(r)])).toEqual([
+    [`gp:${a}:0`, "grp#1 Ran 3 commands · 1 failed [failed] [open]"],
+    [`cl:${a}:0:0`, "call#1 sort gadget.txt · 1s [failed] [open]"],
+    [`co:${a}:0:0`, "cout#1 ok lines 1/1 plain h38 | no such file: gadget.txt"],
+    [`cl:${a}:0:1`, "call#1 sort widgets.txt · 4s [open]"],
+    [`co:${a}:0:1`, "cout#1 ok lines 2/2 plain h54 | Command output: ⏎ sorted"],
+    [`cl:${a}:0:2`, "call#1 wc -l widgets.txt [open]"],
+    [`co:${a}:0:2`, "cout#1 ok lines 0/0 plain h38"],
+  ]);
+  draw(v, cx);
+});
+
 test("level 3: a group claims no check or red mark until its calls are read; once read it keeps the check, or the red mark and how many failed", async () => {
   // Two groups: one with a failed command, one where every call worked.
   const dir = mkdtempSync(join(tmpdir(), "threads-calls-"));
@@ -14861,6 +15023,209 @@ test("card keys: on Sender rules the ring follows a press the way it does on Lin
     v.applyPrefs(JSON.stringify({ textSize: 15, senders: [] }));
     v.cardRing = "th-sender-use-from"; stopsOf(v); pressKey(v, cx, "enter");
     expect([v.ruleEdit?.kind, v.cardRing]).toEqual(["senders", "th-sender-type-prefix"]);
+  } finally { done(v); }
+});
+
+// TRD-100: on a kept rule, Change opens the two type rows above Name and pushes the fields
+// down, so a press aimed at Starts with can land in Name. A press reaches the mod as the
+// field's focus event; the ring stayed on the type row, the rows stayed open, and Tab stepped
+// from the type row. The rule here is a Duplicate copy, kept, opened again after the page was
+// left, with the rows open by Change and the ring on its own type's row.
+async function keptCopyPicker(ring = true) {
+  const r = await sendersPane();
+  const { v, cx } = r;
+  onOf(cardOf(v), "th-sender-edit-btn-1", "on_click")({}, cx);
+  onOf(cardOf(v), "th-rule-dup", "on_click")({}, cx);
+  onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+  await settleAll(cx);
+  v.action("settingsPage:main", cx);
+  v.action("settingsPage:senders", cx);
+  onOf(cardOf(v), "th-sender-edit-btn-2", "on_click")({}, cx);
+  v.cardRing = ring ? "th-sender-type-change" : null;
+  onOf(cardOf(v), "th-sender-type-change", "on_click")({}, cx);
+  expect([v.ruleEdit.at, v.ruleEdit.draft.name, v.ruleEdit.typeOpen, v.cardRing]).toEqual([1, "Checker copy", true, ring ? "th-sender-type-prefix" : null]);
+  return r;
+}
+
+test("TRD-100: a press in Name of a kept copy with its type rows open folds the rows and takes the ring; with no ring shown, none comes", async () => {
+  let { v, cx } = await keptCopyPicker();
+  try {
+    v.senderInputs.name.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, "th-rule-f-name", "rule-sender-name"]);
+    const c = cardOf(v);
+    expect(idsIn(c)).toContain("th-sender-type-change");
+    expect(idsIn(c)).not.toContain("th-sender-type-pattern");
+  } finally { done(v); }
+  ({ v, cx } = await keptCopyPicker(false));
+  try {
+    v.senderInputs.name.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, null, "rule-sender-name"]);
+  } finally { done(v); }
+});
+
+test("TRD-100: after a press in Name folds the type rows, the parts above Starts with are the ones drawn before Change, so a second press at the same place lands in Starts with and takes the keys", async () => {
+  const { v, cx } = await keptCopyPicker();
+  try {
+    // What sits above Starts with in the open rule, as drawn: its ids and its words.
+    const above = () => {
+      const c = cardOf(v);
+      const ids = idsIn(c);
+      const strs = strsOf(c);
+      return {
+        ids: ids.slice(ids.indexOf("th-rule-edit-2"), ids.indexOf("th-rule-f-prefix")),
+        strs: strs.slice(strs.indexOf("Type"), strs.lastIndexOf("Starts with")),
+      };
+    };
+    expect(above().ids).toContain("th-sender-type-pattern");
+    v.senderInputs.name.handlers.focus({}, cx);
+    const folded = above();
+    // Before Change: the same rule, opened again with its type on one line.
+    v.closeRule();
+    onOf(cardOf(v), "th-sender-edit-btn-2", "on_click")({}, cx);
+    expect(folded).toEqual(above());
+    expect(folded.ids).not.toContain("th-sender-type-pattern");
+    // The press where Name was is now in Starts with, which takes the keys and the text.
+    v.senderInputs.prefix.handlers.focus({}, cx);
+    expect([v.fieldFocused, v.ruleEdit.typeOpen]).toEqual(["rule-sender-prefix", false]);
+    typeSender(v, "prefix", "mail from {name}:", cx);
+    expect(v.ruleEdit.draft.prefix).toBe("mail from {name}:");
+  } finally { done(v); }
+});
+
+test("TRD-100: a press in Starts with of a kept copy with its type rows open folds them and takes the ring; a key edits it and Keep rule writes it", async () => {
+  const { v, cx } = await keptCopyPicker();
+  try {
+    v.senderInputs.prefix.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, "th-rule-f-prefix", "rule-sender-prefix"]);
+    typeSender(v, "prefix", "mail from {name}:", cx);
+    expect(v.ruleEdit.draft.prefix).toBe("mail from {name}:");
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()[1]).toEqual({ name: "Checker copy", prefix: "mail from {name}:", example: SENDS[0].example });
+    expect(lastSenders()[0]).toEqual(SENDS[0]);
+  } finally { done(v); }
+});
+
+test("TRD-100: Tab steps from the field a press gave the keyboard, not from a ring left on a type row; Shift-Tab goes back", async () => {
+  const { v, cx } = await keptCopyPicker();
+  try {
+    v.senderInputs.name.handlers.focus({}, cx);
+    stopsOf(v); pressKey(v, cx, "tab");
+    expect([v.cardRing, v.fieldFocused]).toEqual(["th-rule-f-prefix", "rule-sender-prefix"]);
+    stopsOf(v); pressKey(v, cx, "tab", tabEv(true));
+    expect([v.cardRing, v.fieldFocused]).toEqual(["th-rule-f-name", "rule-sender-name"]);
+  } finally { done(v); }
+});
+
+test("TRD-100: on Link rules too, Tab steps from a field a press gave the keyboard while the ring is on another control", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    v.cardRing = "th-rule-edit-btn-1"; stopsOf(v); pressKey(v, cx, "enter");
+    expect(v.cardRing).toBe("th-rule-type-change");
+    v.ruleInputs.name.handlers.focus({}, cx);
+    const s = stopsOf(v);
+    const next = s[s.indexOf("th-rule-f-name") + 1];
+    expect(next).toMatch(/^th-rule-f-/);
+    pressKey(v, cx, "tab");
+    expect([v.cardRing, v.fieldFocused]).toEqual([next, `rule-${next.slice(10)}`]);
+  } finally { done(v); }
+});
+
+test("TRD-100: on a kept link rule with its Change rows open, a press in a field folds the rows and takes a shown ring; with no ring shown, none comes", async () => {
+  let { v, cx } = await rulesPane();
+  try {
+    v.cardRing = "th-rule-edit-btn-2"; stopsOf(v); pressKey(v, cx, "enter");
+    stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit.at, v.ruleEdit.typeOpen, v.cardRing]).toEqual([1, true, "th-rule-type-custom"]);
+    expect(idsIn(cardOf(v))).toContain("th-rule-type-ticket");
+    v.ruleInputs.pattern.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, "th-rule-f-pattern", "rule-pattern"]);
+    const c = cardOf(v);
+    expect(idsIn(c)).toContain("th-rule-type-change");
+    expect(idsIn(c)).not.toContain("th-rule-type-ticket");
+    // Tab goes on from the field pressed into.
+    const s = stopsOf(v);
+    pressKey(v, cx, "tab");
+    expect(v.cardRing).toBe(s[s.indexOf("th-rule-f-pattern") + 1]);
+  } finally { done(v); }
+  ({ v, cx } = await rulesPane());
+  try {
+    onOf(cardOf(v), "th-rule-edit-btn-2", "on_click")({}, cx);
+    onOf(cardOf(v), "th-rule-type-change", "on_click")({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing]).toEqual([true, null]);
+    v.ruleInputs.name.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, null, "rule-name"]);
+    // A sender field's focus does nothing to an open link rule.
+    onOf(cardOf(v), "th-rule-type-change", "on_click")({}, cx);
+    v.senderInputs.name.handlers.focus({}, cx);
+    expect(v.ruleEdit.typeOpen).toBe(true);
+  } finally { done(v); }
+});
+
+test("TRD-100: on a new rule, not kept yet, a press in Name leaves its type rows open, on Sender rules and on Link rules", async () => {
+  let { v, cx } = await sendersPane();
+  try {
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    expect([v.ruleEdit.kind, v.ruleEdit.at]).toEqual(["senders", null]);
+    v.senderInputs.name.handlers.focus({}, cx);
+    expect(v.fieldFocused).toBe("rule-sender-name");
+    const c = cardOf(v);
+    expect(idsIn(c)).toContain("th-sender-type-prefix");
+    expect(idsIn(c)).toContain("th-sender-type-pattern");
+    expect(idsIn(c)).not.toContain("th-sender-type-change");
+  } finally { done(v); }
+  ({ v, cx } = await rulesPane());
+  try {
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    expect([v.ruleEdit.kind, v.ruleEdit.at, v.ruleEdit.touched]).toEqual(["links", null, false]);
+    v.ruleInputs.name.handlers.focus({}, cx);
+    expect(v.fieldFocused).toBe("rule-name");
+    const c = cardOf(v);
+    expect(idsIn(c)).toContain("th-rule-type-custom");
+    expect(idsIn(c)).toContain("th-rule-type-ticket");
+    expect(idsIn(c)).not.toContain("th-rule-type-change");
+  } finally { done(v); }
+});
+
+test("TRD-100: Tab steps from the quote key field a press gave the keyboard, not from the ring on another control", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    v.setPage = "main";
+    const s = stopsOf(v);
+    const at = s.indexOf("th-set-quote");
+    expect(at).toBeGreaterThan(2);
+    v.cardRing = s[1];
+    v.quoteInput.handlers.focus({}, cx);
+    expect([v.cardRing, v.fieldFocused]).toEqual([s[1], "quote"]);
+    stopsOf(v); pressKey(v, cx, "tab");
+    expect([v.cardRing, v.fieldFocused]).toEqual([s[at + 1], null]);
+    v.cardRing = s[1];
+    v.quoteInput.handlers.focus({}, cx);
+    stopsOf(v); pressKey(v, cx, "tab", tabEv(true));
+    expect(v.cardRing).toBe(s[at - 1]);
+  } finally { done(v); }
+});
+
+test("TRD-100: the keyboard alone on a kept copy: Change, its type rows, Tab into Name folds them, Tab to Starts with, a key, Enter keeps it", async () => {
+  const { v, cx } = await keptCopyPicker();
+  try {
+    stopsOf(v); pressKey(v, cx, "tab");
+    expect([v.cardRing, v.ruleEdit.typeOpen]).toEqual(["th-sender-type-pattern", true]);
+    stopsOf(v); pressKey(v, cx, "tab");
+    expect([v.cardRing, v.fieldFocused, v.ruleEdit.typeOpen]).toEqual(["th-rule-f-name", "rule-sender-name", false]);
+    stopsOf(v); pressKey(v, cx, "tab");
+    expect([v.cardRing, v.fieldFocused]).toEqual(["th-rule-f-prefix", "rule-sender-prefix"]);
+    typeSender(v, "prefix", "mail from {name}:", cx);
+    v.senderInputs.prefix.handlers.submit({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()[1].prefix).toBe("mail from {name}:");
+    expect(v.cardRing).toBe("th-sender-edit-btn-2");
+    // Shift-Tab from Name back into the open rows, and a type chosen there, as before.
+    stopsOf(v); pressKey(v, cx, "enter");
+    stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.cardRing, v.ruleEdit.typeOpen]).toEqual(["th-sender-type-prefix", true]);
+    v.cardRing = "th-sender-type-pattern"; stopsOf(v); pressKey(v, cx, "space");
+    expect([v.ruleEdit.draft.by, v.ruleEdit.typeOpen, v.cardRing]).toEqual(["pattern", false, "th-sender-type-change"]);
   } finally { done(v); }
 });
 
