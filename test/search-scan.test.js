@@ -1088,7 +1088,16 @@ test("a search needs two characters, or one in a script written without spaces",
   const isSearch = (q) => { v.setQuery(q, cx); return v.filterText() !== ""; };
   for (const q of ["a", "7", "é", "ー", "😀", "  a  "]) expect([q, isSearch(q)]).toEqual([q, false]);
   for (const q of ["ar", "a7", "字", "𠀀", "あ", "カ", "한", "ก", "ລ", "ក", "က"]) expect([q, isSearch(q)]).toEqual([q, true]);
-});
+  // Counted in code points, not in what reads as one character: an "é" written as e and a
+  // combining accent (U+0301), a thumbs-up with a skin tone, a heart with its emoji form
+  // (U+FE0F) and a flag are two code points each, so each alone is a search, for that exact
+  // sequence. Here none is in a turn.
+  for (const q of ["e\u0301", "👍🏽", "❤️", "🇫🇷"]) {
+    v.setQuery(q, cx);
+    settleRows(v, cx);
+    expect([q, [...q].length, v.filterText() === q, fieldText(v)]).toEqual([q, 2, true, "No matches"]);
+  }
+}, 120000);
 
 // The Script property escapes are built at load, in a try: an engine without them (a
 // SyntaxError) gets a minimum of 2 code points for every script, and the mod still loads.
