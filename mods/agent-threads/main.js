@@ -1423,7 +1423,7 @@ export default class Threads extends View {
           await saveSettings(appHome(), merged, text, extra);
           this.prefsRaw = settingsText(merged, text, extra);
           this.prefsError = null;
-          this.setPrefs(parseSettings(this.prefsRaw).values);
+          this.applyPrefs(this.prefsRaw);
         } catch (e) {
           this.prefsRaw = text;
           this.prefsError = `Could not save settings.json: ${clean(String(e?.message ?? e))}`;
