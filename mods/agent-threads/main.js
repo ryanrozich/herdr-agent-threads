@@ -1045,10 +1045,9 @@ export default class Threads extends View {
     // i: the Turn card over the bottom of the pane, with the selected turn's numbers. It
     // follows the selection while open. Not saved.
     this.detailsOpen = false;
-    // A key came after the pointer last moved in the pane: gpui then draws no hover until the
-    // pointer moves again, so a closed pin's unpin button shown only on hover is not on
-    // screen (unpinButton). Set by any key the pane gets, cleared by a move in its body.
-    this.keyed = false;
+    // The closed pin whose row the pointer is on, by its key (pinHover), so the pane, not
+    // gpui's hover style, decides which unpin button is drawn (pinButtons, unpinButton).
+    this.hoverPin = null;
     // o: the outline, one row per turn ("line" items). outlineBack is where the list was
     // when it opened, for Esc. Not saved across restarts.
     this.outline = false;
@@ -6269,7 +6268,6 @@ export default class Threads extends View {
     // Any key wins over a press's pending open (OPEN_WAIT_MS): j, Enter or Esc pressed just
     // after a click acts on its own, and the turn is not opened behind it.
     this.openWait = null;
-    this.keyed = true;
     // ⌘C in Select view: the editor copies the highlight with its own binding, and the
     // panel says that q now quotes it.
     if (this.selecting && e.keystroke === "cmd-c") this.sawCopy(this.selecting, cx);
@@ -7219,8 +7217,12 @@ export default class Threads extends View {
     const root = v_flex()
       .id("threads-root")
       .track_focus(this.h)
-      // The pointer in the pane: the floating top shows its icons.
-      .on_hover((on, cx) => { if (Boolean(on) !== Boolean(this.paneHover)) { this.paneHover = Boolean(on); cx.notify(); } })
+      // The pointer in the pane: the floating top shows its icons. Leaving it, it is on no
+      // pin's row (hoverPin).
+      .on_hover((on, cx) => {
+        if (!on && this.hoverPin) { this.hoverPin = null; cx.notify(); }
+        if (Boolean(on) !== Boolean(this.paneHover)) { this.paneHover = Boolean(on); cx.notify(); }
+      })
       .on_key_down((e, cx) => this.key(e, cx))
       .when(this.settingsOpen, (el) => this.cardKeyContext(el))
       .on_modifiers_changed((e, cx) => this.cmdUp(e, cx))
@@ -9194,8 +9196,6 @@ export default class Threads extends View {
     const strip = !this.floating() && this.hasDayStrip(rows);
     return v_flex().id("threads-body").flex_1().min_h(0).relative()
       .on_mouse_move((e, cx) => {
-        // Also over the unpin buttons' boxes, which take no move of their own.
-        this.keyed = false;
         if (this.covered()) return;
         const x = e.local_position?.x;
         this.mouseX = x == null ? null : x / this.zoom() - this.colLeft();
@@ -10610,40 +10610,52 @@ export default class Threads extends View {
   // button (iconButton) with its own click, so a press unpins only on it, and the press and the
   // release both on it (gpui's click), and goes no further (stop_propagation): the list under
   // it neither selects nor opens the turn. It takes no press-down, so a drag that starts on it
-  // is not held. It sits in a clear box the size of its row, which turns dim while the pointer
-  // is on the row and gives the button that colour (Herdr restyles only the hovered element),
-  // so the button is drawn whenever the pointer is on its row, and always on the selected pin.
-  // The layer is laid out as the list's items are: the reading column, centred.
+  // is not held. It sits in a clear box the size of its row, which tells the pane when the
+  // pointer comes onto the row and leaves it (pinHover). The pane draws the button, in its
+  // box's colour, on the row the pointer is on and on the selected pin, from its own state, not
+  // gpui's hover style, which a key can hide while the pointer rests. Only a drawn button has
+  // the hover fill and the hand. The layer is laid out as the list's items are: the reading
+  // column, centred.
   pinButtons(t, btns) {
+    // The row the pointer was on is gone from the layer, or the layer is: it is on no button.
+    if (this.hoverPin && !btns.some((b) => b.r.key === this.hoverPin)) this.hoverPin = null;
     if (!btns.length) return [];
     const P = PIN_ROW;
     return [h_flex().id("th-unpins").absolute().top(0).left(0).size_full().justify_center()
       .child(div().w_full().max_w(this.width).h_full().relative()
         .children(btns.map(({ r, top, h }) => {
           const sel = this.sel === r.key;
+          const drawn = sel || this.hoverPin === r.key;
           const tip = `Unpin #${r.turn.n}${sel && this.quoteKey !== "p" ? " (p)" : ""}`;
           return div().id(`th-unpin-row-${r.pinNo}`).absolute().top(top).left(0).w_full().h(h)
-            .text_color(sel ? t.dim : CLEAR)
-            .when(!sel, (el) => el.hover((s) => s.text_color(t.dim)))
+            .text_color(drawn ? t.dim : CLEAR)
+            .on_hover((on, cx) => this.pinHover(r.key, on, cx))
             .child(h_flex().absolute().top(0).bottom(0).right(P.UNPIN_R).items_center()
-              .child(div().id(`th-unpin-${r.pinNo}`).flex_none().size(P.UNPIN).flex().items_center().justify_center().rounded(5).cursor_pointer()
-                .hover((s) => s.bg(t.hover).text_color(t.foreground))
+              .child(div().id(`th-unpin-${r.pinNo}`).flex_none().size(P.UNPIN).flex().items_center().justify_center().rounded(5)
+                .when(drawn, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)))
                 .tooltip(tip)
                 .on_click((_e, cx) => { cx.stop_propagation(); this.unpinButton(r.key, cx); })
                 .child(svg(ICON("pin-off")).size(14))));
         })))];
   }
+  // The pointer came onto a closed pin's row (on) or left it. Rows' enter and leave can come in
+  // either order, so a leave clears only its own row. A redraw only on a change.
+  pinHover(key, on, cx) {
+    if (on ? this.hoverPin === key : this.hoverPin !== key) return;
+    this.hoverPin = on ? key : null;
+    cx.notify();
+  }
   // A press on a pin's unpin button, or the header's (for the selected pin): the pin goes,
   // and the turn is neither selected nor opened. The notice offers undo (unpin). Nothing
   // while a card or sheet covers the list. Under the Turn card the press only closes it, as
-  // a press anywhere outside it does (click()). After a key, until the pointer moves, a
-  // button that shows only on hover is not on screen (keyed): a press on another pin's then
-  // selects that pin, as a press on its row would; selected, its button is drawn, so a second
-  // press on the spot unpins it.
+  // a press anywhere outside it does (click()). A press on a button the pane did not draw
+  // (pinButtons: neither the selected pin's nor the one on the row the pointer is on, as when
+  // a row moved under a pointer at rest) selects that pin, as a press on its row would;
+  // selected, its button is drawn, so a second press on the spot unpins it.
   unpinButton(key, cx) {
     if (this.covered() || this.view !== "pinned") return;
     if (this.detailsOpen && Popup) { this.detailsOpen = false; cx.notify(); return; }
-    if (this.keyed && this.sel !== key) { this.sel = key; cx.notify(); return; }
+    if (this.sel !== key && this.hoverPin !== key) { this.sel = key; cx.notify(); return; }
     const p = this.pinnedList().find((x) => x.key === key);
     if (p) { this.unpin(p, cx); cx.notify(); }
   }
