@@ -20243,6 +20243,27 @@ test("the opening: a wheel up once the parts are measured, with rows still to re
   } finally { H.listWindow = null; }
 }, 30000);
 
+test("the opening: a new width while the list is hidden shows it once the rows near the end have the new width's shapes", async () => {
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    const { v, step } = await plainOpening(2400);
+    step();
+    expect(v.openActive()).toBe(true);
+    v.width -= 40;
+    const look = v.shapeLook();
+    let x = null;
+    for (let k = 0; v.openActive() && k < 400; k++) x = step();
+    expect(v.openActive()).toBe(false);
+    // The frame that showed it: at its end, the rows near it reshaped, none blank, more left.
+    expect(x.end).toBe(true);
+    const [a, b] = nearRows(v);
+    const old = v.baseRows.slice(a, b).filter((r) => r.kind === "turn" && !(r.shape === r.turn.shapeMemo && r.turn.shapeFast?.look === look));
+    expect(old.length).toBe(0);
+    expect(blankInView(v)).toBe(0);
+    expect(v.staleRows.length).toBeGreaterThan(100);
+  } finally { H.listWindow = null; }
+}, 30000);
+
 test("the drain uses its shaping time: a pass reshapes rows until the draw's budget is spent, in every frame", async () => {
   H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
   try {
