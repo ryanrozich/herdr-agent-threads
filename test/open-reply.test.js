@@ -791,6 +791,27 @@ test("through the light window after a stopped draw the pane draws only a few ti
 // times 33.3 ms apart through the window). With the open's scroll dropped, three light draws:
 // the one after the stop, the one for the probe's timer the stopped draw had set, and the day
 // pill's. The probe finishes in the first draw after the window.
+// A light draw measures nothing and asks for no 16 ms probe frame, or the pane would draw
+// every frame of the window for nothing. With only measuring left, no other work asks for a
+// draw when the window ends: the light draw asks for one then.
+test("a light draw with only measuring left asks for one draw at the light window's end, and none before", async () => {
+  const { v, cx } = await pane(fixture());
+  settleRows(v, cx);
+  const seen = [];
+  for (const light of [false, true]) {
+    dropTimers(v, cx);
+    v.probeDue = function () { this.probeLeft = 1; return []; };
+    v.probeLeft = 1;
+    v.shapeLeft = 0;
+    v.staleRows = [];
+    v.rowJob = null;
+    v.cutUntil = light ? performance.now() + 5000 : 0;
+    draw(v, cx);
+    seen.push([light, v.light, cx.timers.length, cx.timers.every((x) => (light ? x.ms > 4900 && x.ms <= 5000 : x.ms === 16))]);
+  }
+  expect(seen).toEqual([[false, false, 1, true], [true, true, 1, true]]);
+}, 60000);
+
 test("a stop after the probe's step, with one part left to measure, brings three light draws, not one a frame", async () => {
   const { v, cx } = await openLong(shortParas(4000));
   v.scrollTo = null;
