@@ -3043,8 +3043,11 @@ export default class Threads extends View {
       if (sh === r.shape) continue;
       if (Boolean(sh.thumbs) !== Boolean(r.shape?.thumbs)) return false;
       const nr = { ...r, shape: sh };
+      // Its height first: a draw Herdr stopped in it left the new shape at the old height, and
+      // the next pass, finding the shape new, never sized it again.
+      const h = this.height(nr);
       this.baseRows[i] = nr;
-      this.baseSizes[i] = this.height(nr);
+      this.baseSizes[i] = h;
       // A closed turn of one row, shaped at last: kept for the next rebuild (closedCached), as
       // if the build had shaped it. Most rows of a long session are shaped this way.
       if (cg && !r.live && !r.last && !r.split && this.open.has(r.key) === false) {
