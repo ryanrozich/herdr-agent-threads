@@ -2,11 +2,12 @@
 // changing while the strip is built from nothing, the spans the last turn reaches back over,
 // what is drawn on top and what a press there selects, and an older Herdr's torn bars. The
 // model is timeline.js (test/timeline.test.js); the pane is on the render harness.
-import { test, expect } from "bun:test";
+import { test, expect, setSystemTime } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as TL from "../mods/agent-threads/timeline.js";
+import { LEDGER_KINDS } from "../mods/agent-threads/ledger.js";
 import { fixture, frame, H, handlerAfterId, makeCx, pane, settle, setup, Threads, unsliced } from "./render-harness.js";
 
 setup();
@@ -319,4 +320,106 @@ test("timeline tail: only the last turn laid out again gives the spans a whole l
   }
   // Not for nothing: in many of these an unfinished call's bar was drawn over earlier spans.
   expect(reached).toBeGreaterThan(20);
+});
+
+// ---- what is drawn on top, and what a press there selects ----
+// Three made-up turns, 60 s long and the last one running 50 s in, whose bars overlap in every
+// way the rule has: an ordinary call and a subagent's on one track, each inside the other and
+// listed in either order, a failed call with both, a user's, an agent's and a background message
+// at one time, and, running, bars that grow on both tracks.
+function overlapTurns() {
+  const turnOf = (i, rows, o = {}) => {
+    const key = `0:${i}`;
+    const steps = rows.map(([lk, a, z], j) => ({ ...row(key, j, lk, a, z === "open" ? null : z, z === "open") }));
+    return {
+      kind: "trh", key, n: i + 1, t0: T0 + i * 100000, total: 60000, span: 60000, going: false,
+      cnt: { steps: steps.length, input: 1, model: 1, tools: 1, failed: 1, user: 1, agent: 1 }, steps, ...o,
+    };
+  };
+  return [
+    turnOf(0, [["context", 60, null], ["you", 0, null], ["agent", 30, null], ["tool", 1000, 40000], ["subagent", 4000, 24000], ["tool", 6000, 22000], ["subagent", 8000, 12000], ["failed", 18000, 20000], ["reply", 50000, 60000]]),
+    turnOf(1, [["you", 0, null], ["context", 20, null], ["agent", 40, null], ["subagent", 1000, 50000], ["tool", 5000, 30000], ["subagent", 9000, 45000], ["tool", 34000, 38000], ["failed", 25000, 36000], ["subagent", 26000, 28000], ["text", 55000, null], ["reply", 56000, 60000]]),
+    turnOf(2, [["agent", 0, null], ["you", 0, null], ["subagent", 1000, "open"], ["tool", 20000, "open"], ["subagent", 10000, "open"], ["failed", 24000, 30000], ["subagent", 28000, "open"]], { total: null, span: 30000, going: true }),
+  ];
+}
+// The layers the pane drew on the lanes, in the order drawn: [key, growing]. A growing layer's
+// key is found by its place and colour.
+function layersOf(c, M) {
+  const bg = (id) => own(c, id)?.find((e) => e[0] === "bg")?.[1];
+  const out = [];
+  for (const id of ids(c)) {
+    const m = /^th-tl-(input|model|tools)-([a-z]+)-([01])$/.exec(id);
+    if (m) { out.push([`${m[1]}|${m[2]}|${m[3]}`, false]); continue; }
+    if (!/^th-tl-grow-\d+$/.test(id)) continue;
+    const top = own(c, id).find((e) => e[0] === "top")[1];
+    const keys = [...new Set(M.grow.map((g) => g.k))].filter((k) => (k.endsWith("|1") ? 8 : 2) === top % TL.TL_LANE && JSON.stringify(bg(`th-tl-${k.slice(0, -2).replace("|", "-")}-0`)) === JSON.stringify(bg(id)));
+    expect([id, keys.length]).toEqual([id, 1]);
+    out.push([keys[0], true]);
+  }
+  return out;
+}
+
+test("timeline view: one order for what is drawn and what a press selects: at every bar, the step a press gets is of the layer drawn last there; on one track an ordinary call is over a subagent's", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "3"));
+  const heads = overlapTurns();
+  try {
+    setSystemTime(new Date(heads.at(-1).t0 + 50000));
+    b.ledger();
+    b.ledgerMemo.totals = { ...b.ledgerMemo.totals, heads };
+    const c = shownFrame(b, cb);
+    const M = b.tlModel;
+    expect(M.heads === heads).toBe(true);
+    const layers = layersOf(c, M);
+    expect(layers.filter((x) => x[1]).length).toBe(3);
+    expect(new Set(layers.map(String)).size).toBe(layers.length);
+    const over = (k, g, x) => (g ? M.grow.filter((e) => e.k === k).some((e) => e.x0 <= x && x <= e.x1) : M.L.spans.get(k).some((sp) => sp[0] <= x && x <= sp[1]));
+    const wrong = [];
+    let met = 0;
+    heads.forEach((h, ti) => h.steps.forEach((r, si) => {
+      const box = TL.tlBar(M.L, heads, ti, si);
+      const lane = LEDGER_KINDS[r.lk].lane;
+      for (const f of [0.02, 0.2, 0.5, 0.8, 0.98]) {
+        const x = box.x0 + f * (box.x1 - box.x0);
+        const there = layers.filter(([k, g]) => k.startsWith(`${lane}|`) && over(k, g, x));
+        // 11 px down the lane, where a full bar and a half one both are.
+        const hit = TL.timelineHit(M.L, heads, x, lane, Date.now(), 11);
+        const hti = M.L.index.get(hit.turn);
+        const hs = heads[hti].steps.findIndex((e) => e.key === hit.key);
+        const got = heads[hti].steps[hs];
+        const hb = TL.tlBar(M.L, heads, hti, hs);
+        const layer = [`${lane}|${LEDGER_KINDS[got.lk].ink}|${hb.track}`, Boolean(heads[hti].going && got.open)];
+        if (there.length > 1) met++;
+        if (String(there.at(-1)) !== String(layer)) wrong.push([r.key, f, String(there.at(-1)), String(layer)]);
+      }
+    }));
+    expect(wrong).toEqual([]);
+    expect(met).toBeGreaterThan(40);
+    // The ordinary call over the subagent's, wider or narrower, listed first or not, drawn or growing.
+    const keys = layers.map(([k, g]) => `${k}${g ? "+" : ""}`);
+    for (const [low, high] of [["tools|sub|1", "tools|tools|1"], ["tools|sub|0", "tools|tools|0"], ["tools|sub|1+", "tools|tools|1+"], ["tools|tools|0", "tools|sub|1"], ["tools|tools|1", "tools|failed|1"], ["tools|failed|1", "tools|sub|0+"], ["tools|sub|0+", "tools|sub|1+"], ["input|context|0", "input|agent|0"], ["input|agent|0", "input|user|0"]]) {
+      expect([low, high, keys.includes(low), keys.includes(high), keys.indexOf(low) < keys.indexOf(high)]).toEqual([low, high, true, true, true]);
+    }
+  } finally {
+    setSystemTime();
+  }
+});
+
+test("timeline press: an ordinary call and a subagent's on one track: the ordinary call, wider or narrower, whichever is listed first; of two of one kind the narrower", () => {
+  const heads = overlapTurns();
+  const now = heads.at(-1).t0 + 50000;
+  const L = TL.timelineLayout(heads, CW, "clock", now, null);
+  const at = (ti, ms, ly = 11) => {
+    const t = TL.tlBox(L, ti);
+    const hit = TL.timelineHit(L, heads, t.x + (ms / L.geo.walls[ti]) * t.w, "tools", now, ly);
+    return heads[ti].steps.findIndex((r) => r.key === hit.key);
+  };
+  // In the first turn, on the half track: a subagent's 4 to 24 s, a call 6 to 22 s, a subagent's
+  // 8 to 12 s inside it and a failed call 18 to 20 s.
+  expect([at(0, 5000), at(0, 10000), at(0, 15000), at(0, 19000), at(0, 23000)]).toEqual([4, 5, 5, 7, 4]);
+  // In the second: a call 5 to 30 s, a subagent's 9 to 45 s, a call 34 to 38 s, a failed call 25
+  // to 36 s and a subagent's 26 to 28 s.
+  expect([at(1, 7000), at(1, 12000), at(1, 27000), at(1, 37000), at(1, 42000), at(1, 42000, 4)]).toEqual([4, 4, 7, 6, 5, 3]);
+  // Running: the growing bars over all, half height over full, the ordinary call over a
+  // subagent's that began before or after it; above the half track the full one.
+  expect([at(2, 12000), at(2, 25000), at(2, 35000), at(2, 35000, 4)]).toEqual([4, 3, 3, 2]);
 });
