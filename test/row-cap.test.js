@@ -10,6 +10,7 @@ import {
   fixture,
   frame,
   H,
+  heldClock,
   lastList,
   openAt,
   pane,
@@ -2866,6 +2867,85 @@ test("a press's open 300 ms on is dropped by a jump from outside the list made i
     expect(turns(sim.last())).toContain("0:30");
     H.listWindow = null;
     delete state.shared["threads.turnSel"];
+  }
+});
+
+// ---- a jump while the scroll to the bottom is still asked for (toBottom) ----
+
+// The draw takes a pending scroll to the bottom before a jump's, and drops the jump's. So a key
+// that goes to a turn other than the newest drops the pending one. Two ways it can be pending
+// with the turn not drawn yet: the window slid inside the key itself (its rows grew since the
+// last draw), and a read that grew the running reply while following.
+test("Home pressed after the window slides and before the draw lands on turn 1", async () => {
+  const { v, cx, s } = await capSession(150, SMALL);
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 562);
+    expect([v.follow, v.toBottom, shownIn(v, sim.last()).includes("0:1")]).toEqual([true, false, false]);
+    // Thirty turns come in, and Home is pressed before they are drawn: the key's own rows() is
+    // the first to slide the window. Its build runs whole (the clock is held), as in one slice.
+    await addCapTurns(s, 150, 30);
+    const slid = [];
+    const place = v.win.place.bind(v.win);
+    v.win.place = (...args) => { const at = place(...args); slid.push(Boolean(at.slid)); return at; };
+    try { heldClock(() => v.action("first", cx)); } finally { delete v.win.place; }
+    expect(slid).toContain(true);
+    expect([v.sel, v.follow]).toEqual(["0:1", false]);
+    settleList(v, cx, sim);
+    expect({ shows: shownIn(v, sim.last()).includes("0:1"), toBottom: v.toBottom, sel: v.sel, follow: v.follow }).toEqual({ shows: true, toBottom: false, sel: "0:1", follow: false });
+  } finally {
+    H.listWindow = null;
+  }
+});
+
+test("Home pressed with the bottom asked for and no window, in a session under the cap, lands on turn 1", async () => {
+  const { v, cx } = await capSession(60);
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 562);
+    expect([v.rows().some((r) => r.key === "older"), v.capCut, shownIn(v, sim.last()).includes("0:1")]).toEqual([false, 0, false]);
+    v.toBottom = true;
+    v.action("first", cx);
+    settleList(v, cx, sim);
+    expect({ shows: shownIn(v, sim.last()).includes("0:1"), toBottom: v.toBottom, sel: v.sel, follow: v.follow }).toEqual({ shows: true, toBottom: false, sel: "0:1", follow: false });
+  } finally {
+    H.listWindow = null;
+  }
+});
+
+test("a key to a turn in the middle with the bottom asked for lands on that turn", async () => {
+  const { v, cx } = await capSession(60);
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 562);
+    v.sel = "0:31";
+    v.toBottom = true;
+    v.action("prev", cx);
+    expect(v.sel).toBe("0:30");
+    settleList(v, cx, sim);
+    expect({ shows: shownIn(v, sim.last()).includes("0:30"), end: sim.last().end, toBottom: v.toBottom, follow: v.follow }).toEqual({ shows: true, end: false, toBottom: false, follow: false });
+  } finally {
+    H.listWindow = null;
+  }
+});
+
+// The newest turn's head is far from the end when the turn is open and long, so a jump to it
+// that dropped the pending bottom would centre the head and leave the end.
+test("a key to the session's end with the bottom already asked for still ends at the bottom", async () => {
+  const { v, cx } = await capSession(40, null, 39, 40);
+  const sim = simList(v);
+  try {
+    v.open.add("0:40");
+    openAt(v, cx, sim, 562);
+    expect([v.sel, shownIn(v, sim.last()).includes("0:40")]).toEqual(["0:40", false]);
+    v.toBottom = true;
+    v.action("next", cx);
+    expect([v.sel, v.follow]).toEqual(["0:40", true]);
+    const fs = settleList(v, cx, sim);
+    expect(fs.length).toBeGreaterThan(0);
+    expect({ away: fs.filter((f) => !f.end).length, end: sim.last().end, toBottom: v.toBottom, follow: v.follow }).toEqual({ away: 0, end: true, toBottom: false, follow: true });
+  } finally {
+    H.listWindow = null;
   }
 });
 
