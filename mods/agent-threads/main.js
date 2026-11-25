@@ -5779,14 +5779,15 @@ export default class Threads extends View {
       const keys = [...this.codeDue];
       this.codeDue.clear();
       for (const k of keys) {
-        // In the middle of a read the answer can be half there: its editors wait for the end.
+        // In the middle of a read the answer can be half there: its editors wait for the end,
+        // asking for no frame (the next draw, or the 1 s timer, asks again).
         if (this.midRead(k)) { this.codeDue.add(k); continue; }
         const live = this.runs(k);
         if (this.open.has(k) || (live && this.liveCode?.has(k))) this.makeCode(k);
         else if (this.liveCode?.has(k)) this.dropCode(`${k}:`);
         if (!live) this.liveCode?.delete(k);
       }
-      cx.notify();
+      if (this.codeDue.size < keys.length) cx.notify();
     });
     this.codeTick = true;
   }
