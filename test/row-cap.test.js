@@ -2236,6 +2236,88 @@ test("a landing's late asks are dropped while a newer jump waits for the rows to
   }
 });
 
+// Down held from #5 for 60 presses. Herdr passes a held key's repeats on and draws what is due
+// before each one, so every press has a draw of its own. The frames after the first that do not
+// show the turn selected in them; then, let go, whether the list shows the turn it ended on.
+async function heldDown(asks) {
+  const { v, cx } = await capSession(80);
+  const sim = simList(v);
+  v.command("search:#5", cx);
+  v.command("escape", cx);
+  settleList(v, cx, sim);
+  expect([v.sel, cx.timers]).toEqual(["0:5", []]);
+  const lost = [];
+  for (let k = 1; k <= 60; k++) {
+    asks(v, cx);
+    if (k > 1 && !shownIn(v, sim.last()).includes(v.sel)) lost.push(v.sel);
+  }
+  settleList(v, cx, sim);
+  const end = [v.sel, shownIn(v, sim.last()).includes(v.sel)];
+  H.listWindow = null;
+  return { lost, end };
+}
+test("a key held down, each repeat before the last landing's ask 16 ms on, shows the turn it has reached in every frame but the first", async () => {
+  expect(await heldDown((v, cx) => { v.action("next", cx); cx.flush(16); draw(v, cx); })).toEqual({ lost: [], end: ["0:65", true] });
+});
+test("a key held down, each repeat and its draw before the last landing's ask 16 ms on, shows the turn it has reached in every frame but the first", async () => {
+  expect(await heldDown((v, cx) => {
+    const late = cx.timers;
+    cx.timers = [];
+    v.action("next", cx);
+    draw(v, cx);
+    for (const x of late) if (x.ms <= 16) x.fn(cx);
+  })).toEqual({ lost: [], end: ["0:65", true] });
+});
+test("a key alone asks for its turn once, 16 ms after it lands and not in its frame, and so does the next key", async () => {
+  const { v, cx } = await capSession(80);
+  const sim = simList(v);
+  v.command("search:#5", cx);
+  v.command("escape", cx);
+  settleList(v, cx, sim);
+  const asked = scrollsOf(v);
+  const got = [];
+  for (let k = 0; k < 2; k++) {
+    v.action("next", cx);
+    draw(v, cx);
+    const inFrame = asked.splice(0);
+    cx.flush(48);
+    got.push([v.sel, inFrame, asked.splice(0)]);
+  }
+  expect(got).toEqual([["0:6", [], ["0:6"]], ["0:7", [], ["0:7"]]]);
+  H.listWindow = null;
+});
+test("a step's late ask after Home has moved the window is dropped, and the next key asks for its turn 16 ms on, not in its frame", async () => {
+  const { v, cx } = await capSession(150, SMALL);
+  const sim = simList(v);
+  const turns = (f) => shownIn(v, f).filter((k) => /^0:\d+$/.test(k));
+  v.jumpLatest(true);
+  settleList(v, cx, sim);
+  v.command("search:#100", cx);
+  v.command("escape", cx);
+  settleList(v, cx, sim);
+  v.action("prev", cx);
+  draw(v, cx);
+  const late = cx.timers;
+  cx.timers = [];
+  expect([v.sel, v.scrollTo, late.some((x) => x.ms === 16)]).toEqual(["0:99", null, true]);
+  // Before its ask, Home moves the window to the oldest turns and lands there.
+  v.action("first", cx);
+  settleList(v, cx, sim);
+  expect(turns(sim.last())).toContain("0:1");
+  const asked = scrollsOf(v);
+  for (const x of late) x.fn(cx);
+  probeFrame(v, cx);
+  expect(asked).toEqual([]);
+  expect(turns(sim.last())).toContain("0:1");
+  // The step's ask was never made, and Home came since: the next key is a key alone.
+  v.action("next", cx);
+  draw(v, cx);
+  expect([v.sel, asked]).toEqual(["0:2", []]);
+  cx.flush(48);
+  expect(asked).toEqual(["0:2"]);
+  H.listWindow = null;
+});
+
 test("latest's own ask 16 ms after the end is taken is dropped by a newer jump: #20 from there stays on screen", async () => {
   const { v, cx } = await capSession(150, SMALL);
   const sim = simList(v);
