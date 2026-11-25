@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, rewindTail, parseChunk, nextChunk, replaced, reply, updatesText, matches } from "../mods/agent-threads/core/turns.js";
+import { newSession, apply, rewindTail, parseChunk, nextChunk, replaced, reply, updatesText, matches, threadMatches } from "../mods/agent-threads/core/turns.js";
 import { trajectories } from "../mods/agent-threads/core/trajectory.js";
 import { hash, turnId, turnIds } from "../mods/agent-threads/core/ids.js";
 import { atif } from "../mods/agent-threads/core/atif.js";
@@ -646,6 +646,77 @@ describe("B: work that starts by itself after a row ended", () => {
     const s = read(t.file());
     expect([prompts(s), replies(s), senders(s)]).toEqual([["Why does the cart test fail?", ""], ["One.", "The tick's reply."], ["you", "scheduled"]]);
     expect(s.turns[1].tools).toBe(2);
+  });
+
+  const answered = (s) => s.turns.map((t) => [t.answeredIn, t.answeredBy]);
+  const LIMIT = "You've hit your session limit";
+  // Red at c37c64f3: the limited prompt's answer is said to be in the row that started by itself.
+  test("a row that started by itself does not answer a prompt a limit cut off", () => {
+    const c = codex();
+    c.prompt("One");
+    c.error("You've hit your usage limit.");
+    c.done(1000);
+    c.goal();
+    c.call("call_1");
+    c.final("The goal is met.");
+    c.done(2000);
+    const t = claude();
+    t.prompt("One");
+    t.error(LIMIT);
+    t.tick();
+    t.tool("m1");
+    t.say("m2", "Nothing new.");
+    t.hooks();
+    for (const s of [read(c.file(), "codex"), read(t.file())]) {
+      expect(answered(s)).toEqual([[null, null], [null, null]]);
+      expect(replies(s)[0]).toBe("");
+      // With agent messages hidden, the row that started by itself shows its own reply.
+      expect(agentReplied(s.turns[1], s.turns)).toBe(true);
+      expect([threadMatches(s.turns, s.turns[0], replies(s)[1]), threadMatches(s.turns, s.turns[1], "One")]).toEqual([false, false]);
+    }
+  });
+
+  // Red at c37c64f3: the first prompt's answer is said to be in the tick's row.
+  test("a prompt a limit cut off is answered in the retry, with a tick's row between", () => {
+    const t = claude();
+    t.prompt("The first question");
+    t.error(LIMIT);
+    t.tick();
+    t.say("m1", "Nothing new.");
+    t.hooks();
+    t.prompt("Try again");
+    t.say("m2", "The answer.");
+    t.hooks();
+    const s = read(t.file());
+    expect(answered(s)).toEqual([[3, null], [null, null], [null, null]]);
+    expect([threadMatches(s.turns, s.turns[0], "The answer"), threadMatches(s.turns, s.turns[2], "first question"), threadMatches(s.turns, s.turns[1], "first question")]).toEqual([true, true, false]);
+  });
+
+  // Red at c37c64f3, as above. The retry is another agent's message, its answer the person's row's.
+  test("a prompt a limit cut off keeps another agent's answer to it, with a tick's row between", () => {
+    const t = claude();
+    t.prompt("The first question");
+    t.error(LIMIT);
+    t.tick();
+    t.say("m1", "Nothing new.");
+    t.hooks();
+    t.user("Try again", { origin: { kind: "peer", name: "helper-a" } }, 5);
+    t.say("m2", "The answer.");
+    t.hooks();
+    const s = read(t.file());
+    expect(answered(s)).toEqual([[3, null], [null, null], [null, null]]);
+    expect([agentReplied(s.turns[1], s.turns), agentReplied(s.turns[2], s.turns)]).toEqual([true, false]);
+  });
+
+  // Green on the base and after.
+  test("a prompt a limit cut off is answered in the retry that follows it", () => {
+    const t = claude();
+    t.prompt("The first question");
+    t.error(LIMIT);
+    t.prompt("Try again");
+    t.say("m2", "The answer.");
+    t.hooks();
+    expect(answered(read(t.file()))).toEqual([[2, null], [null, null]]);
   });
 
   // A local command's lines, and a skill's line as it is typed.
