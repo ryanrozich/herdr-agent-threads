@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { draw, dropTimers, fixture, pane, scripted, settleRows, setup } from "./render-harness.js";
+import { draw, dropTimers, editors, fixture, pane, scripted, settleRows, setup } from "./render-harness.js";
 
 setup();
 
@@ -272,3 +272,114 @@ test("a splice of the open turns Herdr stops before or after the rebuild, with t
   }
   expect(got).toEqual([["shapeStart", 1, true, 1, false, true, true], ["height", 1, true, 2, false, true, true]]);
 }, 60000);
+
+// An opened call's output is coloured by a read-only editor, made by a timer (syncOutEditors),
+// since an editor cannot be made while drawing: the render marks the timer as asked for
+// (outNext), then asks for it. A stop between the two left the mark with no timer to clear it,
+// and no output editor was made again in that pane: every output opened later drew as plain text.
+test("a render Herdr stops after it marked the output editors' timer as asked for and before it asked for it still colours the opened call's output", async () => {
+  const { v, cx, run: base } = await callsPane();
+  v.sel = "0:1";
+  v.action("deeper", cx);
+  await base.settled();
+  v.action("deeper", cx);
+  await base.settled();
+  const run = stopAt(v, cx, "syncOutEditors");
+  // The Read call (src/cart.ts), a group of one: its output opens.
+  v.callOpen.add("0:1:2:0");
+  await run.settled();
+  const key = [...v.calls.keys()].find((k) => k.endsWith("#toolu_b3"));
+  const afterDraws = Boolean(v.outEds?.get(key)?.st);
+  // A selection change and back.
+  v.action("shallower", cx);
+  await run.settled();
+  v.action("deeper", cx);
+  await run.settled();
+  run.done();
+  expect([run.armed, run.stops, afterDraws, Boolean(v.outEds?.get(key)?.st), Boolean(v.outNext)]).toEqual([false, 1, true, true, false]);
+});
+
+// The timer-first sites (flushCode, flushImages, syncOutEditors), when the stop falls after
+// the timer is registered and before the mark is set: a render before that timer runs (as one
+// an event asks for) finds no mark and asks for a second timer, so two are in flight. Each item
+// is still handled once: the code editors' second timer finds nothing due, the output editors'
+// skips an output that has its editor, and each images' timer takes its own prompt.
+test("a render Herdr stops after the code editors' timer is registered and before the mark is set makes each editor once and ends with no mark", async () => {
+  const ts = (s) => `2026-11-01T09:00:${String(s).padStart(2, "0")}.000Z`;
+  const { v, cx, s } = await scripted([{ k: "p", o: "human", t: "Add a total to the cart", ts: ts(0) },
+    { k: "t", t: "The total:\n\n```js\nexport const total = (xs) => xs.reduce((a, x) => a + x, 0);\n```" }, { k: "d", ms: 4000, ts: ts(4) }]);
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  v.debug = false;
+  cx.pending = [];
+  const run = stopAt(v, cx, "flushCode", "after");
+  await run.settled();
+  v.toggle("0:1", cx);
+  await run.settled();
+  const was = editors.length;
+  apply(s, { k: "t", t: "And its test:\n\n```sh\nbun test cart\n```" });
+  run.frame();
+  run.frame();
+  cx.flush(0);
+  await run.settled();
+  run.done();
+  const made = editors.slice(was).map((e) => e.opts.value);
+  expect([run.armed, run.stops, run.asked, made, [...v.code.keys()], Boolean(v.codeTick)])
+    .toEqual([false, 1, 2, ["bun test cart"], ["0:1:1", "0:1:3"], false]);
+});
+
+test("a render Herdr stops after the output editors' timer is registered and before the mark is set makes each output's editor once and ends with no mark", async () => {
+  const { v, cx, run: base } = await callsPane();
+  v.sel = "0:1";
+  v.action("deeper", cx);
+  await base.settled();
+  v.action("deeper", cx);
+  await base.settled();
+  const run = stopAt(v, cx, "syncOutEditors", "after");
+  const was = editors.length;
+  v.callOpen.add("0:1:2:0");
+  run.frame();
+  run.frame();
+  cx.flush(0);
+  await run.settled();
+  run.done();
+  const made = editors.slice(was).map((e) => e.opts.value);
+  expect([run.armed, run.stops, run.asked, made, v.outEds.size, Boolean(v.outNext)])
+    .toEqual([false, 1, 2, ["export const total = 1;"], 1, false]);
+});
+
+test("a render Herdr stops after the images' timer is registered and before the decode is marked as running decodes each prompt's images once and ends with no mark", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2", "--images"));
+  v.debug = false;
+  v.width = 380;
+  cx.pending = [];
+  const turns = v.current().turns.filter((t) => t.images.length);
+  const read = [];
+  let running = 0;
+  let most = 0;
+  v.imgDue = [];
+  v.imgDue.shift = function () {
+    const job = Array.prototype.shift.call(this);
+    if (job) { read.push(job.u); running++; most = Math.max(most, running); }
+    return job;
+  };
+  const set = v.imgs?.set;
+  v.imgs ??= new Map();
+  const imgs = v.imgs;
+  imgs.set = function (u, x) { if (x?.st !== "wait") running--; return Map.prototype.set.call(this, u, x); };
+  const run = stopAt(v, cx, "flushImages", "after");
+  // The stopped render; Herdr runs its timer, whose decode starts; a render while it runs finds
+  // no mark and asks for a second timer, which starts the next prompt's decode.
+  run.frame();
+  cx.flush(0);
+  run.frame();
+  cx.flush(0);
+  for (let i = 0; i < 40 && !turns.every((t) => v.imgState(t) === "ok"); i++) {
+    run.frame(); cx.flush(0); await settleCx(cx);
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  run.done();
+  delete imgs.set;
+  void set;
+  expect([run.armed, run.stops, run.asked >= 2, most, [...read].sort(), turns.map((t) => t.imgLine).sort(), turns.map((t) => v.imgState(t)), Boolean(v.imgBusy)])
+    .toEqual([false, 1, true, 2, turns.map((t) => t.imgLine).sort(), turns.map((t) => t.imgLine).sort(), ["ok", "ok", "ok"], false]);
+}, 30000);
