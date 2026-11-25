@@ -10,7 +10,7 @@ import { join } from "node:path";
 import * as TL from "../mods/agent-threads/timeline.js";
 import { newSession, apply, STEP_MAX } from "../mods/agent-threads/core/turns.js";
 import { LEDGER_KINDS, headParts, ledgerTurn, trajInks } from "../mods/agent-threads/ledger.js";
-import { fixture, frame, H, handlerAfterId, makeCx, pane, settle, setup, theme, Threads, unsliced, until } from "./render-harness.js";
+import { fixture, frame, H, handlerAfterId, makeCx, openingPane, pane, settle, setup, theme, Threads, unsliced, until } from "./render-harness.js";
 
 setup();
 
@@ -818,7 +818,6 @@ function callOn(b, c, from = 0, lane = "tools") {
   }
   throw new Error("no call on the strip");
 }
-// What that press selects and scrolls to, with nothing selected before it.
 // A press on turn ti on the strip of frame c (the last drawn) where it gets the turn's heading: the
 // heading's key, and that press.
 function headOn(b, c, ti) {
@@ -1084,6 +1083,46 @@ test("timeline view: the last turn cut back in place and another one read at its
   const next = callOn(b, shownFrame(b, cb), 5);
   expect(next.key).toBe(on.key);
   expect(pressed(b, cb, next)).toEqual([next.key, next.key]);
+}, 30000);
+
+// The key sheet and the settings card are drawn over the strip, and keep no press from it: Herdr
+// gives a press to every element under the pointer. Before that it tells the settings card of a
+// press outside it (on_mouse_down_out), which closes the card.
+for (const [what, act, id, open, closedBy, close] of [
+  ["key sheet", "keys", "th-keys", "keysOpen", "a click beside it", (c, cb) => handlerAfterId(c, "th-keys-scrim", "on_click")({}, cb)],
+  ["settings card", "settings", "th-set-card", "settingsOpen", "that press", (c, cb) => own(c, "th-set-card").find((e) => e[0] === "on_mouse_down_out").at(-1)({}, cb)],
+]) {
+  test(`timeline view: a press on the strip with the ${what} drawn over it selects nothing, on the ${what} or beside it, once ${closedBy} has closed it too; on the next strip drawn a press selects the call`, async () => {
+    const { b, cb } = await dockPane(fixture("--extra", "3"));
+    const bare = callOn(b, shownFrame(b, cb));
+    expect(pressed(b, cb, bare)).toEqual([bare.key, bare.key]);
+    b.command(act, cb);
+    const c = frame(b, cb);
+    const under = callOn(b, c);
+    expect([b[open], ids(c).includes(id), under.key]).toEqual([true, true, bare.key]);
+    const on = pressed(b, cb, under);
+    close(c, cb);
+    expect(b[open]).toBe(false);
+    expect([on, pressed(b, cb, under)]).toEqual([[null, null], [null, null]]);
+    const after = frame(b, cb);
+    const next = callOn(b, after);
+    expect([ids(after).includes(id), next.key]).toEqual([false, bare.key]);
+    expect(pressed(b, cb, next)).toEqual([bare.key, bare.key]);
+  }, 30000);
+}
+// The opening is ended by the Chat's draws alone, and the Trajectory draws nothing over the strip
+// for it: entered while the first read goes on, the Trajectory has it under way for as long as it
+// stays.
+test("timeline view: the Trajectory entered in the Chat's pane while its first read goes on: once it is read a press on the strip selects the call, the opening still under way", async () => {
+  const { v, cx, go } = await openingPane(fixture("--extra", "3"));
+  expect([v.openActive(), Boolean(v.current().loaded)]).toEqual([true, false]);
+  enterOwn(v, cx);
+  expect(own(shownFrame(v, cx), "th-tl-wait")).not.toBe(null);
+  go(() => false);
+  await settle(v);
+  const on = callOn(v, shownFrame(v, cx));
+  expect([v.traj, v.openActive()]).toEqual([true, true]);
+  expect(pressed(v, cx, on)).toEqual([on.key, on.key]);
 }, 30000);
 
 // A turn of pairs of words and a call, then words for half of the turn's time, the last event.
