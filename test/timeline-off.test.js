@@ -307,6 +307,50 @@ test("timeline working on, the running turn's room growing a step: that draw pla
   }
 });
 
+// Running, the room grows TL_ROOM_GROW times a step. A step that moves the running turn's end
+// TL_SLACK px or less keeps the places unmarked: it is measured from the places kept, not from a
+// whole build, so the kept steps since the last whole build add up, to under three times the
+// last of them (1 + 2/3 + 4/9 + ...), so under 3 TL_SLACK px.
+function runningOnly(n, gap) {
+  const heads = [];
+  for (let i = 0; i < n; i++) {
+    const t = doneTurn(i);
+    heads.push({ ...t, t0: T0 + i * gap });
+  }
+  const key = `0:${n}`;
+  const t0 = T0 + n * gap;
+  heads.push({
+    kind: "trh", key, n: n + 1, t0, total: null, span: 1000, going: true,
+    cnt: { steps: 2, input: 1, model: 1, tools: 0, failed: 0, user: 1, agent: 0 },
+    steps: [row(key, 0, "you", 0, null), row(key, 1, "reply", 10, 1000)],
+  });
+  return { heads, t0 };
+}
+
+test("timeline working on, the room growing step after step for 16 days: the steps kept unmarked add up to under 3 TL_SLACK px from a whole build, reached at 2.92 px on 5,600 turns, and every build ends", () => {
+  let most = { d: 0 };
+  for (const [n, gap, cw] of [[5600, 4000000, 1370], [5600, 100000, 1370], [2000, 100000, 1143], [400, 100000, 700], [100, 4000000, 300]]) {
+    const { heads, t0 } = runningOnly(n, gap);
+    let st = { M: TL.timelineModel(null, heads, cw, "clock", t0 + 2000, null), J: null };
+    for (let r = TL.TL_ROOM_MIN; r < 16 * DAY; r *= TL.TL_ROOM_GROW) {
+      for (const dt of [r + 1, r * 1.2]) {
+        const now = t0 + dt;
+        st = TL.tlDraw(st.M, st.J, heads, cw, now, Infinity, () => 0);
+        if (st.J) st = TL.tlDraw(st.M, st.J, heads, cw, now, Infinity, () => 0);
+        expect(st.J).toBe(null);
+        const F = TL.timelineGeo(heads, cw, "clock", now);
+        const G = st.M.geo;
+        let d = 0;
+        for (let i = 0; i < F.turns.length; i++) d = Math.max(d, Math.abs(F.turns[i].x - G.turns[i].x), Math.abs(F.turns[i].x + F.turns[i].w - G.turns[i].x - G.turns[i].w));
+        if (d > most.d) most = { d, n, gap, cw, dt };
+      }
+    }
+  }
+  // The largest: 5,600 turns an hour apart on 1,370 px, 576.65 s into the running turn.
+  expect(most.d).toBeLessThan(3 * TL.TL_SLACK);
+  expect([most.n, most.gap, most.cw, most.d > 2.9 * TL.TL_SLACK]).toEqual([5600, 4000000, 1370, true]);
+});
+
 // ---- on the pane ----
 // A Trajectory pane docked along the bottom, w px wide, its rows built whole.
 async function dockPane(file, w) {
