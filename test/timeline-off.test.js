@@ -887,3 +887,45 @@ test("timeline build: no step touches more than 1,024 bars and span entries toge
     sameStrip(M, W);
   }
 }, 120000);
+
+// A turn's tracks worked out apart from the code: its calls sorted by start, the one listed first
+// at equal starts, and each on the second track when it starts before the first track's last
+// call ends.
+function tracksByHand(h) {
+  const calls = h.steps.map((r, i) => ({ i, r })).filter(({ r }) => r.lk === "tool" || r.lk === "failed");
+  calls.sort((p, q) => p.r.start - q.r.start || p.i - q.i);
+  const out = new Array(h.steps.length).fill(0);
+  let end = -Infinity;
+  for (const { i, r } of calls) {
+    if (r.start < end) out[i] = 1;
+    else end = r.start + r.dur;
+  }
+  return out.some(Boolean) ? out : null;
+}
+
+test("timeline tracks in the build: a turn of calls out of the clock's order, with equal starts, gets the tracks worked out by hand, whole or over steps, the sort spread over the steps", () => {
+  let a = 7;
+  const rnd = () => { a = (Math.imul(a, 1103515245) + 12345) >>> 0; return (a >>> 8) / 16777216; };
+  for (const n of [2, 3, 5, 8, 9, 31, 33, 100, 1000, 3000]) {
+    // Starts from a few hundred places, so many are equal; each call 1 to 4 s.
+    const key = "0:0";
+    const steps = [row(key, 0, "you", 0, null)];
+    for (let j = 0; j < n; j++) {
+      const at = Math.floor(rnd() * Math.max(2, n / 4)) * 1000;
+      steps.push(row(key, j + 1, rnd() < 0.2 ? "failed" : "tool", at, at + 1000 + Math.floor(rnd() * 3001)));
+    }
+    const len = Math.max(...steps.map((r) => r.start + (r.dur ?? 0)));
+    const h = { kind: "trh", key, n: 1, t0: T0, total: len, span: len, going: false, cnt: { steps: steps.length, input: 1, model: 0, tools: n, failed: 1, user: 1, agent: 0 }, steps };
+    const want = tracksByHand(h);
+    expect(TL.tlTracks(h)).toEqual(want);
+    // Over steps: the build's tracks for that turn.
+    const J = TL.tlBuildStart([h, doneTurn(1)], 1440, "clock", T0 + 1e10, null);
+    let M = null;
+    let k = 0;
+    for (; k < 100000 && !M; k++) M = TL.tlBuildGo(J, 0, () => 1);
+    expect([n, M?.L.tracks.get(h)]).toEqual([n, want]);
+    // The sort's entries moved: n a pass. A step of 1,024 at most is so many steps more.
+    const passes = Math.ceil(Math.log2(n));
+    expect([n, k >= Math.floor((n * passes) / 1024)]).toEqual([n, true]);
+  }
+});

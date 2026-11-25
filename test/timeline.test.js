@@ -6,13 +6,13 @@
 // (timelineModel, tlGrow). Nothing here draws. The turns are made up in the reader's shape
 // (turns.js), as in test/ledger.test.js.
 import { test, expect } from "bun:test";
-import { ledgerTurn, slantPoints } from "../mods/agent-threads/ledger.js";
+import { ledgerTurn, slantPoints, TL_TRACK, TL_OPEN, TL_FAILED } from "../mods/agent-threads/ledger.js";
 // As a namespace, so a name the module lacks fails only the tests that use it.
 import * as TL from "../mods/agent-threads/timeline.js";
 
 const {
   TL_LANES, TL_ROOM_MIN, TL_ROOM_GROW, liveRoom, timelineGeo, timelineLayout, timelineHit, itemBox, tlMaxZoom, tlClamp, tlZoomAt, tlBox, bandRows,
-  tornPoints, polyRows, timelineModel, tlGrow, tlStep, tlLen, tlRow, TL_MADE,
+  tornPoints, polyRows, timelineModel, tlGrow, tlStep, tlLen, tlRow, tlTracks, TL_MADE,
 } = TL;
 
 const T0 = Date.parse("2026-11-01T09:00:00Z");
@@ -121,19 +121,104 @@ test("timeline: a call with no result in a turn that is not running runs flat to
   expect(torn.length).toBe(1);
   expect(torn[0][1]).toBeCloseTo(L.turns[0].w, 3);
   expect(L.grow).toEqual([]);
-  // 6,000 turns: each under 2 px, so the layout walks turns, not steps, and draws few spans.
+  // 6,000 turns: each under 2 px, so the layout walks turns, not steps, and draws few spans:
+  // one placing, one layout and no turn's tracks worked out (counted, not timed).
   const one = head(turn(4, ["a", [["Bash", "x", 1000, 2000, true]]]));
   const heads = Array.from({ length: 6000 }, (_, i) => ({ ...one, key: `0:${i + 1}`, n: i + 1, t0: T0 + i * 120000 }));
-  const t0 = performance.now();
+  const was = { ...TL_MADE };
   const big = timelineLayout(heads, 500, "clock");
-  const ms = performance.now() - t0;
+  expect([TL_MADE.geo - was.geo, TL_MADE.layout - was.layout, TL_MADE.tracks - was.tracks]).toEqual([1, 1, 0]);
   expect(big.turns.length).toBe(6000);
+  expect(big.turns.every((t) => t.w < 2)).toBe(true);
   let spans = 0;
   for (const list of big.spans.values()) spans += list.length;
   expect(spans).toBeLessThan(500);
   expect(big.fails.length).toBeLessThanOrEqual(500 / 6 + 1);
-  expect(ms).toBeLessThan(200);
 });
+
+test("timeline failure marks: spaced left to right as drawn, not in the order the ledger lists the calls", () => {
+  const marks = (h) => timelineLayout([h], 600, "clock", T0 + 1e7).fails.map((x) => Math.round(x * 1000) / 1000);
+  // 60 s across 600 px: a failed Bash at 30 s (300 to 310 px), then a failed Read listed after
+  // it but run at 10 s (100 to 110 px), 200 px to its left: both marks.
+  const a = head(turn(1, [[["Bash", "x", 30000, 31000, true]], [["Read", "a", 10000, 11000, true]]]));
+  expect(timelineLayout([a], 600, "clock", T0 + 1e7).turns[0]).toMatchObject({ x: 0, w: 600 });
+  expect(marks(a)).toEqual([105, 305]);
+  // Failed calls under 6 px apart: one mark, the leftmost bar's, whichever is listed first.
+  const b = head(turn(2, [[["Bash", "x", 30400, 31000, true]], [["Read", "a", 30000, 31000, true]]]));
+  expect(marks(b)).toEqual([305]);
+  const c = head(turn(3, [[["Read", "a", 30000, 31000, true]], [["Bash", "x", 30400, 31000, true]]]));
+  expect(marks(c)).toEqual([305]);
+});
+
+// Each failed bar's centre as drawn, at Fit: a turn under 2 px is one span per lane from its x,
+// its mark at x + w/2; a wider turn's failed bars are their own boxes (itemBox).
+function failCentres(L, heads) {
+  const out = [];
+  L.turns.forEach((t, ti) => {
+    const h = heads[ti];
+    if (t.w < 2) { if (h.cnt?.failed) out.push(t.x + t.w / 2); return; }
+    for (const st of stepsOf(h)) {
+      if (!st.failed) continue;
+      const b = itemBox(st.a ?? Number.NaN, st.b ?? Number.NaN, 0, st.i, t.x, t.w, L.geo.walls[ti], "clock", tlLen(h));
+      if (b) out.push((b.x0 + b.x1) / 2);
+    }
+  });
+  return out;
+}
+
+test("timeline failure marks: a failed bar inside another with the same centre gives one mark, not two on the same px", () => {
+  // 60 s across 600 px: a failed Bash from 2 to 40 s (20 to 400 px) and a failed Read from 10
+  // to 32 s (100 to 320 px) on the half track inside it. Both are centred at 210 px.
+  const h = head(turn(1, [[["Bash", "x", 2000, 40000, true]], [["Read", "a", 10000, 32000, true]]]));
+  const L = timelineLayout([h], 600, "clock", T0 + 1e7);
+  expect(failCentres(L, [h])).toEqual([210, 210]);
+  expect(L.fails).toEqual([210]);
+});
+
+test("timeline failure marks: across turns too, the marks are 6 px or more apart, spaced by the centres they are drawn at", () => {
+  // Sessions where a wide turn's last failed call ends at its end and short turns after it
+  // (under 2 px from a few hundred turns, one span a lane) have failed calls of their own.
+  let close = 0;
+  for (const n of [40, 90, 150, 240, 330, 420, 560, 700]) {
+    const heads = Array.from({ length: n }, (_, i) => {
+      const kind = i % 7;
+      const calls = kind === 0 ? [["Bash", "x", 57000, 60000, true]] : kind === 3 ? [["Read", "a", 0, 400, true]] : kind === 5 ? [["Grep", "b", 200, 900, true]] : [["Glob", "c", 100, 300]];
+      const end = kind === 0 ? 60000 : kind === 3 ? 4000 : 1000 + (i % 5) * 700;
+      return { ...head(turn(i + 1, ["a", calls], { end: T0 + end })), t0: T0 + i * 120000 };
+    });
+    for (const cw of [1370, 1143]) {
+      const L = timelineLayout(heads, cw, "clock", T0 + 1e9);
+      const f = L.fails;
+      for (let k = 1; k < f.length; k++) {
+        expect([n, cw, f[k] - f[k - 1] >= 6 - 1e-9]).toEqual([n, cw, true]);
+      }
+      // Each failed bar has a mark within 6 px of its centre.
+      for (const c of failCentres(L, heads)) {
+        if (f.some((m) => Math.abs(m - c) < 6)) continue;
+        expect([n, cw, c, "no mark within 6 px"]).toEqual([n, cw, c, null]);
+      }
+      const narrow = L.turns.filter((t) => t.w < 2).length;
+      if (narrow && narrow < L.turns.length) close++;
+    }
+  }
+  // Both kinds of turn come up side by side, as at Fit from a few hundred turns.
+  expect(close).toBeGreaterThan(4);
+});
+
+test("timeline failure marks: every failed bar has a mark within 6 px of its centre; the marks go left to right by centre", () => {
+  const marks = (h) => timelineLayout([h], 600, "clock", T0 + 1e7).fails.map((x) => Math.round(x * 1000) / 1000);
+  // A failed Read from 0 to 0.4 s (0 to 4 px, centre 2) and a failed Bash from 0.5 to 5.5 s
+  // (5 to 55 px, centre 30): the Bash starts under 6 px from the Read but is centred 28 px
+  // from it, so it has a mark of its own.
+  const a = head(turn(1, [[["Read", "a", 0, 400, true]], [["Bash", "x", 500, 5500, true]]]));
+  expect(marks(a)).toEqual([2, 30]);
+  // A failed Bash from 0 to 10 s (0 to 100 px, centre 50) and a failed Read from 1 to 1.4 s
+  // (10 to 14 px, centre 12) inside it: by start the Bash comes first, by centre the Read.
+  // Both marks, left to right.
+  const b = head(turn(2, [[["Bash", "x", 0, 10000, true]], [["Read", "a", 1000, 1400, true]]]));
+  expect(marks(b)).toEqual([12, 50]);
+});
+
 
 // Round 7 decisions, section 2: an unfinished call is mark 1, the torn end.
 test("torn end: 3 teeth 4 px tall and 5 px deep; 3 px deep under 12 px wide; a half-height bar 2 teeth 3 px deep; left corners cut 1 px", () => {
@@ -311,6 +396,27 @@ test("timeline tracks: a call that starts as the last one ends stays on the firs
   expect(tools.map((it) => [it.a, it.b, it.track])).toEqual([[2000, 3000, 0], [3000, 4000, 0], [3500, 5000, 1]]);
 });
 
+test("timeline tracks: in clock order, not the ledger's: a call listed after another but run before it, apart from it, stays on the first track; at equal starts the one listed first keeps it", () => {
+  const tracksOf = (h) => stepsOf(h).filter((it) => it.lane === "tools").map((it) => [it.a, it.track]);
+  // Read from 30 to 31 s, then a Grep listed after it from 5 to 6 s: they never overlap.
+  const a = head(turn(1, [[["Read", "a", 30000, 31000]], [["Grep", "b", 5000, 6000]]]));
+  expect(tracksOf(a)).toEqual([[30000, 0], [5000, 0]]);
+  expect(tlTracks(a)).toBe(null);
+  // Listed Read (30 to 40 s), Grep (5 to 6 s) and Bash (35 to 36 s): only Bash starts while
+  // another runs.
+  const b = head(turn(1, [[["Read", "a", 30000, 40000]], [["Grep", "b", 5000, 6000]], [["Bash", "c", 35000, 36000]]]));
+  expect(tracksOf(b)).toEqual([[30000, 0], [5000, 0], [35000, 1]]);
+  // Equal starts: the one listed first holds the first track, in either order.
+  const c = head(turn(1, [[["Read", "a", 10000, 20000], ["Grep", "b", 10000, 12000]]]));
+  expect(tracksOf(c)).toEqual([[10000, 0], [10000, 1]]);
+  const d = head(turn(1, [[["Grep", "b", 10000, 12000], ["Read", "a", 10000, 20000]]]));
+  expect(tracksOf(d)).toEqual([[10000, 0], [10000, 1]]);
+  // In a turn taken out of the ledger's order, equal starts keep it too: Grep (listed before
+  // Bash) holds the first track, Bash goes on the second, and Read, after both, the first.
+  const e = head(turn(1, [[["Read", "a", 30000, 40000]], [["Grep", "b", 10000, 12000]], [["Bash", "c", 10000, 20000]]]));
+  expect(tracksOf(e)).toEqual([[30000, 0], [10000, 0], [10000, 1]]);
+});
+
 test("timeline tracks: a call with no result holds the first track to the turn's end, so a later call goes on the second", () => {
   // Not running: Bash never returned, so it runs to the turn's last event, and Read, which
   // starts after Bash began, runs beside it.
@@ -332,6 +438,219 @@ test("timeline press: a press within 4 px of a bar finds its step; past 4 px, th
   expect([hit(x0 - 3), hit(x0), hit((x0 + x1) / 2), hit(x1 + 3)]).toEqual([read, read, read, read]);
   expect([hit(x0 - 5), hit(x1 + 5)]).toEqual([h.key, h.key]);
 });
+
+test("timeline press: an unfinished call's bar that starts left of its narrow turn is found by a press on it there, past the turn before's box", () => {
+  // 100 turns of 60 s across 500 px, each under 6 px wide; turn 12 (index 11) stopped after a
+  // Read, with a Bash that never returned, the others text only, so no Tools bar. The Bash's
+  // bar is 6 px wide, so it starts left of its turn, over the break and the turn before.
+  const heads = Array.from({ length: 100 }, (_, i) => ({
+    ...head(turn(i + 1, i === 11 ? ["a", [["Read", "b", 500, 800]], [["Bash", "sleep", 1000, null]]] : ["a"], i === 11 ? { interrupted: true, reply: null } : {})),
+    t0: T0 + i * 120000,
+  }));
+  const L = timelineLayout(heads, 500, "clock", T0 + 1e9);
+  const [p, t] = [L.turns[10], L.turns[11]];
+  expect(t.w).toBeGreaterThan(2);
+  expect(t.w).toBeLessThan(6);
+  const bash = stepsOf(heads[11]).find((it) => it.open);
+  const bar = L.spans.get("tools|tools|0").find(([a, b]) => a < t.x && t.x < b);
+  expect(bar[0]).toBeCloseTo(t.x + t.w - 6, 9);
+  expect(bar[2]).toBe(1);
+  // At the bar's left end, inside the turn before's box: the Bash, not the turn before.
+  const at = bar[0] + 0.25;
+  expect(at).toBeLessThan(p.x + p.w);
+  expect(timelineHit(L, heads, at, "tools")).toEqual({ turn: heads[11].key, key: bash.key });
+  // In the Model lane, or in none, the turn before's reply bar (3 px, at its turn's end) is under
+  // the press too, and a bar of the turn the press is in comes first.
+  const reply = stepsOf(heads[10]).find((it) => it.lk === "reply");
+  expect(timelineHit(L, heads, at, "model")).toEqual({ turn: heads[10].key, key: reply.key });
+  expect(timelineHit(L, heads, at, null)).toEqual({ turn: heads[10].key, key: reply.key });
+  // Left of the bar, no bar under the press: the turn before's heading, as before.
+  expect(timelineHit(L, heads, p.x + 0.1, "tools")).toEqual({ turn: heads[10].key, key: heads[10].key });
+});
+
+test("timeline press: a bar of the turn the press is in and one reaching back from the next both under it: the one drawn on top, failed over the rest, half height over full, then the narrowest", () => {
+  // As above, 100 turns of 60 s across 500 px. Turn 11 (index 10) ends with a Grep at 58 to
+  // 59 s, drawn 3 px wide at its turn's end; turn 12 (index 11) stopped with a Bash that never
+  // returned, 6 px wide, starting left of its turn over the Grep's last px.
+  const mk = (grep, rest) => Array.from({ length: 100 }, (_, i) => ({
+    ...head(turn(i + 1, i === 10 ? ["a", [grep]] : i === 11 ? ["a", ...rest] : ["a"], i === 11 ? { interrupted: true, reply: null } : {})),
+    t0: T0 + i * 120000,
+  }));
+  const press = (heads) => {
+    const L = timelineLayout(heads, 500, "clock", T0 + 1e9);
+    const [p, t] = [L.turns[10], L.turns[11]];
+    // Both bars are under a press half a px inside the turn's end.
+    const x = p.x + p.w - 0.5;
+    expect(t.x + t.w - 6).toBeLessThan(x);
+    expect(p.x + p.w - 3).toBeLessThan(x);
+    return timelineHit(L, heads, x, "tools");
+  };
+  const grepOf = (heads) => stepsOf(heads[10]).find((it) => it.lane === "tools").key;
+  const bashOf = (heads) => stepsOf(heads[11]).find((it) => it.open).key;
+  // The Bash starts while a Read runs: on the half-height track, drawn over the full Grep.
+  const a = mk(["Grep", "g", 58000, 59000], [[["Read", "b", 500, 2000]], [["Bash", "sleep", 1000, null]]]);
+  expect(stepsOf(a[11]).find((it) => it.open).track).toBe(1);
+  expect(press(a)).toEqual({ turn: a[11].key, key: bashOf(a) });
+  // Both full height, one ink (one span): the narrower, the Grep.
+  const b = mk(["Grep", "g", 58000, 59000], [[["Bash", "sleep", 1000, null]], [["Read", "b", 2000, 3000]]]);
+  expect(stepsOf(b[11]).find((it) => it.open).track).toBe(0);
+  expect(press(b)).toEqual({ turn: b[10].key, key: grepOf(b) });
+  // The Grep failed: its red bar is drawn over the half-height Bash.
+  const c = mk(["Grep", "g", 58000, 59000, true], [[["Read", "b", 500, 2000]], [["Bash", "sleep", 1000, null]]]);
+  expect(press(c)).toEqual({ turn: c[10].key, key: grepOf(c) });
+});
+
+test("timeline press: in one turn too, of the bars under the press the one drawn on top: failed over the rest, then half height over full, then the narrowest", () => {
+  const hit = (h, ms) => {
+    const L = timelineLayout([h], 1200, "clock", T0 + 1e7);
+    return timelineHit(L, [h], (ms / 60000) * 1200, "tools").key;
+  };
+  const keyOf = (h, name) => stepsOf(h).find((it) => it.lane === "tools" && rowsOf(h)[it.i].tool === name).key;
+  // A failed Read from 2 to 40 s, full height, and a Grep from 10 to 20 s on the half track
+  // over it: at 15 s the red Read is drawn on top.
+  const a = head(turn(1, [[["Read", "a", 2000, 40000, true]], [["Grep", "b", 10000, 20000]]]));
+  expect(stepsOf(a).filter((it) => it.lane === "tools").map((it) => it.track)).toEqual([0, 1]);
+  expect(hit(a, 15000)).toBe(keyOf(a, "Read"));
+  // Read from 2 to 40 s; Glob (12 to 14 s) listed before Grep (10 to 20 s), both on the half
+  // track: at 13 s the narrower, Glob.
+  const b = head(turn(2, [[["Read", "a", 2000, 40000]], [["Glob", "c", 12000, 14000]], [["Grep", "b", 10000, 20000]]]));
+  expect(stepsOf(b).filter((it) => it.lane === "tools").map((it) => it.track)).toEqual([0, 1, 1]);
+  expect(hit(b, 13000)).toBe(keyOf(b, "Glob"));
+  // Only the full Read under the press, at 30 s: the Read.
+  expect(hit(b, 30000)).toBe(keyOf(b, "Read"));
+});
+
+test("timeline press: looks at the turns that start within 4 px right of the press, and the turns under 2 px drawn to it from the left, and no further, so at 5,600 turns it reads as many turns at turn 10 as at turn 5,000", () => {
+  const one = head(turn(4, ["a", [["Bash", "x", 1000, 2000]]]));
+  const heads = Array.from({ length: 5600 }, (_, i) => ({ ...one, key: `0:${i + 1}`, n: i + 1, t0: T0 + i * 120000 }));
+  const L = timelineLayout(heads, 1371, "clock", T0 + 1e9);
+  let reads = 0;
+  const turns = new Proxy(L.turns, { get(o, k, r) { if (typeof k === "string" && /^[0-9]+$/.test(k)) reads++; return Reflect.get(o, k, r); } });
+  const P = { ...L, turns };
+  const cost = (ti) => {
+    reads = 0;
+    const got = timelineHit(P, heads, L.turns[ti].x + 0.01, "tools");
+    expect(got.turn).toBe(heads[ti].key);
+    return reads;
+  };
+  const pitch = L.turns[1].x - L.turns[0].x;
+  const [early, late] = [cost(10), cost(5000)];
+  // The halving takes 12 or 13 looks; then the turn, those within 4 px right of the press (two
+  // reads each), and those before it whose 1 px span reaches it, which start within 1 px left of
+  // it (five reads each: a turn under 2 px is read for its steps), and the one that ends the look.
+  expect(Math.abs(early - late)).toBeLessThanOrEqual(2);
+  expect(late).toBeLessThan(14 + 2 * Math.ceil(4 / pitch + 2) + 5 * Math.ceil(1 / pitch + 2) + 6);
+});
+
+test("timeline press: on turns under 2 px, drawn as one span per lane from the turn's x and at least 1 px wide, a press on a span gets that turn, and its failed call where the span is drawn red", () => {
+  // 500 short turns across 1,370 px with a 0.4 px break, under 2 px each and many under 1 px,
+  // whose span runs 1 px from its turn's x, past the turn's own width into the break. Every
+  // 50th turn is 60 s long, wide enough for its own bars; presses within 6 px of one are left
+  // out.
+  const heads = Array.from({ length: 500 }, (_, i) => {
+    const k = i % 4;
+    const calls = k === 0 ? [["Read", "a", 100, 300], ["Bash", "x", 400, 900, true]] : k === 1 ? [["Read", "a", 100, 300]] : k === 3 ? [["Bash", "x", 100, 600, true]] : null;
+    return { ...head(turn(i + 1, calls ? ["a", calls] : ["a"], { end: T0 + (i % 50 === 0 ? 60000 : 1000 + (i % 3) * 500) })), t0: T0 + i * 120000 };
+  });
+  const L = timelineLayout(heads, 1370, "clock", T0 + 1e9);
+  const wide = L.turns.filter((t) => t.w >= 2);
+  expect(wide.length).toBe(10);
+  expect(L.turns.filter((t) => t.w < 1).length).toBeGreaterThan(100);
+  const span = (t) => [t.x, t.x + Math.max(t.w, 1)];
+  let pressed = 0;
+  let past = 0;
+  for (let x = 0.05; x < 600; x += 0.1) {
+    if (wide.some((t) => x > t.x - 6 && x < t.x + t.w + 6)) continue;
+    const under = L.turns.map((_, ti) => ti).filter((ti) => L.turns[ti].w < 2 && heads[ti].cnt?.tools && x >= span(L.turns[ti])[0] && x <= span(L.turns[ti])[1]);
+    if (!under.length) continue;
+    pressed++;
+    const got = timelineHit(L, heads, x, "tools");
+    const ti = heads.findIndex((h) => h.key === got.turn);
+    const st = stepsOf(heads[ti]).find((it) => it.key === got.key);
+    const failed = Boolean(heads[ti].cnt.failed);
+    expect([x, under.includes(ti), st?.lane, st?.failed === failed]).toEqual([x, true, "tools", true]);
+    if (x > L.turns[ti].x + L.turns[ti].w) past++;
+  }
+  // Presses past a turn's own width, inside its drawn span, come up too.
+  expect(pressed).toBeGreaterThan(1000);
+  expect(past).toBeGreaterThan(40);
+});
+
+test("timeline press: a running call's growing bar is drawn over every other bar, so a press on it gets that call, over a failed one under it", () => {
+  // A running turn: a failed Read from 2 to 40 s, full height, and a Bash started at 10 s
+  // with no result yet, on the half track, its bar growing to now (50 s in). The growing bars
+  // are drawn last, over the lanes' spans.
+  const h = head(turn(1, [[["Read", "a", 2000, 40000, true]], [["Bash", "x", 10000, null]]], { done: false, end: null, reply: null }), true);
+  const now = h.t0 + 50000;
+  const L = timelineLayout([h], 1200, "clock", now);
+  const bash = stepsOf(h).find((it) => it.open);
+  const read = stepsOf(h).find((it) => it.failed);
+  expect([bash.track, L.grow.length]).toEqual([1, 1]);
+  const t = L.turns[0];
+  const at = (ms) => t.x + (ms / L.geo.walls[0]) * t.w;
+  const g = tlGrow(L, now)[0];
+  expect(g.x0).toBeLessThan(at(15000));
+  expect(g.x1).toBeGreaterThan(at(15000));
+  expect(timelineHit(L, [h], at(15000), "tools", now).key).toBe(bash.key);
+  // With the y inside the lane: on the half track (8 to 14 px down), the Bash; above it (2 to
+  // 8 px), only the Read is drawn there.
+  expect(timelineHit(L, [h], at(15000), "tools", now, 10).key).toBe(bash.key);
+  expect(timelineHit(L, [h], at(15000), "tools", now, 4).key).toBe(read.key);
+  // Before the Bash started, only the Read is under the press.
+  expect(timelineHit(L, [h], at(5000), "tools", now).key).toBe(read.key);
+});
+
+test("timeline press: reaches 4 px left of a turn exactly 2 px wide, where its unfinished call's bar starts", () => {
+  // 300 turns across 2,000 px: the least turn width is 0.3 * 2,000 / 300, 2 px exactly, with a
+  // break of about 1 px. Turn 151 (index 150) is 600 s long with text only, so it takes most
+  // of the strip; the others are 0.5 s long, held at 2 px, and turn 152 stopped after a Read
+  // with a Bash that never returned. That bar is 6 px wide and ends at its turn's end, so
+  // it starts 4 px left of it, over the break and the long turn's end.
+  const heads = Array.from({ length: 300 }, (_, i) => {
+    const t = i === 150 ? turn(i + 1, ["a"], { end: T0 + 600000 }) : i === 151 ? turn(i + 1, ["a", [["Read", "b", 50, 100]], [["Bash", "sleep", 200, null]]], { interrupted: true, reply: null, end: T0 + 500, untimed: true }) : turn(i + 1, ["a"], { end: T0 + 500, untimed: true });
+    return { ...head(t), t0: T0 + i * 1200000 };
+  });
+  const L = timelineLayout(heads, 2000, "clock", T0 + 1e10);
+  const t = L.turns[151];
+  expect(t.w).toBe(2);
+  expect(L.turns[150].x + L.turns[150].w).toBeGreaterThan(t.x - 3.9);
+  const bash = stepsOf(heads[151]).find((it) => it.open);
+  const bar = L.spans.get("tools|tools|0").find(([a, b]) => a < t.x && t.x < b);
+  expect(bash.open).toBe(true);
+  expect(bar[0]).toBeCloseTo(t.x - 4, 9);
+  // 3.9 px left of the turn, inside the long turn: the Bash, drawn there.
+  expect(timelineHit(L, heads, t.x - 3.9, "tools")).toEqual({ turn: heads[151].key, key: bash.key });
+  // Past its bar's start: the long turn's heading.
+  expect(timelineHit(L, heads, t.x - 4.1, "tools")).toEqual({ turn: heads[150].key, key: heads[150].key });
+});
+
+test("timeline press: in one turn, of two bars on the same layer under the press, the narrower, whichever is listed first", () => {
+  const hit = (h, ms) => timelineHit(timelineLayout([h], 1200, "clock", T0 + 1e7), [h], (ms / 60000) * 1200, "tools").key;
+  const keyOf = (h, name) => stepsOf(h).find((it) => it.lane === "tools" && rowsOf(h)[it.i].tool === name).key;
+  // Read from 2 to 40 s; Grep (10 to 20 s) listed before Glob (12 to 14 s), both on the half
+  // track: at 13 s the narrower, Glob, though Grep is listed first.
+  const h = head(turn(1, [[["Read", "a", 2000, 40000]], [["Grep", "b", 10000, 20000]], [["Glob", "c", 12000, 14000]]]));
+  expect(stepsOf(h).filter((it) => it.lane === "tools").map((it) => it.track)).toEqual([0, 1, 1]);
+  expect(hit(h, 13000)).toBe(keyOf(h, "Glob"));
+  expect(hit(h, 16000)).toBe(keyOf(h, "Grep"));
+});
+
+test("timeline press: with no y inside the lane, where a half-height bar is over a full one it gets the half one, even where only the full one is drawn", () => {
+  // Read from 2 to 40 s, full height (2 to 14 px down the lane), and a Grep from 10 to 20 s on
+  // the half track (8 to 14 px). At 15 s a press 4 px down the lane is on the Read alone, but
+  // with no y the press gets the Grep, the bar drawn on top at that x. The view's press passes
+  // the y, and gets the Read.
+  const h = head(turn(1, [[["Read", "a", 2000, 40000]], [["Grep", "b", 10000, 20000]]]));
+  const L = timelineLayout([h], 1200, "clock", T0 + 1e7);
+  expect(timelineHit.length).toBe(4);
+  const grep = stepsOf(h).find((it) => rowsOf(h)[it.i].tool === "Grep");
+  expect(timelineHit(L, [h], 300, "tools").key).toBe(grep.key);
+  const read = stepsOf(h).find((it) => rowsOf(h)[it.i].tool === "Read");
+  expect(timelineHit(L, [h], 300, "tools", T0 + 1e7, 4).key).toBe(read.key);
+});
+
+
+
 
 test("timeline press: a press at no number finds nothing", () => {
   const h = head(turn(1, [[["Read", "a", 30000, 40000]]]));
@@ -1210,22 +1529,27 @@ test("timeline press in the gap between two bars out of order: no step, only the
 });
 
 test("timeline spans out of order: an unfinished call's torn end is kept, apart from a bar left of it or joined with one that reaches it", () => {
-  // Read from 30 s to 31 s on the first track; Bash at 20 s with no result, so on the second
-  // track from 480 px to the turn's end, torn; then a Grep listed after it but earlier on the
-  // clock, also on the second track (it starts before the Read ends).
-  const mk = (n, at, rt) => head(turn(n, [[["Read", "a", 30000, 31000]], [["Bash", "sleep", 20000, null]], [["Grep", "b", at, rt]]], { interrupted: true, reply: null, end: T0 + 60000 }));
   const lay = (h) => timelineLayout([h], 1440, "clock", T0 + 1e7);
-  // Grep from 5 s to 6 s, at 120 to 144 px: a gap before the torn bar.
-  const a = mk(1, 5000, 6000);
+  const end = { interrupted: true, reply: null, end: T0 + 60000 };
+  // To a thousandth of a px (31 s of 60 across 1,440 px is 744 with a float's last bit).
+  const r3 = (list) => list.map((sp) => sp.map((v) => Math.round(v * 1000) / 1000));
+  // Listed Read (30 to 31 s), Bash (20 s, no result, so torn to the turn's end) and Grep (5 to
+  // 6 s). In clock order Grep runs alone, then Bash holds the first track to the end, so Read
+  // goes on the second; Grep's bar at 120 to 144 px is apart from the torn bar.
+  const a = head(turn(1, [[["Read", "a", 30000, 31000]], [["Bash", "sleep", 20000, null]], [["Grep", "b", 5000, 6000]]], end));
   const A = lay(a);
   expect(A.turns[0]).toMatchObject({ x: 0, w: 1440 });
-  expect(rawBars(A, a, 0, "tools").slice(1)).toEqual([[480, 1440], [120, 144]]);
-  expect(A.spans.get("tools|tools|1")).toEqual([[120, 144], [480, 1440, 1]]);
-  // Grep from 15 s to 22.5 s, at 360 to 540 px: it reaches the torn bar, so one span, still torn.
-  const b = mk(2, 15000, 22500);
+  expect(r3(rawBars(A, a, 0, "tools"))).toEqual([[720, 744], [480, 1440], [120, 144]]);
+  expect(r3(A.spans.get("tools|tools|0"))).toEqual([[120, 144], [480, 1440, 1]]);
+  expect(r3(A.spans.get("tools|tools|1"))).toEqual([[720, 744]]);
+  // Read from 10 s to 50 s on the first track; Bash at 20 s with no result and a Grep listed
+  // after it but started at 15 s, both while Read runs, so both on the second track: Grep at
+  // 360 to 540 px reaches the torn bar, so one span, still torn.
+  const b = head(turn(2, [[["Read", "a", 10000, 50000]], [["Bash", "sleep", 20000, null]], [["Grep", "b", 15000, 22500]]], end));
   const B = lay(b);
-  expect(rawBars(B, b, 0, "tools").slice(1)).toEqual([[480, 1440], [360, 540]]);
-  expect(B.spans.get("tools|tools|1")).toEqual([[360, 1440, 1]]);
+  expect(r3(rawBars(B, b, 0, "tools"))).toEqual([[240, 1200], [480, 1440], [360, 540]]);
+  expect(r3(B.spans.get("tools|tools|0"))).toEqual([[240, 1200]]);
+  expect(r3(B.spans.get("tools|tools|1"))).toEqual([[360, 1440, 1]]);
 });
 
 test("timeline span join (tlJoin): spans touch within half a pixel on either side; a span in any order goes in its place and joins what it reaches", () => {
@@ -1258,130 +1582,270 @@ test("timeline span join (tlJoin): spans touch within half a pixel on either sid
   expect(run([[100, 110, 1]], [50, 60])).toEqual([[50, 60], [100, 110, 1]]);
 });
 
-// Each failed bar's centre as drawn, at Fit: a turn under 2 px is one span per lane from its x,
-// its mark at x + w/2; a wider turn's failed bars are their own boxes (itemBox).
-function failCentres(L, heads) {
-  const out = [];
-  L.turns.forEach((t, ti) => {
-    const h = heads[ti];
-    if (t.w < 2) { if (h.cnt?.failed) out.push(t.x + t.w / 2); return; }
-    for (const st of stepsOf(h)) {
-      if (!st.failed) continue;
-      const b = itemBox(st.a ?? Number.NaN, st.b ?? Number.NaN, 0, st.i, t.x, t.w, L.geo.walls[ti], "clock", tlLen(h));
-      if (b) out.push((b.x0 + b.x1) / 2);
+// A seeded session of mixed turns: about 1 in 25 long (10 to 50 minutes, notes and calls, some
+// run at once, some failed), the rest short (1 to 40 s: the prompt, maybe a note, maybe a reply,
+// up to 3 calls, some failed). At Fit most turns are under 2 px.
+function mixedSession(n, seed) {
+  let a = seed >>> 0;
+  const rnd = () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const heads = [];
+  let at = T0;
+  for (let i = 0; i < n; i++) {
+    const long = rnd() < 0.04;
+    const len = long ? Math.round(600000 + rnd() * 2400000) : Math.round(1000 + rnd() * 39000);
+    const steps = [];
+    if (long) {
+      let t = 2000;
+      for (let k = 0; t < len - 20000 && k < 20; k++) {
+        if (rnd() < 0.3) steps.push("Looking.");
+        const d = Math.round(500 + rnd() * (len / 12));
+        const call = ["Bash", "x", t, Math.min(len - 1000, t + d), rnd() < 0.25];
+        if (rnd() < 0.3) steps.push([call, ["Read", "y", t + Math.round(d / 3), Math.min(len - 1000, t + Math.round(d / 2)), rnd() < 0.25]]);
+        else steps.push([call]);
+        t += d + Math.round(rnd() * 20000);
+      }
+    } else {
+      if (rnd() < 0.3) steps.push("Looking.");
+      const calls = Math.floor(rnd() * 4);
+      for (let k = 0; k < calls; k++) steps.push([["Read", "z", 200 + k * 200, Math.min(len - 100, 300 + k * 200), rnd() < 0.3]]);
     }
-  });
-  return out;
+    const t = turn(i + 1, steps, { end: T0 + len, reply: rnd() < 0.5 ? null : "Done.", untimed: false });
+    heads.push({ ...head(t), t0: at });
+    at += len + Math.round(5000 + rnd() * 600000);
+  }
+  return heads;
 }
-
-test("timeline failure marks: a failed bar inside another with the same centre gives one mark, not two on the same px", () => {
-  // 60 s across 600 px: a failed Bash from 2 to 40 s (20 to 400 px) and a failed Read from 10
-  // to 32 s (100 to 320 px) on the half track inside it. Both are centred at 210 px.
-  const h = head(turn(1, [[["Bash", "x", 2000, 40000, true]], [["Read", "a", 10000, 32000, true]]]));
-  const L = timelineLayout([h], 600, "clock", T0 + 1e7);
-  expect(failCentres(L, [h])).toEqual([210, 210]);
-  expect(L.fails).toEqual([210]);
-});
-
-test("timeline failure marks: across turns too, the marks are 6 px or more apart, spaced by the centres they are drawn at", () => {
-  // Sessions where a wide turn's last failed call ends at its end and short turns after it
-  // (under 2 px from a few hundred turns, one span a lane) have failed calls of their own.
-  let close = 0;
-  for (const n of [40, 90, 150, 240, 330, 420, 560, 700]) {
-    const heads = Array.from({ length: n }, (_, i) => {
-      const kind = i % 7;
-      const calls = kind === 0 ? [["Bash", "x", 57000, 60000, true]] : kind === 3 ? [["Read", "a", 0, 400, true]] : kind === 5 ? [["Grep", "b", 200, 900, true]] : [["Glob", "c", 100, 300]];
-      const end = kind === 0 ? 60000 : kind === 3 ? 4000 : 1000 + (i % 5) * 700;
-      return { ...head(turn(i + 1, ["a", calls], { end: T0 + end })), t0: T0 + i * 120000 };
-    });
-    for (const cw of [1370, 1143]) {
-      const L = timelineLayout(heads, cw, "clock", T0 + 1e9);
-      const f = L.fails;
-      for (let k = 1; k < f.length; k++) {
-        expect([n, cw, f[k] - f[k - 1] >= 6 - 1e-9]).toEqual([n, cw, true]);
-      }
-      // Each failed bar has a mark within 6 px of its centre.
-      for (const c of failCentres(L, heads)) {
-        if (f.some((m) => Math.abs(m - c) < 6)) continue;
-        expect([n, cw, c, "no mark within 6 px"]).toEqual([n, cw, c, null]);
-      }
-      const narrow = L.turns.filter((t) => t.w < 2).length;
-      if (narrow && narrow < L.turns.length) close++;
+// The failure marks two rules give, from each turn's failed bars' centres in order: turns
+// [{ narrow, x, w, cs }] (cs: a wide turn's failed bars' centres). by: "centre" (the rule),
+// "x" (a turn under 2 px gated and spaced by its x, as at d97a479a) or "own" (a wide turn with
+// failed bars spacing its marks afresh, not from the turn before).
+function marksBy(turns, by) {
+  const out = [];
+  let end = -Infinity;
+  for (const t of turns) {
+    if (t.narrow) {
+      if (!t.cs.length) continue;
+      const g = by === "x" ? t.x : t.x + t.w / 2;
+      if (g >= end) { out.push(t.x + t.w / 2); end = g + 6; }
+    } else {
+      if (by === "own" && t.cs.length) end = -Infinity;
+      for (const c of [...t.cs].sort((p, q) => p - q)) if (c >= end) { out.push(c); end = c + 6; }
     }
   }
-  // Both kinds of turn come up side by side, as at Fit from a few hundred turns.
-  expect(close).toBeGreaterThan(4);
-});
+  return out;
+}
+const breaksRule = (marks, centres) => marks.some((m, k) => k > 0 && m - marks[k - 1] < 6 - 1e-9) || centres.some((c) => !marks.some((m) => Math.abs(m - c) <= 6 + 1e-9));
 
-test("timeline failure marks: every failed bar has a mark within 6 px of its centre; the marks go left to right by centre", () => {
-  const marks = (h) => timelineLayout([h], 600, "clock", T0 + 1e7).fails.map((x) => Math.round(x * 1000) / 1000);
-  // A failed Read from 0 to 0.4 s (0 to 4 px, centre 2) and a failed Bash from 0.5 to 5.5 s
-  // (5 to 55 px, centre 30): the Bash starts under 6 px from the Read but is centred 28 px
-  // from it, so it has a mark of its own.
-  const a = head(turn(1, [[["Read", "a", 0, 400, true]], [["Bash", "x", 500, 5500, true]]]));
-  expect(marks(a)).toEqual([2, 30]);
-  // A failed Bash from 0 to 10 s (0 to 100 px, centre 50) and a failed Read from 1 to 1.4 s
-  // (10 to 14 px, centre 12) inside it: by start the Bash comes first, by centre the Read.
-  // Both marks, left to right.
-  const b = head(turn(2, [[["Bash", "x", 0, 10000, true]], [["Read", "a", 1000, 1400, true]]]));
-  expect(marks(b)).toEqual([12, 50]);
-});
+test("timeline seeded mixed turns: the failure marks keep both rules, and every press gets the bar drawn on top there, or the nearest of the turn drawn there", () => {
+  const seen = { x: 0, own: 0, deep: 0 };
+  for (const [n, cw, seed] of [[1000, 1440, 3], [2500, 1440, 5], [700, 1143, 7]]) {
+    const heads = mixedSession(n, seed);
+    const L = timelineLayout(heads, cw, "clock", T0 + 1e12);
+    const T = L.turns;
+    const all = [];
+    const turns = T.map((t, ti) => {
+      const h = heads[ti];
+      const narrow = t.w < 2;
+      const wall = L.geo.walls[ti];
+      const len = tlLen(h);
+      const tk = narrow ? null : L.tracks.has(h) ? L.tracks.get(h) : tlTracks(h);
+      const cs = [];
+      const bars = [];
+      for (let i = 0; i < len; i++) {
+        const st = tlStep(h, i, tk);
+        if (!st.sk) continue;
+        const r = (narrow ? 0 : st.track) + (st.ink === "failed" ? 2 : 0);
+        const b = narrow ? { x0: t.x, x1: t.x + Math.max(t.w, 1) } : itemBox(st.a ?? Number.NaN, st.b ?? Number.NaN, (st.track ? TL_TRACK : 0) | (st.open ? TL_OPEN : 0) | (st.failed ? TL_FAILED : 0), i, t.x, t.w, wall, "clock", len);
+        if (!b) continue;
+        const bar = { ti, i, key: st.key, lane: st.lane, x0: b.x0, x1: b.x1, r, w: b.x1 - b.x0 };
+        bars.push(bar);
+        all.push(bar);
+        if (st.failed && !narrow) cs.push((b.x0 + b.x1) / 2);
+      }
+      if (narrow && h.cnt?.failed) cs.push(t.x + t.w / 2);
+      return { narrow, x: t.x, w: t.w, cs, bars };
+    });
+    // Marks: the layout's are the rule's and keep both rules; the two old rules each break one
+    // on some case (so a mark rule turned back is seen).
+    const centres = turns.flatMap((t) => t.cs);
+    const want = marksBy(turns, "centre");
+    expect([n, L.fails.length]).toEqual([n, want.length]);
+    L.fails.forEach((m, k) => expect(m).toBeCloseTo(want[k], 9));
+    expect([n, breaksRule(L.fails, centres)]).toEqual([n, false]);
+    if (breaksRule(marksBy(turns, "x"), centres)) seen.x++;
+    if (breaksRule(marksBy(turns, "own"), centres)) seen.own++;
+    // The press, at every 0.13 px of the strip in each lane, against all bars.
+    const byPx = new Map();
+    for (const b of all) for (let p = Math.floor(b.x0) - 4; p <= Math.floor(b.x1) + 4; p++) { if (!byPx.has(p)) byPx.set(p, []); byPx.get(p).push(b); }
+    const drawnAt = (fx, wide) => {
+      let lo = 0;
+      while (lo + 1 < T.length && T[lo + 1].x <= fx) lo++;
+      const end = T[lo].x + (wide || T[lo].w >= 2 ? T[lo].w : Math.max(T[lo].w, 1));
+      return fx > end && T[lo + 1] && T[lo + 1].x - fx < fx - end ? lo + 1 : lo;
+    };
+    let covered = 0;
+    let thin = 0;
+    let moved = 0;
+    let lo0 = 0;
+    for (let x = 0; x < cw; x += 0.13) {
+      while (lo0 + 1 < T.length && T[lo0 + 1].x <= x) lo0++;
+      for (const lane of ["input", "model", "tools"]) {
+        const near = (byPx.get(Math.floor(x)) ?? []).filter((b) => b.lane === lane);
+        const on = near.filter((b) => b.x0 <= x && x <= b.x1);
+        const got = timelineHit(L, heads, x, lane, T0 + 1e12);
+        if (on.length) {
+          covered++;
+          const top = on.reduce((m, b) => (b.r > m.r || (b.r === m.r && b.w < m.w) ? b : m));
+          const okBars = on.filter((b) => b.r === top.r && b.w === top.w);
+          const ok = okBars.map((b) => b.key);
+          if (on.some((b) => b.ti < lo0)) thin++;
+          // Only a span of a turn two or more before the one starting under the press is on top
+          // there: a press that looked back at one turn only would miss it.
+          if (okBars.every((b) => b.ti <= lo0 - 2)) seen.deep++;
+          if (!ok.includes(got.key)) expect([n, x, lane, got.key]).toEqual([n, x, lane, ok]);
+        } else {
+          // No bar under it: the turn drawn there, as wide as drawn (at least 1 px under 2 px),
+          // or the nearer one in a break; its nearest bar within 4 px, else its heading.
+          const D = drawnAt(x, false);
+          if (D !== drawnAt(x, true)) moved++;
+          let best = null;
+          for (const b of turns[D].bars) {
+            if (b.lane !== lane) continue;
+            const d = x < b.x0 ? b.x0 - x : x - b.x1;
+            if (d < 4 && (!best || d < best.d)) best = { d, key: b.key };
+          }
+          const want = { turn: heads[D].key, key: best ? best.key : heads[D].key };
+          if (got.turn !== want.turn || got.key !== want.key) expect([n, x, lane, got]).toEqual([n, x, lane, want]);
+        }
+      }
+    }
+    // The session holds the cases: presses on a span of a turn before the one starting under
+    // the press, and presses past a narrow turn's own width but inside its drawn 1 px, nearer
+    // the next turn.
+    expect([n, covered > 1000, thin > 20, moved > 20]).toEqual([n, true, true, true]);
+  }
+  expect([seen.x > 0, seen.own > 0, seen.deep > 100]).toEqual([true, true, true]);
+}, 120000);
 
-test("timeline press: a running call's growing bar is drawn over every other bar, so a press on it gets that call, over a failed one under it", () => {
-  // A running turn: a failed Read from 2 to 40 s, full height, and a Bash started at 10 s
-  // with no result yet, on the half track, its bar growing to now (50 s in). The growing bars
-  // are drawn last, over the lanes' spans.
-  const h = head(turn(1, [[["Read", "a", 2000, 40000, true]], [["Bash", "x", 10000, null]]], { done: false, end: null, reply: null }), true);
-  const now = h.t0 + 50000;
-  const L = timelineLayout([h], 1200, "clock", now);
-  const bash = stepsOf(h).find((it) => it.open);
-  const read = stepsOf(h).find((it) => it.failed);
-  expect([bash.track, L.grow.length]).toEqual([1, 1]);
-  const t = L.turns[0];
-  const at = (ms) => t.x + (ms / L.geo.walls[0]) * t.w;
-  const g = tlGrow(L, now)[0];
-  expect(g.x0).toBeLessThan(at(15000));
-  expect(g.x1).toBeGreaterThan(at(15000));
-  expect(timelineHit(L, [h], at(15000), "tools", now).key).toBe(bash.key);
-  // With the y inside the lane: on the half track (8 to 14 px down), the Bash; above it (2 to
-  // 8 px), only the Read is drawn there.
-  expect(timelineHit(L, [h], at(15000), "tools", now, 10).key).toBe(bash.key);
-  expect(timelineHit(L, [h], at(15000), "tools", now, 4).key).toBe(read.key);
-  // Before the Bash started, only the Read is under the press.
-  expect(timelineHit(L, [h], at(5000), "tools", now).key).toBe(read.key);
-});
-
-test("timeline press: reaches 4 px left of a turn exactly 2 px wide, where its unfinished call's bar starts", () => {
-  // 300 turns across 2,000 px: the least turn width is 0.3 * 2,000 / 300, 2 px exactly, with a
-  // break of about 1 px. Turn 151 (index 150) is 600 s long with text only, so it takes most
-  // of the strip; the others are 0.5 s long, held at 2 px, and turn 152 stopped after a Read
-  // with a Bash that never returned. That bar is 6 px wide and ends at its turn's end, so
-  // it starts 4 px left of it, over the break and the long turn's end.
-  const heads = Array.from({ length: 300 }, (_, i) => {
-    const t = i === 150 ? turn(i + 1, ["a"], { end: T0 + 600000 }) : i === 151 ? turn(i + 1, ["a", [["Read", "b", 50, 100]], [["Bash", "sleep", 200, null]]], { interrupted: true, reply: null, end: T0 + 500, untimed: true }) : turn(i + 1, ["a"], { end: T0 + 500, untimed: true });
-    return { ...head(t), t0: T0 + i * 1200000 };
+// The seeded sessions zoomed in, where a turn under 2 px at Fit can be drawn as bars and a
+// turn still under 2 px has its 1 px span run over the turns after it. The bars in px of the
+// view, as the press places them: each turn at x * z - x0, w * z wide.
+function viewBars(L, heads, cw) {
+  const all = [];
+  const turns = L.turns.map((t, ti) => {
+    const tx = t.x * L.z - L.x0;
+    const tw = t.w * L.z;
+    const narrow = tw < 2;
+    const bars = [];
+    if (tx > cw + 8 || tx + Math.max(tw, 1) < -8) return { narrow, tx, tw, bars };
+    const h = heads[ti];
+    const wall = L.geo.walls[ti];
+    const len = tlLen(h);
+    const tk = narrow ? null : L.tracks.has(h) ? L.tracks.get(h) : tlTracks(h);
+    for (let i = 0; i < len; i++) {
+      const st = tlStep(h, i, tk);
+      if (!st.sk) continue;
+      const r = (narrow ? 0 : st.track) + (st.ink === "failed" ? 2 : 0);
+      const b = narrow ? { x0: tx, x1: tx + Math.max(tw, 1) } : itemBox(st.a ?? Number.NaN, st.b ?? Number.NaN, (st.track ? TL_TRACK : 0) | (st.open ? TL_OPEN : 0) | (st.failed ? TL_FAILED : 0), i, tx, tw, wall, "clock", len);
+      if (!b) continue;
+      const bar = { ti, i, key: st.key, lane: st.lane, x0: b.x0, x1: b.x1, r, w: b.x1 - b.x0 };
+      bars.push(bar);
+      all.push(bar);
+    }
+    return { narrow, tx, tw, bars };
   });
-  const L = timelineLayout(heads, 2000, "clock", T0 + 1e10);
-  const t = L.turns[151];
-  expect(t.w).toBe(2);
-  expect(L.turns[150].x + L.turns[150].w).toBeGreaterThan(t.x - 3.9);
-  const bash = stepsOf(heads[151]).find((it) => it.open);
-  const bar = L.spans.get("tools|tools|0").find(([a, b]) => a < t.x && t.x < b);
-  expect(bash.open).toBe(true);
-  expect(bar[0]).toBeCloseTo(t.x - 4, 9);
-  // 3.9 px left of the turn, inside the long turn: the Bash, drawn there.
-  expect(timelineHit(L, heads, t.x - 3.9, "tools")).toEqual({ turn: heads[151].key, key: bash.key });
-  // Past its bar's start: the long turn's heading.
-  expect(timelineHit(L, heads, t.x - 4.1, "tools")).toEqual({ turn: heads[150].key, key: heads[150].key });
-});
+  return { all, turns };
+}
 
-test("timeline press: in one turn, of two bars on the same layer under the press, the narrower, whichever is listed first", () => {
-  const hit = (h, ms) => timelineHit(timelineLayout([h], 1200, "clock", T0 + 1e7), [h], (ms / 60000) * 1200, "tools").key;
-  const keyOf = (h, name) => stepsOf(h).find((it) => it.lane === "tools" && rowsOf(h)[it.i].tool === name).key;
-  // Read from 2 to 40 s; Grep (10 to 20 s) listed before Glob (12 to 14 s), both on the half
-  // track: at 13 s the narrower, Glob, though Grep is listed first.
-  const h = head(turn(1, [[["Read", "a", 2000, 40000]], [["Grep", "b", 10000, 20000]], [["Glob", "c", 12000, 14000]]]));
-  expect(stepsOf(h).filter((it) => it.lane === "tools").map((it) => it.track)).toEqual([0, 1, 1]);
-  expect(hit(h, 13000)).toBe(keyOf(h, "Glob"));
-  expect(hit(h, 16000)).toBe(keyOf(h, "Grep"));
-});
+test("timeline seeded mixed turns, zoomed: every press gets the bar drawn on top there, at a thin span's exact drawn end too, and over a near bar of the turn under the press", () => {
+  const seen = { near: 0, end: 0 };
+  for (const [n, cw, seed, z] of [[5600, 1143, 11, 3.7], [2500, 1440, 5, 2.5], [20000, 1440, 3, 6], [1000, 1440, 3, 1]]) {
+    const heads = mixedSession(n, seed);
+    const G = timelineGeo(heads, cw, "clock");
+    const GT = G.turns;
+    // The views: the session's middle, and up to 12 spread over it, each centred on a turn drawn
+    // as bars, with a failed call, that the 1 px span of the turn under 2 px before it runs into.
+    const into = [];
+    for (let j = 0; j + 1 < GT.length; j++) {
+      const w = GT[j].w * z;
+      if (w < 2 && GT[j].x * z + Math.max(w, 1) > GT[j + 1].x * z && GT[j + 1].w * z >= 2 && heads[j + 1].cnt?.failed) into.push(j + 1);
+    }
+    const views = [0.5 * (G.total * z - cw)];
+    const k6 = Math.min(12, into.length);
+    for (let k = 0; k < k6; k++) views.push(GT[into[Math.floor((k * into.length) / k6)]].x * z - cw / 2);
+    for (const vx of views) {
+      const L = timelineLayout(heads, cw, "clock", T0 + 1e12, { z, x0: vx }, G);
+      expect([n, L.z]).toEqual([n, z]);
+      const T = L.turns;
+      const { all, turns } = viewBars(L, heads, cw);
+      const byPx = new Map();
+      for (const b of all) for (let p = Math.floor(b.x0) - 4; p <= Math.floor(b.x1) + 4; p++) { if (!byPx.has(p)) byPx.set(p, []); byPx.get(p).push(b); }
+      // The turn the press is in: found on the strip, then the nearer one past its drawn end.
+      const turnAt = (x) => {
+        const fx = (x + L.x0) / L.z;
+        let lo = 0;
+        let hi = T.length - 1;
+        while (lo < hi) { const m = (lo + hi + 1) >> 1; if (T[m].x <= fx) lo = m; else hi = m - 1; }
+        const end = T[lo].x + (T[lo].w * L.z < 2 ? Math.max(T[lo].w, 1 / L.z) : T[lo].w);
+        return fx > end && T[lo + 1] && T[lo + 1].x - fx < fx - end ? lo + 1 : lo;
+      };
+      const press = (x, lane) => {
+        if (!(x >= 0 && x < cw)) return null;
+        const D = turnAt(x);
+        const on = (byPx.get(Math.floor(x)) ?? []).filter((b) => b.lane === lane && b.x0 <= x && x <= b.x1);
+        const got = timelineHit(L, heads, x, lane, T0 + 1e12);
+        // The nearest bar of the turn the press is in, within 4 px, the first listed at equal distance.
+        let best = null;
+        for (const b of turns[D].bars) {
+          if (b.lane !== lane) continue;
+          const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
+          if (d < 4 && (!best || d < best.d)) best = { d, b };
+        }
+        if (!on.length) {
+          const want = { turn: heads[D].key, key: best ? best.b.key : heads[D].key };
+          if (got.turn !== want.turn || got.key !== want.key) expect([n, x, lane, got]).toEqual([n, x, lane, want]);
+          return null;
+        }
+        const top = on.reduce((m, b) => (b.r > m.r || (b.r === m.r && b.w < m.w) ? b : m));
+        const okBars = on.filter((b) => b.r === top.r && b.w === top.w);
+        if (!okBars.some((b) => b.key === got.key)) expect([n, x, lane, got.key]).toEqual([n, x, lane, okBars.map((b) => b.key)]);
+        // Every bar under the press is an earlier turn's span, and the turn the press is in has
+        // a bar near it, not under it, that the span drawn on top does not outrank. A look-back
+        // that let a span replace that near bar only by outranking it would answer the near bar.
+        if (on.every((b) => b.ti < D) && best && best.d > 0 && !(top.r > best.b.r || (top.r === best.b.r && top.w < best.b.w))) seen.near++;
+        return { D, okBars };
+      };
+      for (let x = 0; x < cw; x += 0.13) for (const lane of ["input", "model", "tools"]) press(x, lane);
+      for (let j = 1; j < T.length; j++) {
+        const t = turns[j];
+        const p = turns[j - 1];
+        if (!t.bars.length && !p.bars.length) continue;
+        // Inside the span of a turn under 2 px where it runs into a turn drawn as bars: 16 presses
+        // between the bars' turn's start and the span's end.
+        if (!t.narrow && p.narrow) {
+          const reach = p.tx + Math.max(p.tw, 1);
+          for (let k = 0; k < 16 && reach > t.tx; k++) for (const lane of ["input", "model", "tools"]) press(t.tx + ((reach - t.tx) * (k + 0.5)) / 16, lane);
+        }
+        // At the exact drawn end of each span of a turn under 2 px, where the span is still under
+        // the press. Where only spans that end at the press, of turns before the one the press is
+        // in, are drawn on top, a look-back that stopped at a span ending at the press misses them.
+        if (p.narrow && p.bars.length) {
+          const x = T[j - 1].x * L.z - L.x0 + Math.max(T[j - 1].w * L.z, 1);
+          for (const lane of new Set(p.bars.map((b) => b.lane))) {
+            const r = press(x, lane);
+            if (r?.okBars.every((b) => b.ti < r.D && b.x1 === x)) seen.end++;
+          }
+        }
+      }
+    }
+  }
+  // The sessions hold both cases: 77 presses over a near bar, at 17 turns, and 28,420 at a
+  // span's exact end.
+  expect([seen.near > 40, seen.end > 10000]).toEqual([true, true]);
+}, 120000);

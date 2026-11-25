@@ -43,30 +43,49 @@ export function tlPathOf(keep, id, spans, key, build) {
   return path;
 }
 // A step's start and end from its row, ms from the turn's start (NaN for none: an instant has
-// no end), and its flags: TL_TRACK (in the Tools lane it started while another call ran, drawn
-// half height), TL_OPEN (a call with no result yet) and TL_FAILED.
+// no end), and its flags: TL_TRACK (in the Tools lane it started while a call on the first
+// track ran, drawn half height), TL_OPEN (a call with no result yet) and TL_FAILED.
 const rowA = (r) => r.start ?? Number.NaN;
 const rowB = (r) => (r.start != null && r.dur != null ? r.start + r.dur : Number.NaN);
 const rowF = (r, track) => (track ? TL_TRACK : 0) | (r.open ? TL_OPEN : 0) | (r.failed ? TL_FAILED : 0);
 // A turn's tracks: null when no step is on the second track, else one number a step, 1 for a
-// call in the Tools lane that started while another ran. A call with no result holds the
-// first track to the turn's end; one that starts as the last ends stays on the first.
+// call in the Tools lane that started while a call on the first track ran. A call on the
+// second track does not hold the first: one that starts while only a half-height call runs
+// goes on the first. A call with no result holds the first track to the turn's end; one that
+// starts as the first track's call ends stays on the first. The
+// calls are taken in clock order: as listed, unless one starts before the one listed before
+// it, and then by start, the one listed first at equal starts.
 export function tlTracks(h) { return runGen(tracksGen(h, null)); }
-// tlTracks' work; with S (a build's state), each row read counts in S.work and the build may
-// stop for the clock once a step's work reaches TL_BUILD_BARS (tlBuildGo).
+// tlTracks' work; with S (a build's state), each row read and each entry the sort moves counts
+// in S.work, and the build may stop for the clock once a step's work reaches TL_BUILD_BARS
+// (tlBuildGo).
 function* tracksGen(h, S) {
   TL_MADE.tracks++;
   const n = stepN(h);
-  let out = null;
-  let end0 = -Infinity;
+  let calls = [];
+  const starts = [];
+  let inOrder = true;
   for (let i = 0; i < n; i++) {
     if (S) {
       if (S.work >= TL_BUILD_BARS) { S.work = 0; yield 0; }
       S.work++;
     }
     const r = h.steps[i];
+    if (r.start == null || LEDGER_KINDS[r.lk]?.lane !== "tools") continue;
+    if (calls.length && r.start < starts[starts.length - 1]) inOrder = false;
+    calls.push(i);
+    starts.push(r.start);
+  }
+  if (!inOrder) calls = yield* byStart(calls, starts, S);
+  let out = null;
+  let end0 = -Infinity;
+  for (const i of calls) {
+    if (S) {
+      if (S.work >= TL_BUILD_BARS) { S.work = 0; yield 0; }
+      S.work++;
+    }
+    const r = h.steps[i];
     const a = r.start;
-    if (a == null || LEDGER_KINDS[r.lk]?.lane !== "tools") continue;
     if (a < end0) {
       if (!out) out = new Array(n).fill(0);
       out[i] = 1;
@@ -75,6 +94,30 @@ function* tracksGen(h, S) {
     end0 = r.open ? Infinity : r.dur != null ? a + r.dur : a;
   }
   return out;
+}
+// calls by their starts, the one listed first at equal starts: a merge sort, so a build can stop
+// inside it (S, as tracksGen).
+function* byStart(calls, starts, S) {
+  const n = calls.length;
+  let from = calls.map((_, p) => p);
+  let to = new Array(n);
+  for (let w = 1; w < n; w *= 2) {
+    for (let lo = 0; lo < n; lo += 2 * w) {
+      const mid = Math.min(lo + w, n);
+      const hi = Math.min(lo + 2 * w, n);
+      let i = lo;
+      let j = mid;
+      for (let k = lo; k < hi; k++) {
+        if (S) {
+          if (S.work >= TL_BUILD_BARS) { S.work = 0; yield 0; }
+          S.work++;
+        }
+        to[k] = j >= hi || (i < mid && starts[from[i]] <= starts[from[j]]) ? from[i++] : from[j++];
+      }
+    }
+    [from, to] = [to, from];
+  }
+  return from.map((p) => calls[p]);
 }
 // Step i's box from its row (itemBox), on track (0 or 1).
 function stepBox(h, i, track, tx, w, wall, scale, len, upTo = null) {
@@ -818,24 +861,24 @@ export function tlBar(L, heads, ti, si, nowMs = Date.now()) {
   const upTo = ti === L.geo?.live && h.t0 != null && wall > 0 ? growEnd(T.x, T.w, wall, h.t0, nowMs) : null;
   return barAt(h, si, T.x, T.w, wall, L.scale, stepN(h), upTo, tracksOf(L, h, T.w));
 }
-// The step of turn ti a press at x (and ly, px down the lane, or null) gets in a lane:
-// { ti, i, top, r, w, d }, or null. top: its bar is under the press, the one drawn on top
-// there (r: a growing bar over all, failed over the rest, half height over full, the view's
-// order; then the narrowest, w); else the nearest bar within 4 px (d).
-function stepIn(L, heads, ti, x, lane, nowMs, ly) {
-  const t = L.turns[ti];
-  const h = heads[ti];
-  if (!t || !h || h.key !== t.key) return null;
+// Turn ti's step for a press at px x of the view in a lane, ly px down it (null: any):
+// { ti, i, top, d, r, w } (i null for none). With bars under the press (top; a full bar is 2 to
+// 14 px down its lane, a half one 8 to 14, the view's rectLayer), the one drawn on top: r, the
+// running turn's growing bars over all (4; the view draws them last), failed over the rest (2),
+// half height over full (1), the view's order; then the narrowest, w. Else the nearest bar
+// within 4 px, the first listed at equal distance. A turn under 2 px is drawn as one span per
+// lane, from its x and at least 1 px wide (barAt), so each of its bars is that span
+// here: the press answers what is drawn, its failed call where the span is red.
+function nearStep(L, h, ti, x, lane, nowMs, ly) {
   const z = L.z ?? 1;
   const wall = L.geo?.walls[ti] ?? wallOf(h);
-  const tx = t.x * z - (L.x0 ?? 0);
-  const tw = t.w * z;
+  const tx = L.turns[ti].x * z - (L.x0 ?? 0);
+  const tw = L.turns[ti].w * z;
   // The running turn's unfinished bars end at now, not at its room's end.
   const upTo = ti === L.geo?.live && h.t0 != null ? growEnd(tx, tw, wall, h.t0, nowMs) : null;
-  let best = null;
-  let top = null;
-  const len = stepN(h);
   const tk = tracksOf(L, h, tw);
+  const out = { ti, i: null, top: false, d: 4, r: -1, w: Infinity };
+  const len = stepN(h);
   for (let i = 0; i < len; i++) {
     const k = LEDGER_KINDS[h.steps[i].lk];
     // A row with no lane (an interrupted turn's Interrupted row) is no bar.
@@ -843,35 +886,20 @@ function stepIn(L, heads, ti, x, lane, nowMs, ly) {
     const b = barAt(h, i, tx, tw, wall, L.scale, len, upTo, tk);
     if (!b) continue;
     const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
-    // The running turn's growing bars are drawn last, over all (4); then failed over the rest,
-    // half height over full.
     const r = upTo != null && b.open ? 4 : (b.track ? 1 : 0) + (k?.ink === "failed" ? 2 : 0);
     const w = b.x1 - b.x0;
-    // A full bar is 2 to 14 px down its lane, a half one 8 to 14 (the view's rectLayer).
     if (d === 0 && (ly == null || (ly >= (b.track ? 8 : 2) && ly <= 14))) {
-      if (!top || r > top.r || (r === top.r && w < top.w)) top = { ti, i, top: true, r, w, d };
-    } else if (d < 4 && (!best || d < best.d || (d === best.d && r > best.r))) best = { ti, i, top: false, r, w, d };
+      if (!out.top || r > out.r || (r === out.r && w < out.w)) Object.assign(out, { i, top: true, d, r, w });
+    } else if (!out.top && d < out.d) Object.assign(out, { i, d, r, w });
   }
-  return top ?? best;
-}
-// Whether step c wins over step a for a press: a bar under the press over a near one, then
-// the one drawn on top and the narrowest, or the nearer. A tie keeps a.
-function hitWins(c, a) {
-  if (!a) return true;
-  if (c.top !== a.top) return c.top;
-  if (c.top) return c.r > a.r || (c.r === a.r && c.w < a.w);
-  return c.d < a.d || (c.d === a.d && c.r > a.r);
+  return out;
 }
 // The turn and step under px x of the strip in a lane: { turn, key } (key: the step's row,
 // or the turn's heading when no step's bar is within 4 px). heads in the layout's order; x in
-// px of the view (zoomed and panned); ly, px down the lane (null: any). Where bars overlap
-// (calls running at once share the half-height track), the bar drawn on top at x and ly:
-// a running call's growing bar over all, failed over the rest, half height over full (the
-// view's order), then the narrowest. With
-// none there, the nearest within 4 px. The turn under the press is looked at first, then the
-// turns within 4 px of it each side, nearest first: on turns under 1 px each lane is one span
-// a turn, and neighbours' spans join, so the bar under the press can be a neighbour's. With
-// no bar in the lane within 4 px, the heading of the turn under the press.
+// px of the view (zoomed and panned); ly, px down the lane (null: any). Where bars are under
+// the press, the one drawn on top (nearStep), of the turn under the press, the later turns whose
+// bars reach back to it and the earlier turns under 2 px whose 1 px span reaches it; with none,
+// the nearest of the turn under the press within 4 px.
 export function timelineHit(L, heads, x, lane, nowMs = Date.now(), ly = null) {
   const T = L.turns;
   if (!T.length || !Number.isFinite(x)) return null;
@@ -881,25 +909,44 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now(), ly = null) {
   let lo = 0;
   let hi = T.length - 1;
   while (lo < hi) { const m = (lo + hi + 1) >> 1; if (T[m].x <= fx) lo = m; else hi = m - 1; }
-  // Past the turn into its break: the nearer turn.
-  if (fx > T[lo].x + T[lo].w && T[lo + 1] && T[lo + 1].x - fx < fx - (T[lo].x + T[lo].w)) lo++;
+  // Past the turn as drawn into its break: the nearer turn. A turn under 2 px is drawn at least
+  // 1 px wide. The press stays where it is, so a step is found only within 4 px of it.
+  const end = T[lo].x + (T[lo].w * z < 2 ? Math.max(T[lo].w, 1 / z) : T[lo].w);
+  if (fx > end && T[lo + 1] && T[lo + 1].x - fx < fx - end) lo++;
   const h = heads[lo];
   if (!h || h.key !== T[lo].key) return null;
-  let win = stepIn(L, heads, lo, x, lane, nowMs, ly);
-  // A turn's drawn extent in px of the view: at least 1 px, as the layout draws it.
-  const start = (j) => T[j].x * z - x0;
-  const end = (j) => start(j) + Math.max(T[j].w * z, 1);
-  for (let s = 1; s <= 400; s++) {
-    const a = lo - s >= 0 && end(lo - s) >= x - 4 ? lo - s : -1;
-    const b = lo + s < T.length && start(lo + s) <= x + 4 ? lo + s : -1;
-    if (a < 0 && b < 0) break;
-    for (const j of [a, b]) {
-      if (j < 0) continue;
-      const c = stepIn(L, heads, j, x, lane, nowMs, ly);
-      if (c && hitWins(c, win)) win = c;
-    }
+  let win = nearStep(L, h, lo, x, lane, nowMs, ly);
+  // In a turn 2 to 6 px wide an unfinished call's bar is 6 px wide and starts left of the turn
+  // (itemBox), over the break and the turns before, by 4 px at most. So the later turns that
+  // start within 4 px right of the press are looked at, no more, and one of their bars under the
+  // press answers when it is drawn on top. A turn under 2 px is drawn as one span per lane from
+  // its own x, so none of its bars reaches back.
+  for (let j = lo + 1; j < T.length; j++) {
+    const tx = T[j].x * z - x0;
+    if (tx - 4 > x) break;
+    if (T[j].w * z < 2 || heads[j]?.key !== T[j].key) continue;
+    const o = nearStep(L, heads[j], j, x, lane, nowMs, ly);
+    if (o.top && (!win.top || o.r > win.r || (o.r === win.r && o.w < win.w))) win = o;
   }
-  return win ? { turn: heads[win.ti].key, key: heads[win.ti].steps[win.i].key } : { turn: h.key, key: h.key };
+  // A turn under 2 px is drawn 1 px wide from its x, so where a turn and its break are under
+  // 1 px together its span runs over the next turns' starts. So the turns before that are drawn
+  // to the press are looked at too, nearest first, and one of their spans under the press
+  // answers when it is drawn on top. A turn 2 px or wider ends before the next begins, so the
+  // first turn before whose drawn end is left of the press ends the look: at most the turns
+  // that start within 1 px left of the press, and the one that stops it. Drawn ends only grow
+  // left to right (each turn starts at or past the one before's own end and is drawn at least
+  // 1 px wide), so none before the stop reaches the press. On the clock a turn and its break
+  // take at least 0.45 of the strip over the number of turns (timelineGeo: 0.3 and 0.15), so
+  // that is at most floor(n / (0.45 * cw * z)) + 1 turns read: 9 at 5,600 turns across 1,440 px,
+  // 31 at 20,000. By steps the break alone is 0.15 of it, so at most three times that.
+  for (let j = lo - 1; j >= 0; j--) {
+    const tw = T[j].w * z;
+    if (T[j].x * z - x0 + Math.max(tw, 1) < x) break;
+    if (tw >= 2 || heads[j]?.key !== T[j].key) continue;
+    const o = nearStep(L, heads[j], j, x, lane, nowMs, ly);
+    if (o.top && (!win.top || o.r > win.r || (o.r === win.r && o.w < win.w))) win = o;
+  }
+  return { turn: heads[win.ti].key, key: win.i != null ? heads[win.ti].steps[win.i].key : h.key };
 }
 // The timeline for a draw: the turns placed and the view laid out, each made again only when
 // what it depends on changes, and the running turn's growing bars at nowMs. prev: the last
