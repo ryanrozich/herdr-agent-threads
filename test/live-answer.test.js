@@ -400,6 +400,9 @@ test("a turn stopped after its answer shows the answer closed, pinned and open",
   v.toggle(A, cx);
   settleRows(v, cx);
   expect(md(v)).toBe("First answer.");
+  // A return to a pin in it has its line over the part, as in any open turn.
+  v.pinResume = { key: A, part: `md:${A}:0` };
+  expect(kinds(v).slice(0, kinds(v).indexOf("md") + 1).slice(-2)).toEqual(["resume", "md"]);
 });
 
 // Green on the base and after.
