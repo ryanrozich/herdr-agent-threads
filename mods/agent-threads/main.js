@@ -12319,7 +12319,9 @@ export default class Threads extends View {
     // its own build runs over draws, that it is being laid out.
     const waiting = (text) => box(h_flex()).items_center().pl(12)
       .child(div().id("th-tl-wait").text_size(12).text_color(t.dim).child(text));
-    this.tlWait = this.ledgerHeld(L);
+    // After a pick the ledger gives the rows of the transcript before until the picked one's are
+    // built (ledger), over draws of their own: the strip waits for those too.
+    this.tlWait = this.ledgerHeld(L) || L.sessions !== this.sessions;
     if (this.tlWait) {
       // A build left from before is of the turns before the read, and would ask for a draw in
       // every frame of it (trajFrame) while nothing takes its steps. It is begun again after.
