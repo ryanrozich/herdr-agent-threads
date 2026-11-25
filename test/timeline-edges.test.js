@@ -506,3 +506,141 @@ test("timeline model: an event in the running turn that keeps its places counts 
   const S = TL.timelineModel(N, more, CW, "clock", t0 + r0 + 1000, null);
   expect([...since(), S.geo.stale, S.geo.steps]).toEqual([0, 0, 1, true, 1025]);
 });
+
+// ---- a seeded fuzz of the strip's draws ----
+// FUZZ_RUNS made-up sessions, each drawn by tlDraw as the pane draws it, over changes between
+// draws. The seed is fixed, so each run of the test draws the same sessions; a failure names its
+// run and the changes so far. Shapes, by the run's number: one in eight starts EMPTY, one in eight
+// with ONE turn, the rest with 2 to 400 turns (256 turns of 4 steps and more are past
+// TL_BUILD_BARS); each is drawn twice before anything changes. About half start from nothing, so
+// the first draws wait for the bounded build; the others from a whole model. A draw's build has 1
+// to 6 looks at the clock. Changes, up to 12 a run, up to 3 draws after each: working on and off,
+// an event in the last turn (a call more, its last call open or ended), the last turn ended, a
+// turn added, a clear (no turns), another session picked, another width, the clock a little on
+// and far on (the running turn's room steps). What holds in every draw: nothing throws; it waits
+// only with no strip; a strip shown is of that draw's heads, with their places; the press and
+// the numbers answer. At the end: every build ends in 400 draws; a strip with no running turn is a
+// whole build's, field for field; with one, its places are under 3 TL_SLACK px from a whole
+// build's and what is laid on them is what a whole layout lays.
+// Not covered: zoomed views, the steps scale, the pane's frame and paint, a stopped draw,
+// subagents and more than one call at a time.
+const FUZZ_SEED = 299;
+const FUZZ_RUNS = 320;
+function seeded(seed) {
+  let a = seed >>> 0;
+  return (n) => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return Math.floor((((t ^ (t >>> 14)) >>> 0) / 4294967296) * n);
+  };
+}
+// One session's heads under change: make(n) begins another, of n turns, the last one running.
+function fuzzSession(ri) {
+  const s = { made: 0, done: [], last: null, t0: T0, span: 0, calls: 0, open: false, going: false, heads: [], now: T0 };
+  const key = (i) => `${s.made}:${i}`;
+  const ended = (i, t0, total) => ({
+    kind: "trh", key: key(i), n: i + 1, t0, total, span: total, going: false, cnt: { steps: 4, input: 1, model: 1, tools: 2, failed: 1, user: 1, agent: 0 },
+    steps: [row(key(i), 0, "you", 0, null), row(key(i), 1, "tool", 100, Math.min(total, 5000)), row(key(i), 2, "failed", 5000, Math.min(total, 9000)), row(key(i), 3, "reply", Math.min(total - 1, 10000), total)].map((r) => (r.start > total ? { ...r, start: total, dur: 0 } : r)),
+  });
+  const newest = (total = null) => {
+    const k = key(s.done.length);
+    const steps = [row(k, 0, "you", 0, null)];
+    for (let j = 0; j < s.calls; j++) { const a = Math.min(s.span, 300 * j); steps.push(row(k, j + 1, "tool", a, Math.min(s.span, a + 200))); }
+    steps.push(s.open ? row(k, s.calls + 1, s.going ? "running" : "noresult", s.span, null, true) : row(k, s.calls + 1, "reply", Math.min(s.span, 10000), s.span));
+    s.last = { kind: "trh", key: k, n: s.done.length + 1, t0: s.t0, total, span: s.span, going: s.going, cnt: { steps: steps.length, input: 1, model: s.open ? 0 : 1, tools: s.calls + (s.open ? 1 : 0), failed: 0, user: 1, agent: 0 }, steps };
+    s.heads = [...s.done, s.last];
+  };
+  const begin = (t0) => Object.assign(s, { t0, span: 500 + ri(5000), calls: 1 + ri(3), open: ri(2) === 0, going: true });
+  s.make = (n) => {
+    s.made++;
+    s.done = [];
+    s.last = null;
+    s.heads = [];
+    let t = T0 + s.made * 1e9;
+    for (let i = 0; i < n - 1; i++) { const total = 1000 + ri(ri(3) ? 120000 : 3000000); s.done.push(ended(i, t, total)); t += total + 1000 + ri(100000); }
+    if (n) { begin(t); newest(); }
+    s.now = t + s.span + ri(20000);
+  };
+  s.ops = {
+    on() { if (!s.last) return; s.going = true; newest(); },
+    off() { if (!s.last) return; s.going = false; newest(ri(2) ? null : Math.max(s.span, s.now - s.t0)); },
+    event() { if (!s.last) return; s.span = Math.max(s.span, Math.min(s.now - s.t0, s.span + 4000)); s.calls++; s.open = ri(2) === 0; newest(); },
+    end() { if (!s.last) return; s.going = false; s.open = false; newest(Math.max(1, s.span)); },
+    add() {
+      if (s.last) { s.going = false; newest(Math.max(1, s.span)); s.done = s.heads; }
+      s.now += 1000;
+      begin(s.now);
+      newest();
+    },
+    clear() { s.make(0); },
+    pick() { s.make(ri(400)); },
+    tick() { s.now += ri(60000); },
+    far() { s.now += ri(4000000); },
+  };
+  return s;
+}
+
+test("timeline seeded fuzz: 320 made-up sessions, the empty and the one-turn one among them, over working on and off, events, turns added, clears, picks, widths and the clock, from nothing or not: every draw shows its own heads, no draw throws, every build ends, as a whole build's strip", () => {
+  const ri = seeded(FUZZ_SEED);
+  const wrong = [];
+  const seen = { empty: 0, one: 0, cold: 0, add: 0, clear: 0, pick: 0, off: 0, waits: 0, over: 0, kept: 0, whole: 0 };
+  for (let run = 0; run < FUZZ_RUNS && wrong.length < 5; run++) {
+    const s = fuzzSession(ri);
+    const shape = run % 8 === 0 ? "empty" : run % 8 === 1 ? "one" : "some";
+    s.make(shape === "empty" ? 0 : shape === "one" ? 1 : 2 + ri(399));
+    const widths = [1370, 1143, 700, 300, 41];
+    let cw = widths[ri(5)];
+    const cold = ri(2) === 0;
+    const plan = [shape, s.heads.length, cw, cold ? "from nothing" : "from a model"];
+    let t = 0;
+    const clock = () => ++t;
+    let M = null;
+    let J = null;
+    const say = (what) => wrong.push(`run ${run} (${plan.join(", ")}): ${what}`);
+    const draw = () => {
+      const D = TL.tlDraw(M, J, s.heads, cw, s.now, t + 1 + ri(6), clock);
+      ({ M, J } = D);
+      if (D.wait !== !M) say(`waits ${D.wait} with ${M ? "a strip" : "none"}`);
+      if (D.wait) seen.waits++;
+      if (!M) return;
+      if (J) seen.over++;
+      if (M.heads !== s.heads || M.geo.turns.length !== s.heads.length || M.L.turns !== M.geo.turns || M.geo.turns.some((x, i) => x.key !== s.heads[i].key)) say("a strip of other heads");
+      for (const lane of TL.TL_LANES) for (const x of [0, M.cw / 3, M.cw - 1]) TL.timelineHit(M.L, M.heads, x, lane, M.nowMs, 8);
+      TL.tlNumbers(M.L, M.heads, s.heads.length ? ri(s.heads.length) : undefined);
+    };
+    try {
+      if (!cold) M = TL.timelineModel(null, s.heads, cw, "clock", s.now, null);
+      for (let k = 0; k < 2; k++) draw();
+      if (shape !== "some") seen[shape]++;
+      if (cold) seen.cold++;
+      for (let k = ri(13); k > 0; k--) {
+        const op = ["on", "off", "event", "event", "end", "add", "clear", "pick", "width", "tick", "tick", "far"][ri(12)];
+        plan.push(op);
+        if (J && op in seen) seen[op]++;
+        if (op === "width") cw = widths[ri(5)];
+        else s.ops[op]();
+        for (let j = ri(4); j > 0; j--) draw();
+      }
+      draw();
+      for (let k = 0; k < 400 && (J || !M); k++) draw();
+      if (J || !M) { say("a build that does not end"); continue; }
+      draw();
+      const W = TL.timelineModel(null, s.heads, cw, "clock", s.now, null);
+      if (!s.heads.at(-1)?.going) { seen.whole++; sameStrip(M, W); continue; }
+      seen.kept++;
+      expect([M.cw, M.geo.stale, Math.abs(M.geo.total - W.geo.total) < 3 * TL.TL_SLACK]).toEqual([cw, undefined, true]);
+      const Y = TL.timelineLayout(s.heads, cw, "clock", s.now, null, M.geo);
+      const laid = (L) => [[...L.spans].sort(), L.fails, L.ticks, L.gaps, L.grow];
+      expect(laid(M.L)).toEqual(laid(Y));
+    } catch (e) {
+      say(String(e?.message ?? e).slice(0, 400));
+    }
+  }
+  expect(wrong).toEqual([]);
+  // What the seed covered: each empty and each one-turn start drawn twice; from nothing with draws
+  // that waited; builds over a strip; turns, clears, picks and working off while a build ran.
+  expect([seen.empty, seen.one]).toEqual([FUZZ_RUNS / 8, FUZZ_RUNS / 8]);
+  expect([seen.cold > 100, seen.waits > 100, seen.over > 50, seen.add > 3, seen.clear > 3, seen.pick > 3, seen.off > 3, seen.kept > 50, seen.whole > 50]).toEqual([true, true, true, true, true, true, true, true, true]);
+}, 60000);
