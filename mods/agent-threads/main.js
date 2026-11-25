@@ -11994,8 +11994,8 @@ export default class Threads extends View {
     // whole: the turns (their array) of the session the pane is on, when it was read whole; null
     // while it is not. Made here with the rows, by the key they were built for, which says whether
     // each session is read; a session started over (restart) has another array. One whose file was
-    // replaced after it was read (read: restart, not fresh) stays marked read, so its new array
-    // counts as whole while it is read again: the turns read so far, none at first.
+    // replaced after it was read (read: restart, not fresh; OpenCode's undo too) stays marked read,
+    // so its new array counts as whole while it is read again: the turns read so far, none at first.
     this.ledgerMemo = { key, sessions: this.sessions, rows: this.ledgerJoin(job, 0), going, partial: false, whole: s?.loaded ? s.turns : null };
     this.ledgerMemo.totals = ledgerTotals(this.ledgerMemo.rows);
     this.ledgerShown = null;
@@ -12318,13 +12318,14 @@ export default class Threads extends View {
   // subagent's calls at SUB_ALPHA. An unfinished call's end is torn; in the running turn it
   // grows to now (tlGrow), and the rest stays as placed. The selected row's turn has a lighter
   // band behind it and the selected step's bar an outline. Until the session is read and its
-  // rows built (ledgerHeld) the turns are only part of it, and then until the strip's own build
-  // is done (tlJob): the slot keeps its height, with one dim line for each.
+  // rows are built (tlWait) the turns are only part of it, or others; then until the strip's own
+  // build is done (tlJob): the slot keeps its height, with one dim line for each.
   timelineView(t, L, shown, i, inks) {
     const box = (el) => el.id("th-timeline").flex_none().w_full().h(TL_H).overflow_hidden().border_b(1).border_color(t.border)
       .bg(alpha(t.foreground, 0.025));
-    // One dim line in the slot: while the session is read, that it waits for it; once read, while
-    // its own build runs over draws, that it is being laid out.
+    // One dim line in the slot: while the session is read and then while its rows are built, that
+    // it waits for the whole session; after that, while its own build runs over draws, that it is
+    // being laid out.
     const waiting = (text) => box(h_flex()).items_center().pl(12)
       .child(div().id("th-tl-wait").text_size(12).text_color(t.dim).child(text));
     // Once a session is read, the ledger gives the rows it had (the transcript's before a pick, the
