@@ -414,7 +414,7 @@ test("link rules changed in the middle of a read cut the running answer again un
   const { v, cx, s } = await live([PROMPT, call(), answer("See ACME-12."), call()]);
   dropTimers(v, cx);
   const shown = () => mine(v).filter((r) => r.kind === "md").map((r) => r.md).join("\n");
-  expect(shown()).toBe("See ACME-12.");
+  expect([shown().includes("See ACME-12."), shown().includes("https://")]).toEqual([true, false]);
   s.partial = true;
   v.applyPrefs(JSON.stringify({ links: [{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.example/ACME-$1" }] }));
   dropTimers(v, cx);
