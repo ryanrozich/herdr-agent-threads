@@ -5707,7 +5707,8 @@ export default class Threads extends View {
     }
     for (const k of want.keys()) if (!eds.has(k)) missing = true;
     if (!missing || this.outNext) return;
-    this.outNext = true;
+    // The timer is asked for before it is marked as asked for, as in flushCalls: a render Herdr
+    // stopped between the two left the mark with no timer to clear it.
     cx.timer.after(0, (cx) => {
       this.outNext = false;
       const t = theme();
@@ -5728,6 +5729,7 @@ export default class Threads extends View {
       }
       cx.notify();
     });
+    this.outNext = true;
   }
   syntaxColors(t) {
     return {
