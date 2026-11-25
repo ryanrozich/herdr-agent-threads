@@ -927,6 +927,24 @@ test("timeline tracks in the build: a turn of calls out of the clock's order, wi
     // The sort's entries moved: n a pass. A step of 1,024 at most is so many steps more.
     const passes = Math.ceil(Math.log2(n));
     expect([n, k >= Math.floor((n * passes) / 1024)]).toEqual([n, true]);
+    if (n === 3000) {
+      // Runs of steps in a row that touch no row of the turn. The sort's is the first one after
+      // the rows are read: the sort reads only its keys, the calls' starts, so its steps touch no
+      // row. It moves n entries a pass, at TL_BUILD_BARS a step, less the part of one step it
+      // shares with the rows read before it. No other run in the build is as long.
+      const { per } = touchedSteps([h, doneTurn(1)], 1440, T0 + 1e10);
+      const runs = [];
+      per.forEach((read, j) => {
+        if (read) return;
+        if (j && !per[j - 1]) runs[runs.length - 1].len++;
+        else runs.push({ from: j, len: 1 });
+      });
+      const first = per.findIndex((read) => read > 0);
+      const at = runs.findIndex((r) => r.from > first);
+      const bound = Math.floor((n * passes) / TL.TL_BUILD_BARS) - 1;
+      const outside = Math.max(0, ...runs.filter((_r, j) => j !== at).map((r) => r.len));
+      expect([n, at >= 0 && runs[at].len >= bound, outside < bound]).toEqual([n, true, true]);
+    }
   }
 });
 
