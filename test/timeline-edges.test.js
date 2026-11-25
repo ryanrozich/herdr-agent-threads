@@ -826,7 +826,12 @@ function pressed(b, cb, on) {
 }
 const whenRead = (b, was) => until(() => !b.reading && !b.resolving && b.current()?.loaded && b.current().turns !== was, "the read to end");
 for (const [what, change] of [
-  ["another transcript picked and read", async (b, cb) => { b.pick({ path: fixture("--extra", "4") }, cb); await settle(b); }],
+  ["another transcript picked and read", async (b, cb, was) => {
+    b.pick({ path: fixture("--extra", "6") }, cb);
+    await settle(b);
+    // As many turns: their number alone does not tell the two apart.
+    expect(b.current().turns.length).toBe(was.length);
+  }],
   ["another transcript picked, read in part", async (b, cb, was) => {
     const file = fixture("--extra", "40");
     const hold = heldRead(file);
