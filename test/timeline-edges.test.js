@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as TL from "../mods/agent-threads/timeline.js";
-import { frame, H, handlerAfterId, makeCx, pane, settle, setup, Threads, unsliced } from "./render-harness.js";
+import { fixture, frame, H, handlerAfterId, makeCx, pane, settle, setup, Threads, unsliced } from "./render-harness.js";
 
 setup();
 
@@ -156,4 +156,106 @@ test("timeline view: a session with no turns draws its gutter and an empty strip
   const was = b.tsel;
   handlerAfterId(c, "th-tl-lanes", "on_mouse_down")({ local_position: { x: 100, y: 40 }, position: { x: 100, y: 40 } }, cb);
   expect(b.tsel).toBe(was);
+});
+
+// ---- the heads changing while the strip is built from nothing ----
+// The model's build from nothing, begun for heads and left after a few steps.
+function coldBuild(heads, now = T0) {
+  const s = drawn({ M: null, J: null }, heads, slowClock(), CW, now);
+  expect([s.M, s.wait, s.J?.total > 0, s.J?.heads === heads]).toEqual([null, true, true, true]);
+  return s;
+}
+
+test("timeline from nothing, the heads change while the build runs: another session, an event, a new turn, working off or an emptied session; the first strip shown is of the heads of that draw", () => {
+  const a = doneTurns(400);
+  const last = a.at(-1);
+  const longer = [...a.slice(0, -1), { ...last, total: 90000, span: 90000, steps: [...last.steps.slice(0, -1), row(last.key, 3, "reply", 10000, 90000)] }];
+  const other = doneTurns(120).map((h) => ({ ...h, t0: h.t0 + 86400000, total: h.total + 5000 * (h.n % 7) }));
+  for (const [what, heads] of [["another session", other], ["an event", longer], ["a new turn", doneTurns(401)], ["emptied", []]]) {
+    const s = drawn(coldBuild(a), heads);
+    expect([what, s.wait, s.J, s.M?.heads === heads]).toEqual([what, false, null, true]);
+    expect([what, s.M.geo.turns.length]).toEqual([what, heads.length]);
+    sameStrip(s.M, whole(heads));
+  }
+  // Working off: that draw shows the heads no longer running, and the strip ends as theirs whole.
+  const { on, off, now } = grown(400);
+  let s = drawn(coldBuild(on, now), off, fast, CW, now);
+  expect([s.wait, s.M?.heads === off, s.M?.geo.room]).toEqual([false, true, 0]);
+  for (let k = 0; k < 400 && s.J; k++) s = drawn(s, off, fast, CW, now);
+  expect(s.J).toBe(null);
+  sameStrip(s.M, whole(off, now));
+});
+
+// Each look at the clock 3 ms later while f runs: a build stops after a step or two a frame.
+function slowNow(f) {
+  const real = performance.now;
+  let t = real.call(performance);
+  performance.now = () => (t += 3);
+  try { return f(); } finally { performance.now = real; }
+}
+// A Trajectory pane of 400 turns with its strip's build from nothing begun and not done.
+async function buildingPane() {
+  const { b, cb } = await dockPane(fixture("--extra", "400"));
+  slowNow(() => {
+    const c = frame(b, cb);
+    handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 1440, height: 400 }, cb);
+    frame(b, cb);
+  });
+  expect(b.tlModel ?? null).toBe(null);
+  expect(b.tlJob?.total).toBeGreaterThan(0);
+  return { b, cb };
+}
+// The pane's own asks for a next draw of the strip's build among its timers (found by their
+// source, which the transpiler may give as !1), run and taken off the list.
+function buildAsks(cb) {
+  const at = (x) => x.ms === 0 && /this\.tlNext = (false|!1)/.test(String(x.fn));
+  const due = cb.timers.filter(at);
+  cb.timers = cb.timers.filter((x) => !at(x));
+  for (const x of due) x.fn(cb);
+  return due.length;
+}
+
+for (const [what, change] of [
+  ["another session picked", (b, cb, file) => b.pick({ path: file }, cb)],
+  ["a new session after a clear", (b, cb, file) => b.adopt({ kind: "found", id: "made-up-second", file, live: true }, cb)],
+]) {
+  test(`timeline view: ${what} while the strip is built from nothing: it waits for the read with no build kept, and the first strip drawn is of what the pane holds then`, async () => {
+    const { b, cb } = await buildingPane();
+    const was = b.ledger().totals.heads;
+    change(b, cb, fixture("--extra", "60"));
+    const c = frame(b, cb);
+    expect(words(own(c, "th-tl-wait"))).toEqual(["The timeline shows once the whole session is read"]);
+    expect(b.tlJob ?? null).toBe(null);
+    await settle(b);
+    let first = null;
+    for (let k = 0; k < 400 && !first; k++) {
+      const f = frame(b, cb);
+      if (own(f, "th-tl-lanes")) first = { M: b.tlModel, heads: b.ledger().totals.heads };
+    }
+    expect(first).toBeTruthy();
+    expect(first.heads === was).toBe(false);
+    expect(first.heads.length).not.toBe(was.length);
+    expect(first.M.heads === first.heads).toBe(true);
+    for (let k = 0; k < 400 && b.tlJob; k++) frame(b, cb);
+    sameStrip(b.tlModel, TL.timelineModel(null, first.heads, b.tlModel.cw, "clock", Date.now(), null));
+  }, 30000);
+}
+
+test("timeline view: while the session is read again, a strip's build left from before asks for no draw; read, it is built again", async () => {
+  const { b, cb } = await buildingPane();
+  expect(buildAsks(cb)).toBe(1);
+  b.current().loaded = false;
+  let asks = 0;
+  for (let k = 0; k < 20; k++) {
+    const c = frame(b, cb);
+    expect(words(own(c, "th-tl-wait"))).toEqual(["The timeline shows once the whole session is read"]);
+    asks += buildAsks(cb);
+  }
+  expect(asks).toBe(0);
+  expect(b.tlJob ?? null).toBe(null);
+  b.current().loaded = true;
+  for (let k = 0; k < 400 && (b.tlJob || !b.tlModel); k++) frame(b, cb);
+  const M = b.tlModel;
+  expect(M.heads === b.ledger().totals.heads).toBe(true);
+  sameStrip(M, TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null));
 });
