@@ -913,6 +913,18 @@ for (const [how, ms] of [["in the press", 1e9], ["over draws", -1]]) {
   }, 30000);
 }
 
+test("timeline view: after a clear, the earlier session's turns on the strip before the new one's: a press on a call of either session selects it", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "6"));
+  b.adopt({ kind: "found", id: "made-up-second", file: fixture("--extra", "6"), live: true }, cb);
+  await settle(b);
+  const c = shownFrame(b, cb);
+  const first = b.sessions[0].turns.length;
+  expect(b.tlModel.heads.map((h) => h.si).indexOf(1)).toBe(first);
+  const on = [callOn(b, c), callOn(b, c, first)];
+  expect(on.map((x) => x.key.split(":")[1])).toEqual(["0", "1"]);
+  expect(on.map((x) => pressed(b, cb, x))).toEqual(on.map((x) => [x.key, x.key]));
+}, 30000);
+
 // ---- a press between a change to the turns read and the next frame ----
 // A pane on a transcript whose reader gives the events first at its first read. read(events, rewind):
 // a read after it that gives events, with rewind on it, as on every read of OpenCode's, so that the
