@@ -11,6 +11,7 @@ import {
   frame,
   H,
   heldClock,
+  keyEv,
   lastList,
   openAt,
   pane,
@@ -3581,5 +3582,252 @@ for (const [where, n, cap] of [["in a window", 150, SMALL], ["under the cap", 60
     v.railJump("0:5", cx);
     jumpFrames(v, cx, sim);
     expect({ shows: shownIn(v, sim.last()).includes("0:5"), end: sim.last().end, sel: v.sel, follow: v.follow }).toEqual({ shows: true, end: false, sel: "0:5", follow: false });
+  }, 30000);
+}
+
+// ---- the way back from the Trajectory in the Chat's own pane ----
+
+// A reader who follows and only looks at the Trajectory (y, in a pane too narrow for one beside the
+// Chat) comes back to the Chat's end, still following. A turn picked there is theirs, and the Chat
+// goes to it. The session grows through the pane's own read, which its timers ask for while the
+// agent works (every 5 s), with poll beside it (every 1 s); only the extractor's answer is made here.
+const NEWEST = "0:150";
+// 150 turns in a window, the newest one running (or done), in a 400 px pane at the Chat's end.
+async function narrowChat(running = true) {
+  noPins();
+  const { v, cx, s } = await capSession(running ? 149 : 150, SMALL);
+  v.rootH = 600; v.listH = 500;
+  state.terminals[0].status = "working";
+  // What each transcript holds that is not read yet, an event counted as a byte.
+  const files = new Map();
+  H.extractHook = async ([, file, offset]) => {
+    const f = files.get(file) ?? { size: 0, late: [] };
+    const out = [{ k: "file", size: f.size }, { k: "chunk", used: f.size - Number(offset) }, ...f.late.splice(0)];
+    return { code: 0, stdout: out.map((e) => JSON.stringify(e)).join("\n"), stderr: "" };
+  };
+  // Events come in, the pane's timers come round once, and the read they ask for ends.
+  const came = async (events, file = s.file) => {
+    const f = files.get(file) ?? { size: 0, late: [] };
+    files.set(file, f);
+    f.size += events.length;
+    f.late.push(...events);
+    for (const x of cx.everies) x.fn(cx);
+    await settle(v);
+  };
+  // The running turn's reply grows by n paragraphs, with a call after each: two more items each.
+  let part = 0;
+  const grow = (n) => came(Array.from({ length: n }, () => [{ k: "t", t: `Part ${++part}: ${"word ".repeat(100)}` }, { k: "u", n: "Read" }]).flat());
+  if (running) {
+    await came([{ k: "p", o: "human", t: "Prompt 149: check order 149.", ts: new Date(Date.UTC(2026, 10, 1, 10)).toISOString() }]);
+    await grow(1);
+  }
+  const sim = simList(v);
+  // The Trajectory's list is another one: the Chat's keeps its place while it shows.
+  const chat = H.listWindow;
+  H.listWindow = (n) => (v.traj ? { start: 0, end: Math.min(n, 40) } : chat(n));
+  openAt(v, cx, sim, 402);
+  expect([v.sel, v.follow, v.pw(), v.current().turns.length]).toEqual([NEWEST, true, 400, 150]);
+  return { v, cx, s, sim, came, grow };
+}
+function trajFrames(v, cx) { for (let k = 0; k < 3; k++) probeFrame(v, cx); }
+// What the Chat is asked for as it comes back, before its first frame.
+const asksBack = (v) => ({ traj: v.traj, sel: v.sel, follow: v.follow, toBottom: Boolean(v.toBottom), scrollTo: v.scrollTo ?? null });
+const toEnd = (sel = NEWEST) => ({ traj: false, sel, follow: true, toBottom: true, scrollTo: null });
+const toTurn = (key) => ({ traj: false, sel: key, follow: false, toBottom: false, scrollTo: { key, how: "center" } });
+// Where it ends.
+const endsAt = (v, sim) => ({ end: sim.last().end, sel: v.sel, follow: v.follow });
+const atEnd = (sel = NEWEST) => ({ end: true, sel, follow: true });
+
+test("followed into the Trajectory, the running reply grown past the pane meanwhile, and back on the same turn: the Chat is at its end, follows, and follows the next growth", async () => {
+  const { v, cx, sim, grow } = await narrowChat();
+  v.openTraj();
+  trajFrames(v, cx);
+  await grow(12);
+  trajFrames(v, cx);
+  v.leaveTraj();
+  expect(asksBack(v)).toEqual(toEnd());
+  jumpFrames(v, cx, sim);
+  expect(endsAt(v, sim)).toEqual(atEnd());
+  // The turn's own items are taller than the pane, so its first one is off the top at the end.
+  const f = sim.last();
+  expect(f.keys.reduce((sum, k, i) => sum + (/(^|:)0:150(:|$)/.test(k) ? f.sizes[i] : 0), 0)).toBeGreaterThan(v.listH);
+  await grow(3);
+  jumpFrames(v, cx, sim);
+  expect(endsAt(v, sim)).toEqual(atEnd());
+  expect(shownIn(v, sim.last())).toContain(`gp:0:150:${v.findTurn(NEWEST).steps.length - 1}`);
+}, 30000);
+
+test("followed into the Trajectory, 25 turns come meanwhile, and back on the same turn: the Chat is at its end on the newest turn, follows, and follows the next turn", async () => {
+  const { v, cx, sim, came } = await narrowChat(false);
+  v.openTraj();
+  trajFrames(v, cx);
+  await came(Array.from({ length: 25 }, (_, i) => capTurn(150 + i)).flat());
+  trajFrames(v, cx);
+  expect([v.current().turns.length, v.turnOfRow(v.tsel)]).toEqual([175, NEWEST]);
+  v.leaveTraj();
+  expect(asksBack(v)).toEqual(toEnd("0:175"));
+  jumpFrames(v, cx, sim);
+  expect(endsAt(v, sim)).toEqual(atEnd("0:175"));
+  await came(capTurn(175));
+  jumpFrames(v, cx, sim);
+  expect(endsAt(v, sim)).toEqual(atEnd("0:176"));
+}, 30000);
+
+test("followed into the Trajectory, another turn picked there while the running reply grows, and back: the Chat is at that turn, centred, and does not follow", async () => {
+  const { v, cx, sim, grow } = await narrowChat();
+  v.openTraj();
+  trajFrames(v, cx);
+  await grow(6);
+  trajFrames(v, cx);
+  expect(v.ledgerRows().some((r) => r.key === "0:120")).toBe(true);
+  v.ledgerClick("0:120");
+  await grow(6);
+  trajFrames(v, cx);
+  // The end is asked for by the read, and waits while the list is not drawn.
+  expect([v.follow, v.toBottom]).toEqual([true, true]);
+  v.leaveTraj();
+  expect(asksBack(v)).toEqual(toTurn("0:120"));
+  jumpFrames(v, cx, sim);
+  expect({ ...endsAt(v, sim), shows: shownIn(v, sim.last()).includes("0:120") }).toEqual({ end: false, sel: "0:120", follow: false, shows: true });
+}, 30000);
+
+test("not followed into the Trajectory, the running reply grown meanwhile, and back on the same turn: the Chat is at that turn, centred, and does not follow", async () => {
+  const { v, cx, sim, grow } = await narrowChat();
+  v.command("search:#120", cx);
+  v.command("escape", cx);
+  settleList(v, cx, sim);
+  // Read on from there, so the way back has a place to go to.
+  sim.wheel(1500);
+  settleList(v, cx, sim);
+  expect([v.sel, v.follow, shownIn(v, sim.last()).includes("0:120")]).toEqual(["0:120", false, false]);
+  v.openTraj();
+  trajFrames(v, cx);
+  await grow(12);
+  trajFrames(v, cx);
+  v.leaveTraj();
+  expect(asksBack(v)).toEqual(toTurn("0:120"));
+  jumpFrames(v, cx, sim);
+  expect({ ...endsAt(v, sim), shows: shownIn(v, sim.last()).includes("0:120") }).toEqual({ end: false, sel: "0:120", follow: false, shows: true });
+}, 30000);
+
+test("followed into the Trajectory and back with nothing new: the Chat is at its end and follows", async () => {
+  const { v, cx, sim, grow } = await narrowChat();
+  v.openTraj();
+  trajFrames(v, cx);
+  v.leaveTraj();
+  expect(asksBack(v)).toEqual(toEnd());
+  jumpFrames(v, cx, sim);
+  expect(endsAt(v, sim)).toEqual(atEnd());
+  await grow(3);
+  jumpFrames(v, cx, sim);
+  expect(endsAt(v, sim)).toEqual(atEnd());
+}, 30000);
+
+// Steps in the Trajectory that come back to the turn it opened on (here to one of its steps) leave
+// the reader on the same turn.
+test("followed into the Trajectory, a step up to the turn before and down again onto a step of the turn it opened on, the running reply grown meanwhile, and back: the Chat is at its end and follows", async () => {
+  const { v, cx, sim, grow } = await narrowChat();
+  v.openTraj();
+  trajFrames(v, cx);
+  v.key(keyEv("up"), cx);
+  expect(v.turnOfRow(v.tsel)).toBe("0:149");
+  await grow(3);
+  trajFrames(v, cx);
+  v.key(keyEv("down"), cx);
+  v.key(keyEv("down"), cx);
+  trajFrames(v, cx);
+  expect([v.tsel === NEWEST, v.turnOfRow(v.tsel)]).toEqual([false, NEWEST]);
+  v.leaveTraj();
+  expect(asksBack(v)).toEqual(toEnd());
+  jumpFrames(v, cx, sim);
+  expect(endsAt(v, sim)).toEqual(atEnd());
+}, 30000);
+
+// Following that stopped while the Trajectory showed stays stopped: a turn taken from a Trajectory
+// pane opened beside the Chat meanwhile (trajPaneOpen, here by hand).
+test("followed into the Trajectory, following stopped meanwhile by a turn from a Trajectory pane beside the Chat, and back on the same turn: the Chat goes to that turn and does not follow", async () => {
+  const { v, cx } = await narrowChat();
+  v.openTraj();
+  trajFrames(v, cx);
+  v.trajPaneOpen = () => true;
+  state.shared["threads.turnSel"] = { [v.terminal]: { key: "0:100", by: "other", at: Date.now() + 1000, pane: "trajectory" } };
+  expect([v.syncSel(), v.sel, v.follow]).toEqual([true, "0:100", false]);
+  delete v.trajPaneOpen;
+  v.leaveTraj();
+  expect(asksBack(v)).toEqual(toTurn(NEWEST));
+}, 30000);
+
+// Following that started while the Trajectory showed (a new session, after /clear: adopt) was not
+// the reader's when they went in, and they come back to the turn they were on. The lookup's answer
+// is made here; poll asks for it at the terminal's next turn.
+test("not followed into the Trajectory, a new session read meanwhile, and back on the same turn: the Chat goes to that turn and does not follow", async () => {
+  const { v, cx, sim, s, came } = await narrowChat();
+  v.command("search:#120", cx);
+  v.command("escape", cx);
+  settleList(v, cx, sim);
+  v.openTraj();
+  trajFrames(v, cx);
+  expect([v.follow, v.turnOfRow(v.tsel)]).toEqual([false, "0:120"]);
+  const file = s.file.replace(/[^/]*$/, "next.jsonl");
+  const found = v.pinnedResult();
+  v.pinnedResult = () => ({ ...found, id: "00000000-0000-4000-8000-00000000000b", file });
+  state.terminals[0].turn = "next";
+  await came(capTurn(0), file);
+  expect([v.sessions.length, v.follow, v.sel, v.toBottom]).toEqual([2, true, "1:1", true]);
+  trajFrames(v, cx);
+  v.leaveTraj();
+  expect(asksBack(v)).toEqual(toTurn("0:120"));
+}, 30000);
+
+// Every way in (openTraj, from the key, the button over the list and the command) by every way out
+// (leaveTraj, from y, Esc, the two forms of the Chat button and the two commands).
+const pressOf = (c, id) => c.slice(c.findIndex((e) => e[0] === "id" && e[1] === id)).find((e) => e[0] === "on_click").at(-1);
+const INTO = {
+  "the y key": (v, cx) => { v.key(keyEv("y"), cx); },
+  "the button": (v, cx) => { pressOf(frame(v, cx), "th-traj")({}, cx); },
+  "the command": (v, cx) => { v.command("trajectory", cx); },
+};
+const OUT = {
+  "the y key": (v, cx) => { v.key(keyEv("y"), cx); },
+  Esc: (v, cx) => { v.key(keyEv("escape"), cx); },
+  "the Chat button": (v, cx) => {
+    const c = frame(v, cx);
+    expect(c.some((e) => e[0] === "child" && e[1] === "Chat")).toBe(true);
+    pressOf(c, "th-traj-chat")({}, cx);
+  },
+  // The heading alone is drawn at 150 px, so the Chat's rows keep their width.
+  "the Chat button's icon in a compact heading": (v, cx) => {
+    const w = v.paneW;
+    v.paneW = 150;
+    H.rec = [];
+    v.trajHeading(theme, v.ledger(), v.ledgerRows(), 0);
+    const c = H.rec;
+    H.rec = null;
+    v.paneW = w;
+    expect(c.some((e) => e[0] === "child" && e[1] === "Chat")).toBe(false);
+    pressOf(c, "th-traj-chat")({}, cx);
+  },
+  "the command": (v, cx) => { v.command("trajectory", cx); },
+  "the escape command": (v, cx) => { v.command("escape", cx); },
+};
+for (const [out, leave] of Object.entries(OUT)) {
+  test(`followed into the Trajectory by the y key, the button and the command, and back by ${out}, the running reply grown each time: the Chat is at its end and follows`, async () => {
+    const { v, cx, sim, grow } = await narrowChat();
+    const got = [];
+    const want = [];
+    for (const [into, enter] of Object.entries(INTO)) {
+      enter(v, cx);
+      trajFrames(v, cx);
+      expect([into, v.traj]).toEqual([into, true]);
+      await grow(3);
+      trajFrames(v, cx);
+      leave(v, cx);
+      got.push([into, asksBack(v)]);
+      want.push([into, toEnd()]);
+      jumpFrames(v, cx, sim);
+      got.push([into, endsAt(v, sim)]);
+      want.push([into, atEnd()]);
+    }
+    expect(got).toEqual(want);
   }, 30000);
 }
