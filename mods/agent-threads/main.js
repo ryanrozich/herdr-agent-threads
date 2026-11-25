@@ -11979,7 +11979,7 @@ export default class Threads extends View {
       // A turn this pane has not read yet: wait for it a little, then let it go.
       if (have || !e.id || Date.now() - e.at > SEL_WAIT) this.selSeenAt = e.at;
       if (have) {
-        this.selSent = e.key;
+        this.selSent = `${e.key}|${e.id}`;
         if (this.trajPane) {
           if (this.turnOfRow(this.tsel) !== e.key) { this.tsel = e.key; this.tscrollTo = e.key; return true; }
         } else if (this.sel !== e.key && this.chatShows(e.key)) { this.readerMoved(); this.sel = e.key; this.follow = false; this.scrollTo = { key: e.key, how: "center" }; return true; }
@@ -11987,10 +11987,13 @@ export default class Threads extends View {
       }
     }
     const mine = this.trajPane ? this.turnOfRow(this.tsel) : this.sel;
-    if (!mine || mine === this.selSent) return false;
-    this.selSent = mine;
+    // Sent again when another turn comes in under the same number (its id), and not before the
+    // turn is read: an entry with no id is left by the other pane.
+    const id = mine ? this.turnIdAt(mine) : null;
+    if (!id || `${mine}|${id}` === this.selSent) return false;
+    this.selSent = `${mine}|${id}`;
     const keep = Object.fromEntries(Object.entries(map).filter(([k, v]) => k !== this.terminal && Date.now() - (v?.at ?? 0) < DAY_MS));
-    setShared(SEL_KEY, { ...keep, [this.terminal]: { key: mine, id: this.turnIdAt(mine), by: this.selId, at: Date.now(), pane: this.trajPane ? "trajectory" : "chat" } });
+    setShared(SEL_KEY, { ...keep, [this.terminal]: { key: mine, id, by: this.selId, at: Date.now(), pane: this.trajPane ? "trajectory" : "chat" } });
     return false;
   }
 
