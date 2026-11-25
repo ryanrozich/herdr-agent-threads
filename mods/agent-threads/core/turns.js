@@ -42,6 +42,10 @@ export function newSession(id, file) {
     id, file, offset: 0, size: null, head: null, title: null, agentName: null, turns: [], seg: null, startedAt: null,
     open: [], pendingCmd: null, clearAt: null, followActive: false, followSince: null, version: 0,
     ctx: null, settled: 0, anchor: null, clock: null, since: null, guess: null,
+    // How many times something read was taken away from this list of turns, so that what is read
+    // next can stand at its place: turns cut back (rewindTail), and a turn's words dropped for
+    // the call after them (addStep). Not at events that only add.
+    cuts: 0,
     // Subagents (Claude Code): each one's state by its call's id and by its agent id, from its
     // launch result ("r") and its task notification ("n"): running, completed, failed,
     // stopped or killed, with the notification's time and tokens.
@@ -321,6 +325,7 @@ function addStep(s, turn, name, id = null, e = null, owner = turn) {
       heldOnText = true;
     } else {
       turn.stepsDropped = (turn.stepsDropped ?? 0) + 1;
+      s.cuts++;
       if (reason) held += turn.reasoning.length;
     }
   }
@@ -658,7 +663,9 @@ export function skipNote(k) {
 }
 
 export function rewindTail(s) {
-  s.turns.length = Math.min(s.turns.length, s.settled ?? 0);
+  const n = Math.min(s.turns.length, s.settled ?? 0);
+  if (n < s.turns.length) s.cuts++;
+  s.turns.length = n;
   s.open = [];
   s.seg = null;
   s.pendingCmd = null;
