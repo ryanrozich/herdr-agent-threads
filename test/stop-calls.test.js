@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { draw, dropTimers, editors, fixture, pane, scripted, settleRows, setup } from "./render-harness.js";
+import { draw, dropTimers, editors, fixture, pane, pinPane, scripted, settleRows, setup } from "./render-harness.js";
 
 setup();
 
@@ -383,3 +383,48 @@ test("a render Herdr stops after the images' timer is registered and before the 
   expect([run.armed, run.stops, run.asked >= 2, most, [...read].sort(), turns.map((t) => t.imgLine).sort(), turns.map((t) => v.imgState(t)), Boolean(v.imgBusy)])
     .toEqual([false, 1, true, 2, turns.map((t) => t.imgLine).sort(), turns.map((t) => t.imgLine).sort(), ["ok", "ok", "ok"], false]);
 }, 30000);
+
+// A rail jump that lands a long turn level with its tick, with no earlier item's top there,
+// lifts the first row for the frame of the scroll: the render asks for a timer 48 ms on that
+// sets the lift (landLift) and scrolls, and one 120 ms on that takes the lift off. A stop
+// between the two asks ran the first and never the second: the first row stayed taller for the
+// pane's life, and no place was kept across a resize (takeAnchor gives none while a lift is on).
+test("a render Herdr stops between the landing's lift and the timer that takes it off leaves no lift: the first row keeps its height", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.paneW = 675;
+  v.listH = 1000;
+  draw(v, cx);
+  const ks = keys();
+  const mid = ks[Math.floor(ks.length / 2)];
+  const prev = ks[ks.indexOf(mid) - 1];
+  // Both turns are long, so the landing needs a lift (as in render.test.js's landing test).
+  for (const k of [prev, mid]) {
+    const turn = v.findTurn(k);
+    turn.prompt = Array.from({ length: 30 }, (_, i) => `line ${i + 1} of the long paste about the checkout total`).join("\n");
+    turn.shapeKey = null;
+  }
+  v.rowsKey = null;
+  draw(v, cx);
+  const first = v.slotsMemo[0];
+  v.scroll = { scroll_to_item() {}, scroll_to_bottom() {} };
+  cx.timers = [];
+  let armed = true;
+  let stops = 0;
+  const bodyNow = v.bodyNow;
+  v.bodyNow = function (...a) {
+    const after = cx.timer.after;
+    cx.timer.after = function (ms, fn) {
+      if (armed && this === cx.timer && ms === 120) { armed = false; throw STOP; }
+      return after.call(this, ms, fn);
+    };
+    try { return bodyNow.apply(this, a); } finally { cx.timer.after = after; }
+  };
+  v.railJump(mid, cx);
+  try { draw(v, cx); } catch (e) { if (e !== STOP) throw e; stops++; }
+  const lift = v.landed?.lift ?? 0;
+  cx.flush(48);
+  cx.flush(200);
+  for (let k = 0; k < 4; k++) { draw(v, cx); cx.flush(200); }
+  delete v.bodyNow;
+  expect([armed, stops, lift > 0, v.landLift ?? 0, v.slotsMemo[0] === first]).toEqual([false, 1, true, 0, true]);
+});
