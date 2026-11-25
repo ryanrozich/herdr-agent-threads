@@ -175,7 +175,7 @@ for (const [where, make] of Object.entries(WAYS_IN)) test(`timeline view: b, its
     const sel = v.tsel;
     v.scrollTo = null;
     f();
-    got[name] = { moves: (v.readerMoves ?? 0) - n0, toggled: v.tlShown() !== shown, picked: v.tsel !== sel, scrollTo: v.scrollTo };
+    got[name] = { moves: (v.readerMoves ?? 0) - n0, toggled: v.tlShown() !== shown, picked: v.tsel !== sel ? v.tsel : null, scrollTo: v.scrollTo };
     shownFrame(v, cx);
   };
   step("b", () => v.key(keyEv("b"), cx));
@@ -185,15 +185,15 @@ for (const [where, make] of Object.entries(WAYS_IN)) test(`timeline view: b, its
   const button = () => own(frame(v, cx), "th-traj-timeline").find((e) => e[0] === "on_click").at(-1)({}, cx);
   step("button", button);
   step("button again", button);
-  // A step of the turn before the last, drawn as a bar.
+  // The first step of the turn before the last, drawn as a bar: the row the press picks.
   const key = v.tlModel.heads.at(-2).steps.find((r) => r.start != null && LEDGER_KINDS[r.lk]?.lane)?.key;
   const { box, lane } = barOf(v, key);
   v.tsel = null;
   step("press", () => press(v, cx, (box.x0 + box.x1) / 2, lane * 16 + 8));
-  const toggle = { moves: 0, toggled: true, picked: false, scrollTo: null };
+  const toggle = { moves: 0, toggled: true, picked: null, scrollTo: null };
   expect(got).toEqual({
     b: toggle, "b again": toggle, command: toggle, "command again": toggle, button: toggle, "button again": toggle,
-    press: { moves: 0, toggled: false, picked: true, scrollTo: null },
+    press: { moves: 0, toggled: false, picked: key, scrollTo: null },
   });
 });
 
