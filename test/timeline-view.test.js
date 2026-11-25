@@ -396,7 +396,7 @@ test("timeline view: every turn number and tick the model gives is drawn, not th
   });
   const view = (heads) => {
     H.rec = [];
-    b.timelineView(theme, { totals: { heads }, partial: false }, [], -1, trajInks(theme, true));
+    b.timelineView(theme, { totals: { heads }, sessions: b.sessions, partial: false }, [], -1, trajInks(theme, true));
     const c = H.rec;
     H.rec = null;
     return c;
@@ -433,7 +433,7 @@ test("timeline view: at 2,000 turns the strip has numbers, thinned to every k-th
   });
   const view = (shown) => {
     H.rec = [];
-    b.timelineView(theme, { totals: { heads }, partial: false }, shown, 0, trajInks(theme, true));
+    b.timelineView(theme, { totals: { heads }, sessions: b.sessions, partial: false }, shown, 0, trajInks(theme, true));
     const c = H.rec;
     H.rec = null;
     return words(own(c, "th-tl-labels"));
@@ -494,7 +494,7 @@ test("timeline view: at 2,000 turns the selected step's outline is around its tu
   for (const ti of [0, 1233, 1999]) {
     const key = `tr:0:${ti}:1`;
     H.rec = [];
-    b.timelineView(theme, { totals: { heads }, partial: false }, [{ key }], 0, trajInks(theme, true));
+    b.timelineView(theme, { totals: { heads }, sessions: b.sessions, partial: false }, [{ key }], 0, trajInks(theme, true));
     const c = H.rec;
     H.rec = null;
     const L = b.tlModel.L;
