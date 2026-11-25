@@ -3427,9 +3427,11 @@ export default class Threads extends View {
       for (const k of now[i]) if (!b.sets[i].has(k)) keys.add(turnOf(k));
       for (const k of b.sets[i]) if (!now[i].has(k)) keys.add(turnOf(k));
     }
-    // New call details, or interim texts and estimates left out of time in open turns.
+    // New call details, or interim texts and estimates left out of time in open turns. The
+    // mark stays until the record below is made: a splice Herdr stopped before it (its stop
+    // falls at any call) left nothing to rebuild the open turns. otherLeft is cleared here, so
+    // what this rebuild leaves out of time is counted again.
     const again = this.againOpen;
-    this.againOpen = false;
     if (again) this.otherLeft = 0;
     if ((this.callVer ?? 0) !== b.callVer || again) {
       for (const k of this.open) keys.add(k);
@@ -3496,6 +3498,7 @@ export default class Threads extends View {
     this.staleRows = [...stale].sort((x, y) => x - y);
     this.buildStale = this.staleRows;
     this.rowBuild = { ...b, rest, marks, sets: now.map((x) => new Set(x)), callVer: this.callVer ?? 0 };
+    this.againOpen = false;
     this.rowsKey = key;
     this.splicing = false;
     this.fitKey = null;
@@ -3755,7 +3758,9 @@ export default class Threads extends View {
   }
   flushCalls(cx) {
     if (this.callBusy || !this.callDue?.length) return;
-    this.callBusy = true;
+    // The timer is asked for before the read is marked as running: a render Herdr stopped
+    // between the two (its stop falls at any call) left the mark with no timer to clear it, and
+    // no call was read again in the pane. The mark is a plain store, where no stop falls.
     cx.timer.after(0, (cx) => {
       const job = this.callDue.shift();
       if (!job) { this.callBusy = false; return; }
@@ -3789,6 +3794,7 @@ export default class Threads extends View {
         cx.notify();
       });
     });
+    this.callBusy = true;
   }
   // Keeps the cache at CALLS_MAX, dropping the oldest reads first but never a call in an open
   // group, so open groups are not read over and over.
@@ -5835,7 +5841,8 @@ export default class Threads extends View {
 
   flushImages(cx) {
     if (this.imgBusy || !this.imgDue?.length) return;
-    this.imgBusy = true;
+    // The timer is asked for before the decode is marked as running, as in flushCalls: a render
+    // Herdr stopped between the two left the mark with no timer to clear it.
     cx.timer.after(0, (cx) => {
       const job = this.imgDue.shift();
       if (!job) { this.imgBusy = false; return; }
@@ -5858,6 +5865,7 @@ export default class Threads extends View {
         cx.notify();
       });
     });
+    this.imgBusy = true;
   }
 
   // The decoded file for a turn's image i ({path, w, h}), or null; whether its file is gone;
@@ -5899,7 +5907,8 @@ export default class Threads extends View {
 
   flushCode(cx) {
     if (!this.codeDue?.size || this.codeTick) return;
-    this.codeTick = true;
+    // The timer is asked for before it is marked as asked for, as in flushCalls: a render Herdr
+    // stopped between the two left the mark with no timer to clear it.
     cx.timer.after(0, (cx) => {
       this.codeTick = false;
       const keys = [...this.codeDue];
@@ -5907,6 +5916,7 @@ export default class Threads extends View {
       for (const k of keys) if (this.open.has(k)) this.makeCode(k);
       cx.notify();
     });
+    this.codeTick = true;
   }
 
   // Releases the code editors whose key starts with prefix (all of them when no prefix).
@@ -5959,7 +5969,8 @@ export default class Threads extends View {
     }
     for (const k of want.keys()) if (!eds.has(k)) missing = true;
     if (!missing || this.outNext) return;
-    this.outNext = true;
+    // The timer is asked for before it is marked as asked for, as in flushCalls: a render Herdr
+    // stopped between the two left the mark with no timer to clear it.
     cx.timer.after(0, (cx) => {
       this.outNext = false;
       const t = theme();
@@ -5980,6 +5991,7 @@ export default class Threads extends View {
       }
       cx.notify();
     });
+    this.outNext = true;
   }
   syntaxColors(t) {
     return {
@@ -7568,6 +7580,9 @@ export default class Threads extends View {
       this.buildNext = false;
       this.shapeNext = false;
       this.probeNext = false;
+      // So are the sender count's next draw and a held column's draw once the pane is still.
+      this.countNext = false;
+      this.holdNext = false;
       // A scroll the stopped render took on (the jump to the newest turn, a return to a pin)
       // is asked for again: it was taken before the list was drawn. Not after the reader's
       // wheel since that render, which dropped it (listWheel) and is the newer word, as for
@@ -12269,7 +12284,7 @@ export default class Threads extends View {
       let out = fresh ? kept.out : null;
       if (!out) {
         out = ledgerTurn(x, turn, si, going && job.next === last, { ends, reading });
-        if (turn.done) this.turnLedger.set(turn, { si, out, v: turn.v, ends, sub: out.rows.some((r) => r.sub), agentVer: x.agentVer });
+        if (turn.done) this.turnLedger.set(turn, { si, out, v: turn.v, ends, sub: out.steps.some((r) => r.sub), agentVer: x.agentVer });
       }
       job.outs[job.next--] = out;
       if (job.next >= 0 && now() > until) break;
@@ -12289,7 +12304,10 @@ export default class Threads extends View {
     for (let i = from; i < job.all.length; i++) {
       const { x, si, turn } = job.all[i];
       if (si > 0 && turn === x.turns[0]) rows.push({ kind: "sess", key: `sess:${si}`, si, ts: turn.ts ?? null });
-      for (const r of job.outs[i].rows) rows.push(r);
+      // ledger.js ledgerTurn: the heading, then its steps (kept apart, so they make no cycle).
+      const o = job.outs[i];
+      rows.push(o.head);
+      for (const r of o.steps) rows.push(r);
     }
     return rows;
   }
