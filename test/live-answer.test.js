@@ -139,7 +139,7 @@ test("a running turn that has answered says so, selected or not, whatever its st
     expect(card).toContain(note);
     expect(`${row} ${card}`).not.toMatch(/no (final )?reply yet/i);
   }
-  expect(says("idle")[0]).toContain("Not finished");
+  expect(says("idle")[0]).toContain("Answered · ");
 });
 
 // Red at c37c64f3 for the rows under it; the row itself is found past each kind of them.
@@ -164,6 +164,22 @@ test("selecting a running turn swaps its own row, with every kind of row of an a
     p.v.sel = null;
     expect(kinds(p.v)[0]).toBe("wrow");
   }
+});
+
+// Red at c37c64f3, and on main: the search for the running turn's own row stopped at this row, so
+// the row did not change when the turn was selected. It has nothing to do with an answer.
+test("selecting a running turn swaps its own row, with a long output's Show all row under it", async () => {
+  const { v, cx, s } = await live([PROMPT, { ...call(), id: "toolu_b" }]);
+  v.calls.set(`${s.file}#toolu_b`, { st: "ok", out: Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n"), lines: 30, ver: s.version });
+  v.setGroup(`${A}:0`, true);
+  v.callOpen.add(`${A}:0:0`);
+  settleRows(v, cx);
+  v.sel = null;
+  expect(kinds(v)).toEqual(["wrow", "call", "cout", "oall", "wspin"]);
+  v.sel = A;
+  expect(kinds(v)).toEqual(["working", "call", "cout", "oall", "wspin"]);
+  v.sel = null;
+  expect(kinds(v)).toEqual(["wrow", "call", "cout", "oall", "wspin"]);
 });
 
 // Red at c37c64f3: the answer is cut at each event (there is none to cut).
