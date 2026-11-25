@@ -476,3 +476,33 @@ test("timeline view: where Herdr paints no path, every unfinished call in view i
   expect(divs.filter((n) => n === 0).length).toBe(0);
   expect([divs.slice(0, 40).every((n) => n > 1), divs.slice(40).every((n) => n === 1)]).toEqual([true, true]);
 });
+
+// ---- the step count of kept places ----
+test("timeline model: an event in the running turn that keeps its places counts its steps: at 1,024 steps one more makes 1,025, and the next room step keeps the places for the bounded build", () => {
+  const done = doneTurns(255);
+  const key = "0:255";
+  const t0 = T0 + 255 * 100000;
+  const last = (k) => ({
+    kind: "trh", key, n: 256, t0, total: null, span: 60000, going: true,
+    cnt: { steps: k, input: 1, model: k - 1, tools: 0, failed: 0, user: 1, agent: 0 },
+    steps: [row(key, 0, "you", 0, null), ...Array.from({ length: k - 1 }, (_, j) => row(key, j + 1, "text", 1000 * (j + 1), null))],
+  });
+  const r0 = TL.liveRoom(600000);
+  const heads = [...done, last(4)];
+  const M = TL.timelineModel(null, heads, CW, "clock", t0 + r0 - 2000, null);
+  expect([M.geo.steps, M.L.zmax]).toEqual([1024, 256]);
+  let m = { ...TL.TL_MADE };
+  const since = () => [TL.TL_MADE.geo - m.geo, TL.TL_MADE.layout - m.layout, TL.TL_MADE.tail - m.tail];
+  const more = [...done, last(5)];
+  const N = TL.timelineModel(M, more, CW, "clock", t0 + r0 - 1000, null);
+  expect(since()).toEqual([0, 0, 1]);
+  expect([N.geo.steps, N.L.zmax, N.L.geo === N.geo]).toEqual([1025, 1025 / 4, true]);
+  expect(N.geo.turns).toBe(M.geo.turns);
+  sameStrip(N, TL.timelineModel(null, more, CW, "clock", t0 + r0 - 1000, null));
+  // A heading with the same number of steps keeps the placing itself.
+  expect(TL.timelineModel(N, [...done, last(5)], CW, "clock", t0 + r0 - 1000, null).geo).toBe(N.geo);
+  // The room's next step, with no event more: past 1,024 steps, so nothing is placed whole.
+  m = { ...TL.TL_MADE };
+  const S = TL.timelineModel(N, more, CW, "clock", t0 + r0 + 1000, null);
+  expect([...since(), S.geo.stale, S.geo.steps]).toEqual([0, 0, 1, true, 1025]);
+});
