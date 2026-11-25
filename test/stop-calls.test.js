@@ -7,7 +7,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { draw, dropTimers, editors, fixture, pane, pinPane, scripted, settleRows, setup } from "./render-harness.js";
+import { draw, dropTimers, editors, fixture, H, handlerAfterId, pane, pinPane, scripted, settingsWrites, settleRows, setup, theme } from "./render-harness.js";
+import { columnWidth, REWRAP_PAUSE_MS } from "../mods/agent-threads/ui.js";
 
 setup();
 
@@ -428,3 +429,104 @@ test("a render Herdr stops between the landing's lift and the timer that takes i
   delete v.bodyNow;
   expect([armed, stops, lift > 0, v.landLift ?? 0, v.slotsMemo[0] === first]).toEqual([false, 1, true, 0, true]);
 });
+
+// Herdr's own stop runs no catch, so the render is left open (renderOpen) and the next draw is
+// its watch draw. Here: one render with a stop thrown from the timer call whose callback clears
+// `mark` (found by its source, which the transpiler may give as !1), before it is registered, then the watch draw, then a draw only when the pane asks
+// for one, with each round's timers run (ms: how far the clock is let run).
+function stoppedAtMark(v, cx, mark) {
+  let armed = true;
+  const after = cx.timer.after;
+  cx.timer.after = function (ms, fn) {
+    if (armed && this === cx.timer && new RegExp(`this\\.${mark} = (false|!1)`).test(String(fn))) { armed = false; throw STOP; }
+    return after.call(this, ms, fn);
+  };
+  let stops = 0;
+  try { v.render(cx); } catch (e) { if (e !== STOP) throw e; stops++; v.renderOpen = true; } finally { cx.timer.after = after; }
+  return { armed, stops };
+}
+function askedDraws(v, cx, ms, before = () => {}) {
+  let asked = 0;
+  let draws = 0;
+  cx.notifyHook = () => { asked++; };
+  try {
+    v.render(cx);
+    before();
+    for (let k = 0; k < 400; k++) {
+      asked = 0;
+      cx.flush(ms);
+      if (!asked) break;
+      v.render(cx);
+      draws++;
+    }
+  } finally { cx.notifyHook = null; }
+  return draws;
+}
+
+// A sender rule's count of the prompts it matches runs for a while each draw and asks for the
+// next draw itself (countNext) while some are left. A render stopped as it asked left the mark
+// with no timer, and later draws never asked again: the count line never came, until something
+// else drew, and then the count went on one draw at a time, never asking for the rest.
+test("a render Herdr stops as the sender count asks for its next draw: the watch draw asks again and the count finishes", async () => {
+  const r = await pane(fixture("--extra", "60"));
+  const { v, cx } = r;
+  H.keepSettings = true;
+  settingsWrites.length = 0;
+  const clock = performance.now;
+  let at = 0;
+  try {
+    v.applyPrefs(JSON.stringify({ textSize: 15, senders: [] }));
+    H.recordFiles[v.prefsPath()] = v.prefsRaw;
+    v.action("settings", cx);
+    v.setPage = "senders";
+    cx.pending = [];
+    const card = () => { H.rec = []; v.settingsCard(theme); const c = H.rec; H.rec = null; return c; };
+    const on = (c, id, name) => { const i = c.findIndex((e) => e[0] === "id" && e[1] === id); for (let j = i + 1; j < c.length && c[j][0] !== "id"; j++) if (c[j][0] === name) return c[j].at(-1); return null; };
+    on(card(), "th-rule-add", "on_click")({}, cx);
+    v.senderInputs.prefix.set_value("Bump {name} ");
+    v.senderInputs.prefix.handlers.change({}, cx);
+    v.senderHits = null;
+    v.countNext = false;
+    cx.timers = [];
+    // Each clock read moves 4 ms: two prompts a draw.
+    performance.now = () => (at += 4);
+    const stop = stoppedAtMark(v, cx, "countNext");
+    const draws = askedDraws(v, cx, 0);
+    const shown = v.senderMatches(v.ruleEdit.rule);
+    performance.now = clock;
+    expect([stop.armed, stop.stops, draws > 5, shown != null, Boolean(v.countNext)]).toEqual([false, 1, true, true, false]);
+  } finally { performance.now = clock; H.keepSettings = false; delete H.recordFiles[v.prefsPath()]; }
+}, 60000);
+
+// While the pane is dragged the column keeps its width, and the frame asks for a draw once the
+// pane has been still (holdNext), which re-wraps it. A render stopped as it asked left the mark
+// with no timer: the column stayed at its old width (centred in a wider pane, cut off on the
+// right in a narrower one) until something else drew, and every later drag did the same.
+test("a render Herdr stops as a held column asks for its draw once the pane is still: the watch draw asks again and the column takes the pane's width", async () => {
+  const ev = [];
+  for (let i = 0; i < 60; i++) {
+    const ts = new Date(Date.UTC(2026, 10, 1 + Math.floor((i * 3) / 60), 8, 0) + (i % 20) * 60000).toISOString();
+    ev.push({ k: "p", o: "human", t: `Prompt ${i}: check the cart total for order ${i}.`, ts }, { k: "t", t: `Reply ${i}: the totals round per line.` }, { k: "d", ts });
+  }
+  const { v, cx } = await scripted(ev);
+  v.debug = false;
+  v.rewrapMs = 400;
+  const size = (w) => { H.rec = []; v.render(cx); const calls = H.rec; H.rec = null; handlerAfterId(calls, "threads-root", "on_size_change")({ width: w, height: 800 }, cx); };
+  const col = (w) => columnWidth(w, v.prefs.textSize, v.chars());
+  const got = [];
+  for (const drag of [1, 2]) {
+    size(drag === 1 ? 540 : 440);
+    settleRows(v, cx);
+    cx.timers = [];
+    const to = drag === 1 ? 440 : 540;
+    // A step of a drag: the column is held, and the render that asks for the draw once the
+    // pane is still is stopped (in the first drag only).
+    size(to);
+    const stop = drag === 1 ? stoppedAtMark(v, cx, "holdNext") : { armed: false, stops: 0 };
+    const held = v.widthHeld;
+    // The pane is still from here: the clock is let run past the pause.
+    askedDraws(v, cx, REWRAP_PAUSE_MS + 100, () => { v.sizeAt = Date.now() - REWRAP_PAUSE_MS - 50; });
+    got.push([drag, stop.armed, stop.stops, held, v.widthHeld, Math.abs(v.width - col(to)) < 1e-6, Boolean(v.holdNext)]);
+  }
+  expect(got).toEqual([[1, false, 1, true, false, true, false], [2, false, 0, true, false, true, false]]);
+}, 60000);
