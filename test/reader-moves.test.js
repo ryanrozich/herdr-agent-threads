@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cardKey, keyAction, ledgerKey, ringKey } from "../mods/agent-threads/ui.js";
 import { trajCompact } from "../mods/agent-threads/ledger.js";
-import { H, draw, drawRange, fixture, keyEv, pane, pinsShown, probeFrame, root, scripted, settleList, settleRows, setup, simList, state, stillAt } from "./render-harness.js";
+import { H, draw, drawRange, dropTimers, fixture, keyEv, pane, pinsShown, probeFrame, root, scripted, settleList, settleRows, setup, simList, state, stillAt } from "./render-harness.js";
 
 setup();
 
@@ -363,20 +363,32 @@ function code(src) {
 }
 // Whether this source calls readerMoved (in its code, not its comments).
 const callsReaderMoved = (src) => /\breaderMoved\s*\(/.test(code(src));
-// A regex literal: after an operator, a bracket or return, a slash that opens no comment, up
-// to the slash that closes it. The comment strip above reads a regex ending in an escaped
-// slash as a comment (the rest of the line, a call too, dropped), and a quote in one as the
-// start of a string. So the regex literals in the bodies the check reads are listed here, and
-// none holds a slash, a quote, a backtick or a star: a new one fails until it is looked at and
-// listed. A false match (a string with such a slash in it) fails too, the safe way round.
-const REGEX_AT = /(?:^|[(,=:[!&|?{};]|\breturn)\s*(\/(?![/*])(?:[^/\\\n[]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[dgimsuyv]*)/gm;
+// A regex literal: a slash that opens no comment, up to the slash that closes it, after
+// anything but what a division follows (an identifier's character, a closing bracket or
+// parenthesis), so after an operator of any kind (=>, +, ?, !), a bracket, a quote or return.
+// The lead skips spaces but is not one itself, and is not a slash (a division's or a
+// comment's). The comment strip above reads a regex ending in an escaped slash as a comment
+// (the rest of the line, a call too, dropped), and a quote in one as the start of a string.
+// So the regex literals in the bodies the check reads are listed here, and none holds a slash,
+// a quote, a backtick or a star: a new one fails until it is looked at and listed. A false
+// match (a string with such a slash in it, or a division after ++) fails too, the safe way round.
+const REGEX_AT = /(?:^|[^\w$)\]\s/]|\breturn)\s*(\/(?![/*])(?:[^/\\\n[]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[dgimsuyv]*)/gm;
 const regexes = (src) => [...src.matchAll(REGEX_AT)].map((m) => m[1]);
 const KNOWN_REGEXES = { bodyNow: ["/ or ([^ ]+)$/"] };
 test("the bodies the source check reads hold only the regex literals listed, none the strip could misread", () => {
-  // The pattern itself: the reader's case and a quote in a class are found; a division and a
-  // comment are not.
-  const cases = ["if (/^https?:\\/\\//.test(u)) this.readerMoved();", "const a = b / 2; // half", "x = y / z / 3;", "return /[\"']/.test(s);"].map((c) => regexes(c).length);
-  expect(cases).toEqual([1, 0, 0, 1]);
+  // The pattern itself: the reader's case, a quote in a class, and a regex after an arrow and
+  // after a plus are found; a division, a division after a closing bracket and a comment are not.
+  const cases = {
+    afterParen: "if (/^https?:\\/\\//.test(u)) this.readerMoved();",
+    division: "const a = b / 2; // half",
+    divisions: "x = y / z / 3;",
+    afterBracket: "x = a[1] / b[2] / c;",
+    quoteInClass: "return /[\"']/.test(s);",
+    afterArrow: "const okA = (s) => /a\\//.test(s); this.readerMoved();",
+    afterPlus: "const okD = s + /a\\//.source; this.readerMoved();",
+  };
+  expect(Object.fromEntries(Object.entries(cases).map(([k, c]) => [k, regexes(c).length])))
+    .toEqual({ afterParen: 1, division: 0, divisions: 0, afterBracket: 0, quoteInClass: 1, afterArrow: 1, afterPlus: 1 });
   const found = Object.fromEntries(PANE.map((n) => [n, regexes(body(n) ?? "")]).filter(([, r]) => r.length));
   expect(found).toEqual(KNOWN_REGEXES);
   expect(Object.values(found).flat().filter((r) => /[\\/'"`*]/.test(r.slice(1, r.lastIndexOf("/"))))).toEqual([]);
@@ -526,6 +538,63 @@ test("debugScroll counts once, through the frames that land it", async () => {
     for (let k = 0; k < 8; k++) { cx.flush(20); draw(v, cx); }
     expect({ debug: v.debug, atCommand, moved: sim.last().key !== top0, asked: v.scrollTo, all: moves(v) - n0 }).toEqual({ debug: true, atCommand: 1, moved: true, asked: null, all: 1 });
   } finally { H.listWindow = null; }
+});
+
+// The landing's two asks one frame each, as Herdr runs a 16 ms and a 48 ms timer in the gaps
+// between frames: the frame that takes the 16 ms ask, then the one that takes the 48 ms ask.
+// Each moves the top row here (the turn is half the list away, and the 48 ms ask puts an
+// earlier item at the top), and neither counts. Then the reader's own drag on the bar, gap
+// frames after the last ask: it counts once, so the mark the asks set is caught up by the
+// frame that takes them (seen) and does not swallow the reader's later moves.
+async function landThenDrag(gap) {
+  const { v, cx } = await pane(fixture("--extra", "30"));
+  settleRows(v, cx);
+  v.listH = 300;
+  const sim = simList(v);
+  // The timers due at ms, and nothing else (the 0 ms ones a frame asks for go first).
+  const run = (ms) => {
+    const due = cx.timers.filter((x) => x.ms === ms);
+    cx.timers = cx.timers.filter((x) => x.ms !== ms);
+    for (const x of due) x.fn(cx);
+  };
+  // A frame after the timers due at ms: the pane's own asks they made (ownAsk), and the top row.
+  const frame = (ms) => {
+    run(0);
+    const a0 = v.askN ?? 0;
+    if (ms != null) run(ms);
+    const n = (v.askN ?? 0) - a0;
+    draw(v, cx);
+    return { n, key: sim.last().key };
+  };
+  try {
+    v.follow = false;
+    v.toBottom = false;
+    v.pinningUntil = 0;
+    v.scrollBusyUntil = 0;
+    v.scrollTo = null;
+    for (let k = 0; k < 3; k++) { cx.flush(20); draw(v, cx); }
+    dropTimers(v, cx);
+    draw(v, cx);
+    const keys = v.turnKeys(v.rows());
+    const n0 = moves(v);
+    v.command(`debugScroll:${keys[Math.floor(keys.length / 2)]}`, cx);
+    const f0 = frame();
+    const f16 = frame(16);
+    const f48 = frame(48);
+    const landing = moves(v) - n0;
+    for (let k = 1; k < gap; k++) frame();
+    const rows = v.rows();
+    const n1 = moves(v);
+    sim.off = Math.max(0, sim.off - 120);
+    const f = frame();
+    return {
+      asks: [f16.n, f48.n], moved16: f16.key !== f0.key, moved48: f48.key !== f16.key,
+      landing, dragMoved: f.key !== f48.key, sameRows: v.rows() === rows, drag: moves(v) - n1,
+    };
+  } finally { H.listWindow = null; }
+}
+for (const gap of [1, 2]) test(`a drag on the bar ${gap} frame${gap > 1 ? "s" : ""} after the pane's own asks land counts once, and the asks count nothing`, async () => {
+  expect(await landThenDrag(gap)).toEqual({ asks: [1, 1], moved16: true, moved48: true, landing: 1, dragMoved: true, sameRows: true, drag: 1 });
 });
 
 // Two of the pane's own moves of the list, with no wheel and no bar, in the list, the outline
@@ -768,17 +837,23 @@ const COMMANDS = {
   "debugScroll:": [(v) => `debugScroll:${v.turnKeys(v.rows())[0]}`, 1], "debugHover:": ["debugHover:1", 0], debugDayPill: ["debugDayPill", 0],
   "debugClick:": [(v) => `debugClick:40:${v.turnKeys(v.rows())[0]}`, 1], debugQuote: ["debugQuote", 0],
 };
-// action()'s forms, read from its code.
-function forms() {
-  const b = code(body("action"));
+// action()'s forms, read from its code: a case, a name it compares, a prefix, a pattern, and
+// the name split and its first part compared (name.split(":")[0] === "x", either way round),
+// which is the prefix "x:".
+function forms(b = code(body("action"))) {
   const out = new Set();
   for (const m of b.matchAll(/case "([^"]+)"/g)) out.add(m[1]);
   for (const m of b.matchAll(/name === "([^"]+)"/g)) out.add(m[1]);
   for (const m of b.matchAll(/name\.startsWith\("([^"]+)"\)/g)) out.add(m[1]);
   for (const m of b.matchAll(/\/\^(\(?[^/]*?:)/g)) out.add(m[1]);
+  for (const m of b.matchAll(/name\.split\("([^"]+)"\)\[0\]\s*===\s*"([^"]+)"/g)) out.add(m[2] + m[1]);
+  for (const m of b.matchAll(/"([^"]+)"\s*===\s*name\.split\("([^"]+)"\)\[0\]/g)) out.add(m[1] + m[2]);
   return [...out].sort();
 }
 test("every command form the pane takes has a row, and each counts as its row says", async () => {
+  // The walk reads each form, the split one too: a command matched only that way (the
+  // reader's K2) gets no row and fails below.
+  expect(forms('if (name.split(":")[0] === "goto") x(); if ("seek" === name.split(":")[0]) y();')).toEqual(["goto:", "seek:"]);
   const all = forms();
   expect(all.filter((f) => !(f in COMMANDS) && !(f in ACTIONS) && !(`${f}1` in ACTIONS))).toEqual([]);
   const { v, cx } = await pane(fixture("--open", "--extra", "30"));
