@@ -732,14 +732,14 @@ function* numbersGen(out, heads, nti, nx, nw) {
   out.labels = roomOfNumbers(list, heads, out);
 }
 // Each number's w, the room to the next number (or the strip's end), and its turn's length
-// where there is room.
+// where there is room; a turn with none recorded (0 ms) has no words for it.
 function roomOfNumbers(list, heads, L) {
   for (let j = 0; j < list.length; j++) {
     const l = list[j];
     const room = (j + 1 < list.length ? list[j + 1].x : L.cw) - l.x;
     l.w = Math.max(tlNumW(l.text), room - (j + 1 < list.length ? TL_NUM_GAP / 2 : 0));
     const h = heads[l.ti];
-    l.total = l.tw >= TL_NUM_LEN && room >= TL_NUM_LEN ? (h.going ? "running" : durText(L.geo.walls[l.ti]) || null) : null;
+    l.total = l.tw >= TL_NUM_LEN && room >= TL_NUM_LEN ? (h.going ? "running" : (L.geo.walls[l.ti] > 0 && durText(L.geo.walls[l.ti])) || null) : null;
   }
   return list;
 }
