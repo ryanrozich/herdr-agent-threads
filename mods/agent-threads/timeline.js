@@ -457,8 +457,9 @@ function cutOf(S) {
 // alone. The places, the numbers and the breaks stay P's. The tracks are P's (a copy) less
 // the old last heading's (was), and the new one's worked out: one track pass an event. G: the
 // places, P's or P's with only the last turn's length changed (tlLastLength), whose number
-// then gets that turn's width and length text again. With no cut (the last turn out of view),
-// P itself on G.
+// then gets that turn's width and length text again, as it does when that turn starts or stops
+// running with its places kept (one with no start time has no room). With no cut (the last turn
+// out of view), P itself on G.
 function tlTail(P, heads, was, G = P.geo) {
   TL_MADE.tail++;
   const c = P.cut;
@@ -475,7 +476,8 @@ function tlTail(P, heads, was, G = P.geo) {
   const n = heads.length;
   runGen(layTurn(S, n - 1));
   const j = P.labels.length - 1;
-  if (on && j >= 0 && P.labels[j].ti === n - 1 && S.nti[0] === n - 1) {
+  const flip = Boolean(was.going) !== Boolean(heads[n - 1].going);
+  if ((on || flip) && j >= 0 && P.labels[j].ti === n - 1 && S.nti[0] === n - 1) {
     out.labels = P.labels.slice();
     out.labels[j] = { ...P.labels[j], tw: S.nw[0] };
     roomOfNumbers([out.labels[j]], heads, out);
