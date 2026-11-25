@@ -1,11 +1,12 @@
 // test/herdr-still.sh stops what its Herdr left running (the core, and anything that started)
 // without reading any process's environment. These run a copy of the script in which every
-// /proc is a made-up folder tree, so no real process is looked at on any machine, whatever the
-// script asks for. The tree's processes are sleeps these tests start, of 30 s each; the fake
-// Herdr fills in their cmdline, cwd and environ.
+// "/proc" it spells out is a made-up folder tree, so those lines look at no real process on any
+// machine. A ps or a pgrep, or a /proc put together from parts, would not be turned to the tree.
+// The tree's processes are sleeps these tests start, of 30 s each; the fake Herdr fills in their
+// cmdline, cwd and environ.
 import { afterAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,6 +22,7 @@ function stub(dir, name, body) {
 }
 
 // A killed process may stay listed as a zombie where nothing reaps it (Linux, in a container).
+// On Linux this reads the real /proc stat of these tests' own sleeps, and of nothing else.
 function alive(pid) {
   try { process.kill(pid, 0); } catch { return false; }
   try { return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8")); } catch { return true; }
@@ -33,10 +35,15 @@ function alive(pid) {
 //          where the app works (its folder here is the fake app's own, as the script started it)
 //   holder the run's folder in its command line
 //   shell  works in the run's folder
+//   gone   works in the run's folder, which was deleted
+//   late   works in the run's folder; an id that was there before begins with its id
+//   beside works in a folder whose path begins with the run's
 //   other  has the folder in its environment only
 //   before the folder in its command line and works in it, but ran before the script began
-// Every one has the folder in its environ, as anything the app starts does.
-const NAMES = ["core", "holder", "shell", "other", "before"];
+// Every one has the folder in its environ, as anything the app starts does. The script's temp
+// folder is a link, so the run's folder has to be taken with its links followed, and its rig is
+// named from the checkout.
+const NAMES = ["core", "holder", "shell", "gone", "late", "beside", "other", "before"];
 let result = null;
 const pids = [];
 function cleanedUp() {
@@ -46,13 +53,20 @@ function cleanedUp() {
   const rig = join(d, "rig");
   const bin = join(d, "bin");
   const co = join(d, "co");
-  for (const p of [tree, join(rig, "bin"), bin, join(d, "x11"), join(co, "test")]) mkdirSync(p, { recursive: true });
+  for (const p of [tree, join(rig, "bin"), bin, join(d, "x11"), join(d, "tmp"), join(co, "test")]) mkdirSync(p, { recursive: true });
+  symlinkSync(join(d, "tmp"), join(d, "link"));
   symlinkSync(join(root, "mods"), join(co, "mods"));
   writeFileSync(join(co, "test/herdr-still.sh"), script.replaceAll("/proc", tree));
-  const before = Number(spawnSync(SH, ["-c", `${SLEEP} echo $!`], { encoding: "utf8" }).stdout);
-  pids.push(before);
-  writeFileSync(join(d, "before"), `${before}\n`);
+  const early = (name) => {
+    const p = Number(spawnSync(SH, ["-c", `${SLEEP} echo $!`], { encoding: "utf8" }).stdout);
+    pids.push(p);
+    writeFileSync(join(d, name), `${p}\n`);
+    return p;
+  };
+  const before = early("before");
   mkdirSync(join(tree, String(before)));
+  // An empty folder, its id longer than any real one: never matched, and never a process.
+  mkdirSync(join(tree, `${early("late")}0000000`));
   stub(join(rig, "bin"), "timeout", '[ "$1" = -k ] && shift 2\nshift\nexec "$@"');
   stub(join(rig, "bin"), "herdr-core", "exit 0");
   stub(join(rig, "bin"), "herdr-app", `d='${d}'
@@ -83,7 +97,10 @@ core=$(command -v herdr-core)
 start core "$(pwd -P)" "$core" serve
 start holder / "$core" hold --socket "$run/run/t1.sock"
 start shell "$run/code" /bin/sh
+start gone "$run (deleted)" /bin/sh
+start beside "$run-x" other-app
 start other / other-app
+fill "$(cat "$d/late")" "$run/code" /bin/sh
 fill "$(cat "$d/before")" "$run/code" "$run/x"
 echo > "$d/ready"
 exec /bin/sleep 30`);
@@ -93,10 +110,10 @@ exec /bin/sleep 30`);
   stub(bin, "timeout", '[ "$1" = -k ] && shift 2\nshift\nexec "$@"');
   const r = spawnSync(SH, [join(co, "test/herdr-still.sh"), join(root, "test/fixtures/session.jsonl"), join(d, "s.png")], {
     encoding: "utf8", timeout: 20000,
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HERDR_RIG: rig, HERDR_STILL_X11: join(d, "x11") },
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: join(d, "link"), HERDR_RIG: "../rig", HERDR_STILL_X11: join(d, "x11") },
   });
   const pid = Object.fromEntries(NAMES.map((n) => [n, Number(existsSync(join(d, n)) ? readFileSync(join(d, n), "utf8") : 0)]));
-  pids.push(...NAMES.map((n) => pid[n]).filter((p) => p !== before));
+  pids.push(...NAMES.map((n) => pid[n]));
   // A process that was signalled gets a moment to end.
   for (let i = 0; i < 20 && alive(pid.core) && pid.core > 0; i++) Bun.sleepSync(25);
   Bun.sleepSync(100);
@@ -124,6 +141,18 @@ test("the cleanup stops a left process that works in the run's folder", () => {
   expect(cleanedUp().up.shell).toBe(false);
 }, TIME);
 
+test("the cleanup stops a left process that works in the run's folder after it was deleted", () => {
+  expect(cleanedUp().up.gone).toBe(false);
+}, TIME);
+
+test("the cleanup takes a process that ran before by its whole id: a new one whose id is the start of an old one is stopped", () => {
+  expect(cleanedUp().up.late).toBe(false);
+}, TIME);
+
+test("the cleanup leaves alone a process that works in a folder whose path only begins with the run's", () => {
+  expect(cleanedUp().up.beside).toBe(true);
+}, TIME);
+
 test("the cleanup leaves alone a process that has the run's folder in its environment only", () => {
   expect(cleanedUp().up.other).toBe(true);
 }, TIME);
@@ -136,13 +165,12 @@ test("the script names no process's environ", () => {
   expect(script.split("\n").filter((l) => !/^\s*#/.test(l) && l.includes("environ"))).toEqual([]);
 }, TIME);
 
-// The Linux half of "a test run reads no process's environment". This file writes the made-up
-// tree's, so its own lines are left out; a comment line opens nothing.
+// The Linux half of "a test run reads no process's environment". The word anywhere in a file under
+// test/, comments and fixtures too, whichever way a path is put together around it; this file
+// writes the made-up tree's and is left out. "environment" and awk's ENVIRON are other words.
 test("nothing under test/ opens a process's environ file", () => {
-  const files = readdirSync(join(root, "test"), { recursive: true }).map(String).filter((f) => /\.(sh|js|mjs|jq|py)$/.test(f) && f !== "herdr-still-proc.test.js");
+  const files = readdirSync(join(root, "test"), { recursive: true }).map(String).filter((f) => f !== "herdr-still-proc.test.js" && statSync(join(root, "test", f)).isFile());
   expect(files).toContain("herdr-still.sh");
   expect(files).toContain("preload.js");
-  const hits = files.flatMap((f) => readFileSync(join(root, "test", f), "utf8").split("\n").map((l, i) => [`${f}:${i + 1}`, l])
-    .filter(([, l]) => !/^\s*(#|\/\/)/.test(l) && /\/environ(?![a-z])/i.test(l)).map(([at]) => at));
-  expect(hits).toEqual([]);
+  expect(files.filter((f) => /environ(?!ment)/.test(readFileSync(join(root, "test", f), "utf8")))).toEqual([]);
 }, TIME);
