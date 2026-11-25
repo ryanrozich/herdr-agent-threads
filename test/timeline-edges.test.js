@@ -4,7 +4,7 @@
 // of a turn's number. The model is timeline.js (test/timeline.test.js); the pane is on the
 // render harness.
 import { test, expect, setSystemTime } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as TL from "../mods/agent-threads/timeline.js";
@@ -64,9 +64,11 @@ function sameStrip(M, W) {
 }
 const whole = (heads, now = T0) => TL.timelineModel(null, heads, CW, "clock", now, null);
 
-// A Trajectory pane docked along the bottom, w px wide, its rows built whole.
-async function dockPane(file, w = 1440) {
+// A Trajectory pane docked along the bottom, w px wide, its rows built whole. hold (heldRead):
+// its first read is held midway.
+async function dockPane(file, w = 1440, hold = null) {
   await pane(file);
+  if (hold) H.extractHook = hold.hook;
   const state = H.state;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
   state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
@@ -75,7 +77,7 @@ async function dockPane(file, w = 1440) {
   const b = unsliced(new Threads());
   const cb = makeCx();
   b.init(state.props, cb);
-  await settle(b);
+  await (hold ? hold.mid(b) : settle(b));
   state.props = props;
   b.width = w;
   b.paneW = w;
@@ -195,6 +197,12 @@ function slowNow(f) {
   performance.now = () => (t += 3);
   try { return f(); } finally { performance.now = real; }
 }
+function stillNow(f) {
+  const real = performance.now;
+  const t = real.call(performance);
+  performance.now = () => t;
+  try { return f(); } finally { performance.now = real; }
+}
 // A Trajectory pane of 400 turns with its strip's build from nothing begun and not done.
 async function buildingPane() {
   const { b, cb } = await dockPane(fixture("--extra", "400"));
@@ -307,7 +315,8 @@ function stripFrames(v, cx) {
   buildAsks(cx);
   const seen = [];
   for (let k = 0; k < 600; k++) {
-    const c = frame(v, cx);
+    // The clock stands: the strip's own build ends in the draw it begins in.
+    const c = stillNow(() => frame(v, cx));
     seen.push(own(c, "th-tl-lanes") ? v.tlModel.heads : words(own(c, "th-tl-wait")).join(" "));
     const asks = rowAsks(cx) + buildAsks(cx);
     if (!v.ledgerJob && !v.tlJob) return seen;
@@ -321,7 +330,7 @@ const READ_WAIT = "The timeline shows once the whole session is read";
 // on; and nothing waits or asks for a draw after it.
 function onlyThePick(v, cx, seen) {
   const heads = v.ledgerMemo.totals.heads;
-  expect([v.ledgerMemo.sessions === v.sessions, heads.length]).toEqual([true, v.current().turns.length]);
+  expect([v.ledgerMemo.sessions === v.sessions, heads.length]).toEqual([true, v.sessions.reduce((n, x) => n + x.turns.length, 0)]);
   expect(seen.length).toBeGreaterThan(10);
   expect(seen.map((x) => told(x, [[heads, "the pick's strip"]]))).toEqual([...new Array(seen.length - 1).fill(READ_WAIT), "the pick's strip"]);
   for (let k = 0; k < 3; k++) {
@@ -409,6 +418,224 @@ test("timeline view: the same transcript read again with more turns, its rows bu
   expect(heads.length).toBe(b.current().turns.length);
   expect(seen.length).toBeGreaterThan(10);
   expect(seen.map((x) => told(x, [[was, "the turns it had"], [heads, "them all"]]))).toEqual([...new Array(seen.length - 1).fill("the turns it had"), "them all"]);
+}, 30000);
+
+// ---- rows built of part of a session ----
+// A read of file held midway: its first call reads about half the file's bytes, and the next
+// waits until open(). mid(v): until the pane's read is there.
+function heldRead(file) {
+  const size = statSync(file).size;
+  let open;
+  const gate = new Promise((r) => { open = r; });
+  return {
+    open: () => open(),
+    hook: async (args) => {
+      if (args[1] !== file) return null;
+      if (Number(args[2]) === 0) args[3] = String(Math.floor(size / 2));
+      else await gate;
+      return null;
+    },
+    mid: (v) => until(() => v.reading && v.current()?.offset > 0 && v.current().offset < size, "the read to be midway"),
+  };
+}
+const linesOf = (file) => readFileSync(file, "utf8").split("\n").filter(Boolean);
+const writeLines = (file, lines) => writeFileSync(file, `${lines.join("\n")}\n`);
+// A Trajectory pane whose strip shows the whole of a file's first n lines, its rows built a turn
+// a draw from here on.
+async function wholeThen(file, n) {
+  const lines = linesOf(file);
+  writeLines(file, lines.slice(0, n));
+  const { b, cb } = await dockPane(file);
+  shownFrame(b, cb);
+  expect([b.tlModel.heads === b.ledger().totals.heads, b.tlModel.heads.length]).toEqual([true, b.current().turns.length]);
+  expect(b.tlModel.heads.length).toBeGreaterThan(5);
+  oneTurnASlice(b);
+  return { b, cb, lines };
+}
+// What one frame drew: the strip's headings, or the words it waits with.
+function oneFrame(v, cx) {
+  const c = stillNow(() => frame(v, cx));
+  return own(c, "th-tl-lanes") ? v.tlModel.heads : words(own(c, "th-tl-wait")).join(" ");
+}
+// The strip is of the rows of every turn read, and nothing waits or asks for a draw after it.
+function wholeStrip(v, cx) {
+  const heads = v.ledgerMemo.totals.heads;
+  expect(heads.length).toBe(v.sessions.reduce((n, x) => n + x.turns.length, 0));
+  for (let k = 0; k < 3; k++) {
+    const c = frame(v, cx);
+    expect([ids(c).includes("th-tl-wait"), v.tlModel.heads === heads, v.ledgerJob ?? null, v.tlJob ?? null, rowAsks(cx) + buildAsks(cx)]).toEqual([false, true, null, null, 0]);
+  }
+}
+
+test("timeline view: the Trajectory open while a long session is read, its last rows built a slice a draw: the strip waits until they are built, draws none of the turns read so far alone, and is then the whole session's", async () => {
+  const file = fixture("--extra", "40");
+  const hold = heldRead(file);
+  const { b, cb } = await dockPane(file, 1440, hold);
+  shownFrame(b, cb);
+  expect(oneFrame(b, cb)).toBe(READ_WAIT);
+  // The rows of the turns read so far are built, and kept.
+  const part = b.ledgerMemo.totals.heads.length;
+  expect([b.unread(), part > 5, part]).toEqual([true, true, b.current().turns.length]);
+  oneTurnASlice(b);
+  hold.open();
+  await settle(b);
+  expect(b.current().turns.length).toBeGreaterThan(part);
+  onlyThePick(b, cb, stripFrames(b, cb));
+}, 30000);
+
+test("timeline view: a session read again from the top with the Trajectory open, its last rows built a slice a draw: the strip waits until they are built and is then the whole session's", async () => {
+  const file = fixture("--extra", "40");
+  const { b, cb } = await dockPane(file);
+  shownFrame(b, cb);
+  const hold = heldRead(file);
+  H.extractHook = hold.hook;
+  b.retryRead(cb);
+  await hold.mid(b);
+  expect(oneFrame(b, cb)).toBe(READ_WAIT);
+  const part = b.ledgerMemo.totals.heads.length;
+  expect([b.unread(), part > 5, part]).toEqual([true, true, b.current().turns.length]);
+  oneTurnASlice(b);
+  hold.open();
+  await settle(b);
+  expect(b.current().turns.length).toBeGreaterThan(part);
+  onlyThePick(b, cb, stripFrames(b, cb));
+}, 30000);
+
+test("timeline view: a new session after a clear read with no frame drawn meanwhile, its rows built a slice a draw: the strip waits until they are built, not drawn of the turns before the clear alone", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "30"));
+  shownFrame(b, cb);
+  const was = b.sessions;
+  expect(b.tlModel.heads.length).toBe(b.current().turns.length);
+  oneTurnASlice(b);
+  b.adopt({ kind: "found", id: "made-up-second", file: fixture("--extra", "12"), live: true }, cb);
+  // The same array, one session more.
+  expect([b.sessions === was, b.sessions.length]).toEqual([true, 2]);
+  await settle(b);
+  onlyThePick(b, cb, stripFrames(b, cb));
+}, 30000);
+
+test("timeline view: one event after the whole session is read, its rows built a slice a draw: the strip is drawn in every frame, of the rows it had until they are built, then of the new ones", async () => {
+  const file = fixture("--extra", "30");
+  const all = linesOf(file);
+  let n = Math.floor(all.length / 2);
+  while (!JSON.parse(all[n]).message?.content?.some?.((x) => x.type === "tool_use")) n++;
+  const { b, cb, lines } = await wholeThen(file, n);
+  const was = b.tlModel.heads;
+  const ver = b.current().version;
+  writeLines(file, lines.slice(0, n + 1));
+  b.read(cb);
+  await until(() => !b.reading, "the read to end");
+  expect(b.current().version).toBeGreaterThan(ver);
+  const seen = stripFrames(b, cb);
+  const heads = b.ledgerMemo.totals.heads;
+  expect([heads === was, seen.length > 5]).toEqual([false, true]);
+  expect(seen.map((x) => told(x, [[was, "the rows it had"], [heads, "the new ones"]]))).toEqual([...new Array(seen.length - 1).fill("the rows it had"), "the new ones"]);
+  wholeStrip(b, cb);
+}, 30000);
+
+test("timeline view: a live session read whole that grows by an event, by turns and by a read of several calls, its rows built a slice a draw: the strip is drawn in every frame, while each call of a read is out and after it", async () => {
+  const file = fixture("--extra", "40");
+  const total = linesOf(file).length;
+  const third = Math.floor(total / 3);
+  const { b, cb, lines } = await wholeThen(file, third);
+  const seen = [];
+  let calls = 0;
+  for (const [upTo, parts] of [[third + 1, 1], [third + 2, 1], [third + 20, 1], [total, 2]]) {
+    writeLines(file, lines.slice(0, upTo));
+    const from = b.current().offset;
+    const size = statSync(file).size;
+    const gates = [];
+    H.extractHook = async (args) => {
+      if (args[1] !== file) return null;
+      calls++;
+      if (parts > 1 && Number(args[2]) === from) args[3] = String(Math.ceil((size - from) / 2));
+      await new Promise((r) => gates.push(r));
+      return null;
+    };
+    b.read(cb);
+    // Each call held while two frames are drawn.
+    while (b.reading) {
+      await until(() => gates.length || !b.reading, "the read to go on");
+      seen.push(oneFrame(b, cb), oneFrame(b, cb));
+      for (const go of gates.splice(0)) go();
+    }
+    expect(b.current().offset).toBe(size);
+    seen.push(...stripFrames(b, cb));
+    wholeStrip(b, cb);
+  }
+  expect(calls).toBeGreaterThan(4);
+  expect(seen.length).toBeGreaterThan(40);
+  expect(seen.filter((x) => typeof x === "string")).toEqual([]);
+}, 30000);
+
+test("timeline view: a read that fails after the whole session was read, its rows built a slice a draw: the strip stays, of the turns it had; read again, it is drawn in every frame and of them all", async () => {
+  const file = fixture("--extra", "30");
+  const { b, cb, lines } = await wholeThen(file, Math.floor(linesOf(file).length / 2));
+  const was = b.tlModel.heads;
+  writeLines(file, lines);
+  H.extractHook = async (args) => (args[1] === file ? { code: 3, stdout: "", stderr: "made-up failure" } : null);
+  b.read(cb);
+  await until(() => b.current().error && !b.reading, "the read to fail");
+  expect(b.current().loaded).toBe(true);
+  expect(stripFrames(b, cb).map((x) => told(x, [[was, "the turns it had"]]))).toEqual(["the turns it had"]);
+  H.extractHook = null;
+  b.read(cb);
+  await until(() => !b.reading && !b.current().error, "the read to end");
+  const seen = stripFrames(b, cb);
+  const heads = b.ledgerMemo.totals.heads;
+  expect(seen.map((x) => told(x, [[was, "the turns it had"], [heads, "them all"]]))).toEqual([...new Array(seen.length - 1).fill("the turns it had"), "them all"]);
+  wholeStrip(b, cb);
+}, 30000);
+
+test("timeline view: a read that fails with part of its bytes applied after the whole session was read: the strip waits for the read alone and asks for no draw; read again from the top, it is the whole session's", async () => {
+  const file = fixture("--extra", "30");
+  const { b, cb, lines } = await wholeThen(file, Math.floor(linesOf(file).length / 2));
+  writeLines(file, lines);
+  // What an interrupt in the middle of a chunk leaves: the next read starts from the top.
+  b.current().partial = true;
+  H.extractHook = async (args) => (args[1] === file ? { code: 3, stdout: "", stderr: "made-up failure" } : null);
+  b.read(cb);
+  await until(() => b.current().error && !b.reading, "the read to fail");
+  expect([Boolean(b.current().loaded), b.current().turns.length]).toEqual([false, 0]);
+  expect(stripFrames(b, cb)).toEqual([READ_WAIT]);
+  for (let k = 0; k < 3; k++) expect([oneFrame(b, cb), rowAsks(cb) + buildAsks(cb)]).toEqual([READ_WAIT, 0]);
+  H.extractHook = null;
+  b.buildMax = () => 1e9;
+  b.retryRead(cb);
+  await settle(b);
+  shownFrame(b, cb);
+  wholeStrip(b, cb);
+}, 30000);
+
+test("timeline view: a read that stalls twice after the whole session was read, its rows built a slice a draw: the strip stays, of the turns it had, and after a read that ends is drawn in every frame and of them all", async () => {
+  const file = fixture("--extra", "30");
+  const { b, cb, lines } = await wholeThen(file, Math.floor(linesOf(file).length / 2));
+  const was = b.tlModel.heads;
+  writeLines(file, lines);
+  const gates = [];
+  H.extractHook = async (args) => {
+    if (args[1] === file) await new Promise((r) => gates.push(r));
+    return null;
+  };
+  b.read(cb);
+  for (const stalls of [1, 2]) {
+    await until(() => gates.length === stalls, "the read's call to be out");
+    expect(stripFrames(b, cb).map((x) => told(x, [[was, "the turns it had"]]))).toEqual(["the turns it had"]);
+    // No heartbeat for long: the 1 s timer drops the read, and starts it again the first time.
+    b.readBeat = 1;
+    b.watchRead(cb);
+    expect([b.readStalls, b.reading]).toEqual([stalls, stalls === 1]);
+    expect(stripFrames(b, cb).map((x) => told(x, [[was, "the turns it had"]]))).toEqual(["the turns it had"]);
+  }
+  expect([Boolean(b.current().error), b.current().loaded]).toEqual([true, true]);
+  H.extractHook = null;
+  for (const go of gates.splice(0)) go();
+  b.read(cb);
+  await until(() => !b.reading && !b.current().error, "the read to end");
+  const seen = stripFrames(b, cb);
+  const heads = b.ledgerMemo.totals.heads;
+  expect(seen.map((x) => told(x, [[was, "the turns it had"], [heads, "them all"]]))).toEqual([...new Array(seen.length - 1).fill("the turns it had"), "them all"]);
+  wholeStrip(b, cb);
 }, 30000);
 
 // ---- the last turn's bars over the turns before ----
