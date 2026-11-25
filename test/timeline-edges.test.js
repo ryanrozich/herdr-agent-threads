@@ -509,129 +509,146 @@ test("timeline model: an event in the running turn that keeps its places counts 
 
 // ---- a seeded fuzz of the strip's draws ----
 // FUZZ_RUNS made-up sessions, each drawn by tlDraw as the pane draws it, over changes between
-// draws. The seed is fixed, so each run of the test draws the same sessions; a failure names its
-// run and the changes so far. Shapes, by the run's number: one in eight starts EMPTY, one in eight
-// with ONE turn, the rest with 2 to 400 turns (256 turns of 4 steps and more are past
-// TL_BUILD_BARS); each is drawn twice before anything changes. About half start from nothing, so
-// the first draws wait for the bounded build; the others from a whole model. A draw's build has 1
-// to 6 looks at the clock. Changes, up to 12 a run, up to 3 draws after each: working on and off,
-// an event in the last turn (a call more, its last call open or ended), the last turn ended, a
-// turn added, a clear (no turns), another session picked, another width, the clock a little on
-// and far on (the running turn's room steps). What holds in every draw: nothing throws; it waits
-// only with no strip; a strip shown is of that draw's heads, with their places; the press and
-// the numbers answer. At the end: every build ends in 400 draws; a strip with no running turn is a
-// whole build's, field for field; with one, its places are under 3 TL_SLACK px from a whole
-// build's, and the spans, marks, ticks, breaks and growing bars on them a whole layout's there.
+// draws. The seed is fixed, so every run of this test draws the same sessions; a failure names
+// its run and the changes planned. The shapes, by the run's number: one in eight starts EMPTY, one
+// in eight with ONE turn, the rest with 2 to 601 turns of four steps (from 257 they are past
+// TL_BUILD_BARS); each is drawn at least twice before anything changes. The last turn runs: young
+// with its events a few seconds in, with an open call, or 16 days old. About half start from
+// nothing, so the first draws wait for the bounded build; the others from a whole model. A draw's
+// build has 1 to 6 looks at the clock. The changes, one or more a run, up to three draws after
+// each: working on and off, another width, the last turn ended, an event in it, the clock a
+// little on and far on (the running turn's room steps), a turn added, a clear (no turns) and
+// another session picked, in a build or out of one.
+// What holds: nothing throws; a draw waits only with no strip; a strip shown is of that draw's
+// heads, with their places; the press and the numbers answer; every build ends. The ended strip
+// with no running turn is a whole build's, field for field (but for the copies the next event is
+// laid out from). With one, its places end under 3
+// TL_SLACK px from a whole build's, and the spans, marks, ticks, breaks and growing bars on them
+// are a whole layout's there.
 // Not covered: zoomed views, the steps scale, the pane's frame and paint, a stopped draw,
 // subagents and more than one call at a time.
 const FUZZ_SEED = 299;
 const FUZZ_RUNS = 320;
-function seeded(seed) {
-  let a = seed >>> 0;
-  return (n) => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return Math.floor((((t ^ (t >>> 14)) >>> 0) / 4294967296) * n);
-  };
-}
-// One session's heads under change: make(n) begins another, of n turns, the last one running.
-function fuzzSession(ri) {
-  const s = { made: 0, done: [], last: null, t0: T0, span: 0, calls: 0, open: false, going: false, heads: [], now: T0 };
-  const key = (i) => `${s.made}:${i}`;
-  const ended = (i, t0, total) => ({
-    kind: "trh", key: key(i), n: i + 1, t0, total, span: total, going: false, cnt: { steps: 4, input: 1, model: 1, tools: 2, failed: 1, user: 1, agent: 0 },
-    steps: [row(key(i), 0, "you", 0, null), row(key(i), 1, "tool", 100, Math.min(total, 5000)), row(key(i), 2, "failed", 5000, Math.min(total, 9000)), row(key(i), 3, "reply", Math.min(total - 1, 10000), total)].map((r) => (r.start > total ? { ...r, start: total, dur: 0 } : r)),
-  });
-  const newest = (total = null) => {
-    const k = key(s.done.length);
-    const steps = [row(k, 0, "you", 0, null)];
-    for (let j = 0; j < s.calls; j++) { const a = Math.min(s.span, 300 * j); steps.push(row(k, j + 1, "tool", a, Math.min(s.span, a + 200))); }
-    steps.push(s.open ? row(k, s.calls + 1, s.going ? "running" : "noresult", s.span, null, true) : row(k, s.calls + 1, "reply", Math.min(s.span, 10000), s.span));
-    s.last = { kind: "trh", key: k, n: s.done.length + 1, t0: s.t0, total, span: s.span, going: s.going, cnt: { steps: steps.length, input: 1, model: s.open ? 0 : 1, tools: s.calls + (s.open ? 1 : 0), failed: 0, user: 1, agent: 0 }, steps };
-    s.heads = [...s.done, s.last];
-  };
-  const begin = (t0) => Object.assign(s, { t0, span: 500 + ri(5000), calls: 1 + ri(3), open: ri(2) === 0, going: true });
-  s.make = (n) => {
-    s.made++;
-    s.done = [];
-    s.last = null;
-    s.heads = [];
-    let t = T0 + s.made * 1e9;
-    for (let i = 0; i < n - 1; i++) { const total = 1000 + ri(ri(3) ? 120000 : 3000000); s.done.push(ended(i, t, total)); t += total + 1000 + ri(100000); }
-    if (n) { begin(t); newest(); }
-    s.now = t + s.span + ri(20000);
-  };
-  s.ops = {
-    on() { if (!s.last) return; s.going = true; newest(); },
-    off() { if (!s.last) return; s.going = false; newest(ri(2) ? null : Math.max(s.span, s.now - s.t0)); },
-    event() { if (!s.last) return; s.span = Math.max(s.span, Math.min(s.now - s.t0, s.span + 4000)); s.calls++; s.open = ri(2) === 0; newest(); },
-    end() { if (!s.last) return; s.going = false; s.open = false; newest(Math.max(1, s.span)); },
-    add() {
-      if (s.last) { s.going = false; newest(Math.max(1, s.span)); s.done = s.heads; }
-      s.now += 1000;
-      begin(s.now);
-      newest();
-    },
-    clear() { s.make(0); },
-    pick() { s.make(ri(400)); },
-    tick() { s.now += ri(60000); },
-    far() { s.now += ri(4000000); },
-  };
-  return s;
-}
-
 test("timeline seeded fuzz: 320 made-up sessions, the empty and the one-turn one among them, over working on and off, events, turns added, clears, picks, widths and the clock, from nothing or not: every draw shows its own heads, no draw throws, every build ends, as a whole build's strip", () => {
-  const ri = seeded(FUZZ_SEED);
+  let seed = FUZZ_SEED;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  const ri = (n) => Math.floor(rnd() * n);
+  const DAY = 86400000;
+  const WIDTHS = [1370, 1143, 700, 300, 41];
+  const OPS = ["on", "off", "width", "finish", "event", "tick", "tick", "tick", "tick", "bigtick", "add", "add", "clear", "pick"];
+  const ended = (i, t0) => {
+    const key = `0:${i}`;
+    const tot = 1000 + ri(ri(3) ? 120000 : 3000000);
+    return {
+      kind: "trh", key, n: i + 1, t0, total: tot, span: tot, going: false, cnt: { steps: 4, input: 1, model: 1, tools: 2, failed: 1, user: 1, agent: 0 },
+      steps: [row(key, 0, "you", 0, null), row(key, 1, "tool", 100, Math.min(tot, 5000)), row(key, 2, "failed", 200, Math.min(tot, 9000)), row(key, 3, "reply", Math.min(tot - 1, 10000), tot)],
+    };
+  };
+  const newest = (i, t0, kind, going, span) => {
+    const key = `0:${i}`;
+    const base = { kind: "trh", key, n: i + 1, t0, total: null, cnt: { steps: 3, input: 1, model: 1, tools: 1, failed: 0, user: 1, agent: 0 } };
+    if (kind === "open") return { ...base, span: 6000, going, steps: [row(key, 0, "you", 0, null), row(key, 1, "tool", 1000, 5000), row(key, 2, going ? "running" : "noresult", 6000, null, true)] };
+    return { ...base, span, going, steps: [row(key, 0, "you", 0, null), row(key, 1, "tool", Math.min(span, 1000), Math.min(span, 1500000)), row(key, 2, "reply", Math.min(span, 10000), span)] };
+  };
   const wrong = [];
-  const seen = { empty: 0, one: 0, cold: 0, add: 0, clear: 0, pick: 0, off: 0, waits: 0, over: 0, kept: 0, whole: 0 };
+  const seen = { cold: 0, waits: 0, over: 0, add: 0, clear: 0, pick: 0, clearIn: 0, pickIn: 0, whole: 0, kept: 0 };
+  const least = { empty: 99, one: 99 };
   for (let run = 0; run < FUZZ_RUNS && wrong.length < 5; run++) {
-    const s = fuzzSession(ri);
-    const shape = run % 8 === 0 ? "empty" : run % 8 === 1 ? "one" : "some";
-    s.make(shape === "empty" ? 0 : shape === "one" ? 1 : 2 + ri(399));
-    const widths = [1370, 1143, 700, 300, 41];
-    let cw = widths[ri(5)];
+    const how = run % 8 === 0 ? "empty" : run % 8 === 1 ? "one" : "some";
+    let n = how === "some" ? 1 + ri(600) : 0;
+    let t = T0;
+    let done = [];
+    for (let i = 0; i < n; i++) { done.push(ended(i, t)); t += 1000 + ri(200000); }
+    const kind = ["live", "live", "live", "open", "grown"][ri(5)];
+    let lt0 = t;
+    let span = kind === "grown" ? 60000 : 500 + ri(5000);
+    let now = lt0 + (kind === "grown" ? 16 * DAY : kind === "open" ? 6000 + ri(600000) : span + ri(20000));
+    let cw = WIDTHS[ri(5)];
+    let going = true;
+    let last = how === "empty" ? null : newest(n, lt0, kind, true, span);
+    let heads = last ? [...done, last] : [];
     const cold = ri(2) === 0;
-    const plan = [shape, s.heads.length, cw, cold ? "from nothing" : "from a model"];
-    let t = 0;
-    const clock = () => ++t;
     let M = null;
     let J = null;
-    const say = (what) => wrong.push(`run ${run} (${plan.join(", ")}): ${what}`);
+    let looks = 0;
+    let draws = 0;
+    const clock = () => ++looks;
+    const plan = [];
+    const say = (what) => wrong.push(`run ${run} (${how}, ${kind}, ${cold ? "from nothing" : "from a model"}: ${plan.join(" ")}): ${what}`);
     const draw = () => {
-      const D = TL.tlDraw(M, J, s.heads, cw, s.now, t + 1 + ri(6), clock);
-      ({ M, J } = D);
+      const D = TL.tlDraw(M, J, heads, cw, now, looks + 1 + ri(6), clock);
+      M = D.M;
+      J = D.J;
+      draws++;
       if (D.wait !== !M) say(`waits ${D.wait} with ${M ? "a strip" : "none"}`);
       if (D.wait) seen.waits++;
       if (!M) return;
       if (J) seen.over++;
-      if (M.heads !== s.heads || M.geo.turns.length !== s.heads.length || M.L.turns !== M.geo.turns || M.geo.turns.some((x, i) => x.key !== s.heads[i].key)) say("a strip of other heads");
-      for (const lane of TL.TL_LANES) for (const x of [0, M.cw / 3, M.cw - 1]) TL.timelineHit(M.L, M.heads, x, lane, M.nowMs, 8);
-      TL.tlNumbers(M.L, M.heads, s.heads.length ? ri(s.heads.length) : undefined);
+      for (const lane of [...TL.TL_LANES, null]) for (const x of [0, M.cw / 3, M.cw - 1]) TL.timelineHit(M.L, M.heads, x, lane, now, lane ? 8 : null);
+      TL.tlNumbers(M.L, M.heads, heads.length ? ri(heads.length) : undefined);
+      if (M.heads !== heads || M.geo.turns.length !== heads.length || M.L.turns !== M.geo.turns || !M.geo.turns.every((x, i) => x.key === heads[i].key)) say("a strip of other heads");
     };
     try {
-      if (!cold) M = TL.timelineModel(null, s.heads, cw, "clock", s.now, null);
-      for (let k = 0; k < 2; k++) draw();
-      if (shape !== "some") seen[shape]++;
       if (cold) seen.cold++;
-      for (let k = ri(13); k > 0; k--) {
-        const op = ["on", "off", "event", "event", "end", "add", "clear", "pick", "width", "tick", "tick", "far"][ri(12)];
-        plan.push(op);
-        if (J && ["add", "clear", "pick", "off"].includes(op)) seen[op]++;
-        if (op === "width") cw = widths[ri(5)];
-        else s.ops[op]();
-        for (let j = ri(4); j > 0; j--) draw();
+      else M = TL.timelineModel(null, heads, cw, "clock", now, null);
+      for (let k = 0; k < 1 + ri(14); k++) plan.push(OPS[ri(14)]);
+      for (let k = 0; k < 2; k++) draw();
+      if (how !== "some") least[how] = Math.min(least[how], draws);
+      for (const op of plan) {
+        if (op in seen) seen[op]++;
+        if (J && `${op}In` in seen) seen[`${op}In`]++;
+        if (op === "clear") {
+          n = 0;
+          done = [];
+          last = null;
+          heads = [];
+        } else if (op === "pick") {
+          n = ri(600);
+          t = T0 + 7 * DAY;
+          done = [];
+          for (let i = 0; i < n; i++) { done.push(ended(i, t)); t += 1000 + ri(200000); }
+          lt0 = t;
+          now = lt0 + span + ri(20000);
+          last = newest(n, lt0, kind, true, span);
+          going = true;
+          heads = [...done, last];
+        } else if (op === "add") {
+          if (last) {
+            done = [...done, { ...last, going: false, total: Math.max(1, last.span) }];
+            n++;
+          }
+          now += 1000;
+          lt0 = now;
+          span = 500;
+          going = true;
+          last = newest(n, lt0, kind === "grown" ? "live" : kind, true, span);
+          heads = [...done, last];
+        } else if (op === "width") cw = WIDTHS[ri(5)];
+        else if (op === "tick") now += ri(kind === "live" ? 8000 : 60000);
+        else if (op === "bigtick") now += ri(400000);
+        else if (!last) heads = [];
+        else if (op === "on" || op === "off") {
+          going = op === "on";
+          last = newest(n, lt0, kind, going, span);
+          if (!going && rnd() < 0.5) last = { ...last, total: Math.max(span, now - lt0) };
+          heads = [...heads.slice(0, -1), last];
+        } else if (op === "finish") heads = [...heads.slice(0, -1), { ...last, going: false, total: Math.max(1, last.span) }];
+        else if (op === "event") {
+          if (kind === "live" && now - lt0 > span) span = now - lt0;
+          last = newest(n, lt0, kind, going, span);
+          heads = [...heads.slice(0, -1), last];
+        }
+        for (let k = 0; k < ri(4); k++) draw();
       }
       draw();
-      for (let k = 0; k < 400 && (J || !M); k++) draw();
+      for (let k = 0; k < 3000 && (J || !M); k++) draw();
       if (J || !M) { say("a build that does not end"); continue; }
       draw();
-      const W = TL.timelineModel(null, s.heads, cw, "clock", s.now, null);
-      if (!s.heads.at(-1)?.going) { seen.whole++; sameStrip(M, W); continue; }
+      const W = TL.timelineModel(null, heads, cw, "clock", now, null);
+      if (!heads.at(-1)?.going) { seen.whole++; sameStrip({ ...M, L: { ...M.L, cut: null } }, { ...W, L: { ...W.L, cut: null } }); continue; }
       seen.kept++;
       expect([M.cw, M.geo.stale, Math.abs(M.geo.total - W.geo.total) < 3 * TL.TL_SLACK]).toEqual([cw, undefined, true]);
-      const Y = TL.timelineLayout(s.heads, cw, "clock", s.now, null, M.geo);
+      const Y = TL.timelineLayout(heads, cw, "clock", now, null, M.geo);
       const laid = (L) => [[...L.spans].sort(), L.fails, L.ticks, L.gaps, L.grow];
       expect(laid(M.L)).toEqual(laid(Y));
     } catch (e) {
@@ -639,8 +656,8 @@ test("timeline seeded fuzz: 320 made-up sessions, the empty and the one-turn one
     }
   }
   expect(wrong).toEqual([]);
-  // What the seed covered: each empty and each one-turn start drawn twice; from nothing with draws
-  // that waited; builds over a strip; turns, clears, picks and working off while a build ran.
-  expect([seen.empty, seen.one]).toEqual([FUZZ_RUNS / 8, FUZZ_RUNS / 8]);
-  expect([seen.cold > 100, seen.waits > 100, seen.over > 50, seen.add > 3, seen.clear > 3, seen.pick > 3, seen.off > 3, seen.kept > 50, seen.whole > 50]).toEqual([true, true, true, true, true, true, true, true, true]);
+  // What the seed covered; a shape under its floor is named with its count.
+  const floor = { cold: 100, waits: 50, over: 20, add: 50, clear: 25, pick: 25, clearIn: 2, pickIn: 2, whole: 25, kept: 25 };
+  expect(Object.entries(floor).filter(([k, v]) => seen[k] < v).map(([k, v]) => `${k} ${seen[k]} under ${v}`)).toEqual([]);
+  expect([least.empty >= 2 && least.empty < 99, least.one >= 2 && least.one < 99]).toEqual([true, true]);
 }, 60000);
