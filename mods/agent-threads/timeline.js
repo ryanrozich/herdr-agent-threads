@@ -76,7 +76,7 @@ function* tracksGen(h, S) {
     calls.push(i);
     starts.push(r.start);
   }
-  if (!inOrder) calls = yield* byStart(calls, starts, S);
+  if (!inOrder) calls = yield* byKey(calls, starts, S);
   let out = null;
   let end0 = -Infinity;
   for (const i of calls) {
@@ -95,12 +95,14 @@ function* tracksGen(h, S) {
   }
   return out;
 }
-// calls by their starts, the one listed first at equal starts: a merge sort, so a build can stop
-// inside it (S, as tracksGen).
-function* byStart(calls, starts, S) {
-  const n = calls.length;
-  let from = calls.map((_, p) => p);
-  let to = new Array(n);
+// items by their keys, the one listed first at equal keys: a merge sort, so a build can stop
+// inside it (S, as tracksGen). Both arrays are the caller's to give up: they are written over.
+function* byKey(items, keys, S) {
+  const n = items.length;
+  let a = items;
+  let ka = keys;
+  let b = new Array(n);
+  let kb = new Array(n);
   for (let w = 1; w < n; w *= 2) {
     for (let lo = 0; lo < n; lo += 2 * w) {
       const mid = Math.min(lo + w, n);
@@ -112,12 +114,15 @@ function* byStart(calls, starts, S) {
           if (S.work >= TL_BUILD_BARS) { S.work = 0; yield 0; }
           S.work++;
         }
-        to[k] = j >= hi || (i < mid && starts[from[i]] <= starts[from[j]]) ? from[i++] : from[j++];
+        const m = j >= hi || (i < mid && ka[i] <= ka[j]) ? i++ : j++;
+        b[k] = a[m];
+        kb[k] = ka[m];
       }
     }
-    [from, to] = [to, from];
+    [a, b] = [b, a];
+    [ka, kb] = [kb, ka];
   }
-  return from.map((p) => calls[p]);
+  return a;
 }
 // Step i's box from its row (itemBox), on track (0 or 1).
 function stepBox(h, i, track, tx, w, wall, scale, len, upTo = null) {
@@ -469,9 +474,10 @@ function tlTail(P, heads, was, G = P.geo) {
 // marks, its growing bars, its ticks and the break after it. S: the layout's state (timelineLayout).
 // false once the turn is past the strip's end and its margin. A generator: inside a wide turn
 // it yields 0 (no turn walked) before a row once the step's work (S.work: rows read, spans laid
-// and their joins' work) reaches TL_BUILD_BARS, so a build step can end inside a turn; the
-// result is the same as laid out in one go. A turn under 2 px looks at it before each span it
-// lays. So a step is over TL_BUILD_BARS by one row and one span's join at most.
+// and their joins' work, its failure marks sorted and spaced) reaches TL_BUILD_BARS, so a build
+// step can end inside a turn; the result is the same as laid out in one go. A turn under 2 px
+// looks at it before each span it lays. So a step is over TL_BUILD_BARS by one row and one
+// span's join at most.
 function* layTurn(S, ti) {
   const { out, heads, G, z, x0, cw, scale, range, walls, add, M, kept } = S;
   const n = G.turns.length;
@@ -511,6 +517,7 @@ function* layTurn(S, ti) {
     // The turn's tracks, on the clock: the last layout's for the same heading, else worked out.
     let tk = null;
     let marks = null;
+    let marksOrdered = true;
     if (scale !== "steps") {
       tk = kept?.get(h);
       if (tk === undefined) tk = yield* tracksGen(h, S);
@@ -533,15 +540,21 @@ function* layTurn(S, ti) {
       S.work += add(range && !(ip != null && ip >= range.ia && ip <= range.ib) ? `${k}|o` : k, b.x0, b.x1, Boolean(b.open));
       if (r.failed) {
         if (!marks) marks = [];
-        marks.push((b.x0 + b.x1) / 2);
+        const fx = (b.x0 + b.x1) / 2;
+        if (marks.length && fx < marks[marks.length - 1]) marksOrdered = false;
+        marks.push(fx);
       }
     }
     // The turn's failure marks left to right by their bars' centres, where they are drawn (a
     // call run earlier can be listed after a later one), each 6 px or more from the last. So
     // every failed bar has a mark within 6 px of its centre.
     if (marks) {
-      marks.sort((p, q) => p - q);
-      for (const fx of marks) if (fx >= S.failEnd) { out.fails.push(fx); S.failEnd = fx + 6; }
+      if (!marksOrdered) marks = yield* byKey(marks, marks.slice(), S);
+      for (const fx of marks) {
+        if (S.work >= TL_BUILD_BARS) { S.work = 0; yield 0; }
+        S.work++;
+        if (fx >= S.failEnd) { out.fails.push(fx); S.failEnd = fx + 6; }
+      }
     }
     // Ticks inside a wide turn: on the clock its time from the start, by steps its step
     // numbers. Only those in view.

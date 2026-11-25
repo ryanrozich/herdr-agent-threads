@@ -929,3 +929,57 @@ test("timeline tracks in the build: a turn of calls out of the clock's order, wi
     expect([n, k >= Math.floor((n * passes) / 1024)]).toEqual([n, true]);
   }
 });
+
+test("timeline failure marks in the build: a turn of 4,000 failed calls whose centres are out of order has the marks a sort by hand gives, its sort and spacing counted and spread over the build's steps, and nothing sorted whole", () => {
+  // Calls that start in order, 100 ms apart, every other one 10 s long: their centres are out
+  // of order, so the marks are sorted, and the tracks need no sort. "even": all 100 ms long, so
+  // the marks are in order.
+  const n = 4000;
+  const session = (long) => {
+    const key = "0:0";
+    const steps = [row(key, 0, "you", 0, null)];
+    for (let j = 0; j < n; j++) steps.push(row(key, j + 1, "failed", j * 100, j * 100 + (long && j % 2 ? 10000 : 100)));
+    const len = n * 100 + 20000;
+    return [{ kind: "trh", key, n: 1, t0: T0, total: len, span: len, going: false, cnt: { steps: steps.length, input: 1, model: 0, tools: n, failed: n, user: 1, agent: 0 }, steps }, doneTurn(1)];
+  };
+  const real = Array.prototype.sort;
+  let whole = 0;
+  Array.prototype.sort = function (...args) {
+    if (this.length > TL.TL_BUILD_BARS) whole++;
+    return real.apply(this, args);
+  };
+  const built = (heads) => {
+    const J = TL.tlBuildStart(heads, 1440, "clock", T0 + 1e10, null);
+    let M = null;
+    let k = 0;
+    for (; k < 100000 && !M; k++) M = TL.tlBuildGo(J, 0, () => 1);
+    return { M, k };
+  };
+  let even;
+  let odd;
+  try {
+    even = built(session(false));
+    odd = built(session(true));
+  } finally {
+    Array.prototype.sort = real;
+  }
+  expect(whole).toBe(0);
+  // The marks by hand: the drawn bars' centres sorted, each 6 px or more from the last.
+  const h = session(true)[0];
+  const centres = [];
+  for (let i = 1; i <= n; i++) {
+    const b = TL.tlBar(odd.M.L, [h, doneTurn(1)], 0, i, T0 + 1e10);
+    centres.push((b.x0 + b.x1) / 2);
+  }
+  expect(centres.some((c, i) => i > 0 && c < centres[i - 1])).toBe(true);
+  const want = [];
+  let end = -Infinity;
+  for (const c of [...centres].sort((p, q) => p - q)) if (c >= end) { want.push(c); end = c + 6; }
+  expect(want.length).toBeGreaterThan(50);
+  const got = odd.M.L.fails.slice(0, want.length);
+  expect(got.length).toBe(want.length);
+  got.forEach((x, k) => expect(x).toBeCloseTo(want[k], 6));
+  // Each of the sort's 12 passes over the 4,000 marks is counted: at 1,024 a step, 46 steps more
+  // than the same session with its marks in order, less two for where the steps' ends fall.
+  expect(odd.k - even.k).toBeGreaterThanOrEqual(Math.floor((n * Math.ceil(Math.log2(n))) / TL.TL_BUILD_BARS) - 2);
+});
