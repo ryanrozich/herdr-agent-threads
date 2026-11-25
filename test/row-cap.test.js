@@ -3442,3 +3442,76 @@ test("a splice Herdr stops between its version and its note, in the note or just
 // the rows, they have changed under the version a memo holds, rowsSince answers "no change", and
 // the counts asked for before the next build ends are the old rows'.
 test("a splice Herdr stops just after the rows change, before anything else is stored, ends as an unstopped run does, and the changed rows are not taken as known", () => stoppedSplicesEndRight(["spliced"]), 120000);
+
+// ---- a jump made after a wheel brought the chat's end on screen, before the next frame ----
+
+// The frame a wheel brings the end on screen in leaves a step for the next one, "restick": follow
+// again, the newest turn selected (stickCheck, applyStick). The next frame comes with the 120 ms
+// timer at the latest. A jump made meanwhile is the newer word. The step was taken over it: with a
+// window the list showed the jump's turn for one frame, and the window then slid back to its end.
+// Every place here is a turn, or an item, far up from the end.
+const PENDING = {
+  "#5 typed in the search field": { go: (v, cx) => { v.setQuery("#5", cx); } },
+  "a rail jump": { go: (v, cx) => { v.railJump("0:5", cx); } },
+  "a pin's return": {
+    go: (v, cx) => {
+      v.pinnedList = () => [{ key: "0:5", turn: v.findTurn("0:5"), pin: { n: 5 }, s: v.current(), state: "done" }];
+      v.goPin(0, cx);
+    },
+  },
+  // As the Trajectory pane open beside the list (trajPaneOpen, here by hand) writes its turn.
+  "a turn picked in the Trajectory": {
+    go: (v) => {
+      v.terminal = "t-traj";
+      v.trajPaneOpen = () => true;
+      state.shared["threads.turnSel"] = { "t-traj": { key: "0:5", by: "other", at: Date.now() + 1000, pane: "trajectory" } };
+      expect(v.syncSel()).toBe(true);
+    },
+  },
+  "Go to that reply": {
+    go: (v) => {
+      const turn = v.findTurn("0:148");
+      const was = turn.answeredIn;
+      turn.answeredIn = 5;
+      v.goToAnswer(turn);
+      turn.answeredIn = was;
+    },
+  },
+  "Show earlier": { go: (v) => { v.showMore(false); }, at: (v) => v.scrollTo.key },
+  // 100 closed turns past a cap of 60 items, in no window: the newest 59 under the note.
+  "a press on the cut's note": { n: 100, cap: { max: 60 }, go: (v) => { v.capMore("capped"); }, at: (v) => v.scrollTo.key, sel: "0:100" },
+  "#5 typed in the search field, in a session under the cap": { n: 60, cap: null, go: (v, cx) => { v.setQuery("#5", cx); } },
+};
+// The pane with the end brought on screen by a wheel, and the frame after it not drawn yet.
+async function backAtEnd(n, cap) {
+  noPins();
+  const { v, cx } = await capSession(n, cap);
+  const sim = simList(v);
+  openAt(v, cx, sim, 562);
+  sim.wheel(3000);
+  settleList(v, cx, sim);
+  expect([v.follow, sim.last().end, v.bottomShown]).toEqual([false, false, false]);
+  dropTimers(v, cx);
+  // No scroll of the pane's own is settling.
+  v.scrollBusyUntil = 0;
+  sim.wheel(-1e6);
+  draw(v, cx);
+  expect({ step: v.stickStep, end: sim.last().end, follow: v.follow, scrollTo: v.scrollTo ?? null, toBottom: Boolean(v.toBottom) }).toEqual({ step: "restick", end: true, follow: false, scrollTo: null, toBottom: false });
+  return { v, cx, sim };
+}
+// The frames after a jump, each drawn between its asks as Herdr draws them, until all is settled.
+function jumpFrames(v, cx, sim) {
+  H.drawBetweenAsks = true;
+  for (let k = 0; k < 8; k++) probeFrame(v, cx);
+  settleList(v, cx, sim);
+}
+for (const [name, { n = 150, cap = SMALL, go, at = () => "0:5", sel = null }] of Object.entries(PENDING)) {
+  test(`the end brought on screen by a wheel and, before the next frame, ${name}: the list ends at the place it went to, and does not follow`, async () => {
+    const { v, cx, sim } = await backAtEnd(n, cap);
+    go(v, cx);
+    const key = at(v);
+    expect([v.follow, Boolean(v.scrollTo), shownIn(v, sim.last()).includes(key)]).toEqual([false, true, false]);
+    jumpFrames(v, cx, sim);
+    expect({ shows: shownIn(v, sim.last()).includes(key), end: sim.last().end, sel: v.sel, follow: v.follow, toBottom: Boolean(v.toBottom) }).toEqual({ shows: true, end: false, sel: sel ?? key, follow: false, toBottom: false });
+  }, 30000);
+}
