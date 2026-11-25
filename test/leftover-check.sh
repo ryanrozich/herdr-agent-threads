@@ -61,7 +61,12 @@ alive() {
     if [ -n "$new" ]; then
       { limit ps -ww -o pid=,args= -p "$new"; cutoff $?; } |
         R=$run awk 'index($0, ENVIRON["R"]) { print $1 }'
-      folders "$new" | R=$run awk '/^p/ { pid = substr($0, 2) } /^n/ && index($0, ENVIRON["R"]) { print pid }'
+      # The folder, one under it, or on Linux the folder when it is gone; never one whose name
+      # only begins the same.
+      folders "$new" | R=n$run awk '
+        BEGIN { r = ENVIRON["R"] }
+        /^p/ { pid = substr($0, 2) }
+        $0 == r || index($0, r "/") == 1 || $0 == (r " (deleted)") { print pid }'
     fi
   } | sort -u | awk 'FILENAME == ARGV[1] { if ($4 ~ /^Z/) z[$1] = 1; next } !($1 in z)' "$ids" -
 }
