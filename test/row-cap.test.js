@@ -1846,13 +1846,13 @@ function expectOutsideRight(v) {
   expect(o.newer).toBe(turnsText(o.fresh.later, "later"));
   return o.fresh;
 }
-// A session of n short turns where every seventh (3, 10, 17, ...) is a made-up teammate's
-// message, over days of perDay turns.
-async function agentSession(n, cap, perDay = 1000) {
+// A session of n short turns where every seventh (3, 10, 17, ...), or those peerAt names, is a
+// made-up teammate's message, over days of perDay turns.
+async function agentSession(n, cap, perDay = 1000, peerAt = (i) => i % 7 === 3) {
   const ev = [];
   for (let i = 0; i < n; i++) {
     const ts = new Date(Date.UTC(2026, 10, 1 + Math.floor(i / perDay), 9, 0, 0) + i * 1000).toISOString();
-    const peer = i % 7 === 3;
+    const peer = peerAt(i);
     ev.push({ k: "p", o: peer ? "peer" : "human", t: peer ? `<teammate-message teammate_id="helper-a" color="blue" summary="check">Check ${i} done.</teammate-message>` : `Prompt ${i}: check order ${i}.`, ts }, { k: "t", t: `Reply ${i}: the order is fine.` }, { k: "d", ts });
   }
   const r = await scripted(ev);
@@ -2423,6 +2423,43 @@ test("a card opened and closed above the window, and one inside it, keep the cou
   }
 });
 
+test("a build that keeps fewer rows than it changes is not noted: past an older window's end, the turns are counted afresh, and right", async () => {
+  // Teammates' messages from the 81st turn on: the agent messages toggle keeps the rows before
+  // them, the window's among them, and builds the rest again in other numbers.
+  const { v, cx } = await agentSession(150, SMALL, 1000, (i) => i >= 80 && i % 2 === 0);
+  v.jumpLatest(true);
+  frames(v, cx);
+  v.action("first", cx);
+  frames(v, cx);
+  // Every row built again with the rail as it is now (closedLook), as in "a new turn and live
+  // events while the reader sits in an older window".
+  v.rowsKey = null;
+  frames(v, cx);
+  const n = memoReads(v);
+  for (let way = 0; way < 2; way++) {
+    const before = expectOutsideRight(v);
+    const was = v.allRows();
+    const ver = v.baseVer ?? 0;
+    const z = v.win.at.z;
+    n.outside = 0;
+    v.action("agents", cx);
+    frames(v, cx);
+    const reads = n.outside;
+    const now = v.allRows();
+    let K = 0;
+    while (K < was.length && K < now.length && now[K] === was[K]) K++;
+    // The window's end is among the rows kept, so a note would carry its count; the change reads
+    // more rows than it keeps.
+    expect([v.win.at.a, v.win.at.z, v.baseVer ?? 0]).toEqual([0, z, ver]);
+    expect(K).toBeGreaterThanOrEqual(z);
+    expect(now.length + was.length - 2 * K).toBeGreaterThan(K);
+    // No note: the changes since are not known, and every row past the window is read.
+    expect(v.rowsSince(was, ver)).toBe(null);
+    expect(reads).toBeGreaterThanOrEqual(now.length - z);
+    expect(expectOutsideRight(v)).toEqual(before);
+  }
+});
+
 // Rows of made-up kinds over a fixed seed, with day bands, turns and a turn's other rows.
 function madeRows(rnd, n, tag) {
   const kinds = ["day", "turn", "turn", "turn", "md", "head", "md", "wake"];
@@ -2664,6 +2701,54 @@ test("a rail landing's lift 48 ms on, and its end 120 ms on, are dropped by a ne
   expect(two.v.landLift).toBe(lift);
   H.listWindow = null;
 });
+
+// Latest pressed once a landing is taken, before the next frame is drawn: nothing newer has
+// landed and no wheel has come, so only latest itself (toBottom) ends the landing's asks 16 and
+// 48 ms on, and a rail landing's lift. Pressed before the first of them and between the two, each
+// against the same landing left alone. One jump was held past the cut, so it has only its second
+// ask, with a lift; one in a list with no window and no cut has both.
+test("latest pressed after a landing is taken and before the next frame ends the landing's asks 16 and 48 ms on and its lift, and the end shows", async () => {
+  const scenes = {
+    cut: async () => ({ ...(await cutScene()), key: "0:65" }),
+    plain: async () => {
+      const r = await capSession(80);
+      const sim = simList(r.v);
+      r.v.action("first", r.cx);
+      settleList(r.v, r.cx, sim);
+      return { ...r, sim, key: "0:35" };
+    },
+  };
+  for (const scene of ["cut", "plain"]) for (const gone of [0, 16]) for (const press of [false, true]) {
+    const at = `${scene}, ${gone} ms gone, ${press ? "latest" : "left alone"}`;
+    const { v, cx, sim, key } = await scenes[scene]();
+    v.probeDue = () => [];
+    cx.timers = [];
+    v.railJump(key, cx);
+    const asked = scrollsOf(v);
+    for (let k = 0; k < 4 && v.scrollTo; k++) draw(v, cx);
+    expect([at, v.scrollTo]).toEqual([at, null]);
+    const run = (ms) => { const due = cx.timers.filter((x) => x.ms <= ms); cx.timers = cx.timers.filter((x) => x.ms > ms); for (const x of due) x.fn(cx); };
+    const marks = () => [v.landN, v.wheelN ?? 0, v.scrollTo];
+    if (gone) run(gone);
+    const n = asked.length;
+    const then = marks();
+    if (press) v.action("latest", cx);
+    expect([at, Boolean(v.toBottom), marks()]).toEqual([at, press, then]);
+    run(48);
+    const lift = v.landLift ?? 0;
+    if (press) expect([at, asked.slice(n), lift]).toEqual([at, [], 0]);
+    else {
+      expect([at, asked.length > n]).toEqual([at, true]);
+      if (scene === "cut") expect([at, lift > 0, lift]).toEqual([at, true, v.landed.lift]);
+    }
+    delete v.probeDue;
+    if (press) {
+      settleList(v, cx, sim);
+      expect([at, v.follow, sim.last().end, v.landLift ?? 0]).toEqual([at, true, true, 0]);
+    }
+    H.listWindow = null;
+  }
+}, 60000);
 
 // A rail landing Herdr stops as it asks for its lift's end, 120 ms on: its 48 ms timer still sets
 // the lift, before the watch draw (CUT_WATCH_MS) takes the jump on again and lands a second time,
