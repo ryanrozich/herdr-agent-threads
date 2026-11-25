@@ -654,6 +654,24 @@ test("timeline press: with no y inside the lane, where a half-height bar is over
   expect(timelineHit(L, [h], 300, "tools", T0 + 1e7, 4).key).toBe(read.key);
 });
 
+test("timeline press: 4 px down a lane where only a half-height bar is drawn, the press gets that bar as the nearest, though its y is outside it, over a full bar 2 px away", () => {
+  // Read from 2 to 15 s, full height; a Grep started at 10 s, on the half track, to 30 s (8 to
+  // 14 px down). 60 s across 1,200 px: 20 px a second. At 25 s, and at 15.1 s (2 px past the
+  // Read's end), only the Grep is drawn, and a press 4 px down is above it.
+  const h = head(turn(1, [[["Read", "a", 2000, 15000]], [["Grep", "b", 10000, 30000]]]));
+  const L = timelineLayout([h], 1200, "clock", T0 + 1e7);
+  const keyOf = (name) => stepsOf(h).find((it) => it.lane === "tools" && rowsOf(h)[it.i].tool === name).key;
+  const at = (ms, y) => timelineHit(L, [h], (ms / 60000) * 1200, "tools", T0 + 1e7, y).key;
+  expect(stepsOf(h).filter((it) => it.lane === "tools").map((it) => it.track)).toEqual([0, 1]);
+  expect([at(25000, 4), at(15100, 4)]).toEqual([keyOf("Grep"), keyOf("Grep")]);
+  // Where the Read is drawn at that y, the Read.
+  expect(at(12000, 4)).toBe(keyOf("Read"));
+  // On the Grep's own y it is under the press.
+  expect(at(25000, 10)).toBe(keyOf("Grep"));
+  // Past 4 px from every bar, the heading.
+  expect(at(35000, 4)).toBe(h.key);
+});
+
 
 
 
