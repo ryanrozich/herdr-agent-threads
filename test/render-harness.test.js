@@ -245,6 +245,31 @@ test("probeFrame draws between asks in due order: a timer a 16 ms callback sets 
   expect(seq).toEqual(["draw", "16", "draw", "32", "draw", "48", "draw"]);
 });
 
+// A timer due after the frame waits for the frame it is due in: one a 100 ms callback sets for
+// 48 ms on runs 28 ms into the next, and one set for 300 ms runs 60 ms into the third.
+test("probeFrame drawing between asks keeps a timer due after the frame for the frame it is due in, with a draw after it", async () => {
+  const { v, cx } = await pane(fixture("--only", "1"));
+  v.debug = false;
+  const proto = Object.getPrototypeOf(v);
+  const realDue = proto.probeDue;
+  proto.probeDue = () => [];
+  const log = [];
+  v.render = function (c) { log.push("draw"); return proto.render.call(this, c); };
+  try {
+    H.drawBetweenAsks = true;
+    cx.timers = [];
+    cx.timers.push({ ms: 100, fn: (c) => { log.push("100"); c.timer.after(48, () => log.push("148")); } }, { ms: 300, fn: () => log.push("300") });
+    for (const k of [1, 2, 3, 4]) { log.push(`frame ${k}`); probeFrame(v, cx); }
+  } finally {
+    proto.probeDue = realDue;
+    delete v.render;
+    H.drawBetweenAsks = false;
+  }
+  // Runs of draws count as one: the pane's own timers may add draws of their own.
+  const seq = log.filter((x, i) => x !== "draw" || log[i - 1] !== "draw");
+  expect(seq).toEqual(["frame 1", "draw", "100", "draw", "frame 2", "draw", "148", "draw", "frame 3", "draw", "300", "draw", "frame 4", "draw"]);
+});
+
 // Every draw of the frame asks the probe for parts to measure, and each ask spends one of a
 // part's tries: probeFrame answers the asks of every draw it makes, not only the first's.
 test("probeFrame answers the probe's asks from every draw of the frame, the last ask of a part winning", async () => {
