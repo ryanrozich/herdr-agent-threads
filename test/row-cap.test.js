@@ -2240,7 +2240,7 @@ test("a landing's late asks are dropped while a newer jump waits for the rows to
 // before each one, so every press has a draw of its own. The frames after the first that do not
 // show the turn selected in them; then, let go, whether the list shows the turn it ended on.
 async function heldDown(asks) {
-  const { v, cx } = await capSession(80);
+  const { v, cx, s } = await capSession(80);
   const sim = simList(v);
   v.command("search:#5", cx);
   v.command("escape", cx);
@@ -2248,7 +2248,7 @@ async function heldDown(asks) {
   expect([v.sel, cx.timers]).toEqual(["0:5", []]);
   const lost = [];
   for (let k = 1; k <= 60; k++) {
-    asks(v, cx);
+    asks(v, cx, k, s);
     if (k > 1 && !shownIn(v, sim.last()).includes(v.sel)) lost.push(v.sel);
   }
   settleList(v, cx, sim);
@@ -2267,6 +2267,59 @@ test("a key held down, each repeat and its draw before the last landing's ask 16
     draw(v, cx);
     for (const x of late) if (x.ms <= 16) x.fn(cx);
   })).toEqual({ lost: [], end: ["0:65", true] });
+});
+test("a key held down while a turn comes in and then is done: each press lands once, and every frame but the first shows the turn it has reached", async () => {
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  const [p, t, d] = capTurn(80);
+  const landed = [];
+  expect(await heldDown((v, cx, k, s) => {
+    // The newest turn's prompt and first text come in at press 20, and it is done at press 40.
+    if (k === 20) { apply(s, p); apply(s, t); s.version++; }
+    if (k === 40) { apply(s, d); s.version++; }
+    const late = cx.timers;
+    cx.timers = [];
+    const n = v.landN ?? 0;
+    v.action("next", cx);
+    draw(v, cx);
+    landed.push((v.landN ?? 0) - n);
+    expect(v.turnKeys(v.rowsMemo).length).toBe(k < 20 ? 80 : 81);
+    for (const x of late) if (x.ms <= 16) x.fn(cx);
+  })).toEqual({ lost: [], end: ["0:65", true] });
+  expect(landed).toEqual(Array(60).fill(1));
+});
+// The 16 ms ask goes to the turn's row, and the one 48 ms on to the tiles over it.
+test("a key held down onto a turn with pasted images: the ask in its frame and the one 16 ms on put the list at the same place, and the tiles' own comes after them", async () => {
+  const { v, cx } = await capSession(80);
+  const sim = simList(v);
+  Object.assign(v.findTurn("0:32"), { images: [{ path: "x.png" }], shapeKey: null });
+  v.rowsKey = null;
+  v.command("search:#28", cx);
+  v.command("escape", cx);
+  settleList(v, cx, sim);
+  expect([v.sel, v.rows().some((r) => r.key === "imgs:0:32")]).toEqual(["0:28", true]);
+  const asked = scrollsOf(v);
+  for (let k = 0; k < 4; k++) {
+    const late = cx.timers;
+    cx.timers = [];
+    asked.length = 0;
+    v.action("next", cx);
+    draw(v, cx);
+    for (const x of late) if (x.ms <= 16) x.fn(cx);
+  }
+  expect([v.sel, asked.length]).toEqual(["0:32", 1]);
+  // Let go: the frame after the landing's, then the one after its ask 16 ms on.
+  const from = sim.frames.length - 1;
+  draw(v, cx);
+  const due = cx.timers;
+  cx.timers = [];
+  for (const x of due) if (x.ms <= 16) x.fn(cx);
+  draw(v, cx);
+  const at = sim.frames.slice(from).map((f) => Math.round(f.off));
+  expect(at).toEqual(at.map(() => at.at(-1)));
+  expect(shownIn(v, sim.last())).toContain("0:32");
+  for (const x of due) if (x.ms === 48) x.fn(cx);
+  expect(asked.at(-1)).toBe("imgs:0:32");
+  H.listWindow = null;
 });
 test("a key alone asks for its turn once, 16 ms after it lands and not in its frame, and so does the next key", async () => {
   const { v, cx } = await capSession(80);
