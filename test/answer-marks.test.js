@@ -614,6 +614,26 @@ describe("B: work that starts by itself after a row ended", () => {
     expect([prompts(s), replies(s)]).toEqual([["Why does the cart test fail?"], ["One."]]);
   });
 
+  // Red before the fix: the row kept its 40 s estimate. A line about a tick can come between the
+  // row's end and its turn_duration line; that time is the row's, and the tick's work its own.
+  for (const ends of [["hooks", "line", "duration"], ["line", "duration"]]) {
+    test(`Claude Code: the row keeps its turn_duration when a tick's line comes before it (${ends.join(", ")})`, () => {
+      const t = claude();
+      t.prompt("Why does the cart test fail?");
+      t.say("m1", "One.", "end_turn", 40);
+      for (const e of ends) e === "line" ? t.tick(1) : e === "hooks" ? t.hooks() : t.duration(95000);
+      const ended = read(t.file());
+      expect(ended.turns.map((x) => x.durationMs)).toEqual([95000]);
+      t.tool("m2");
+      t.say("m3", "The tick's reply.");
+      t.hooks();
+      t.duration(6000);
+      const s = read(t.file());
+      expect([replies(s), senders(s)]).toEqual([["One.", "The tick's reply."], ["you", "scheduled"]]);
+      expect(s.turns.map((x) => x.durationMs)).toEqual([95000, 6000]);
+    });
+  }
+
   // Red on the base: the command's line becomes a row and takes the tick's work from there on.
   test("Claude Code: a local command typed while a tick works is no row, and the tick keeps its work", () => {
     const t = claudeReplied("One.");

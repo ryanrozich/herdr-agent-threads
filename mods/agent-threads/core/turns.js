@@ -543,7 +543,9 @@ function applyOne(s, e) {
     // A count the row above already has is not work: Codex writes its last one again.
     if ((e.k === "t" && e.t) || e.k === "h" || e.k === "u" || e.k === "e" || (e.k === "m" && !(above && e.id in above.usage))) openSelf(s);
     // A prompt takes the work, and a stop ends it. An end with nothing done leaves no row, and
-    // its time is not the row above's.
+    // its time is not the row above's. A turn_duration that comes while the row above has only
+    // its estimate (case "s") is the row above's real time, and the work still waits.
+    else if (e.k === "d" && e.ms != null && above && s.guess?.turn === above) { /* the row above's */ }
     else if (e.k === "p" || e.k === "i" || e.k === "d" || e.k === "s") {
       s.pendingSelf = null;
       if (e.k === "d" || e.k === "s") return;
