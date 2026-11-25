@@ -2997,15 +2997,16 @@ test("latest pressed after a landing is taken and before the next frame ends the
 // A rail landing Herdr stops as it asks for its lift's end, 120 ms on: its 48 ms timer still sets
 // the lift, before the next draw (a late frame, or the watch, CUT_WATCH_MS) takes the jump on
 // again and lands a second time, asking for both timers. A wheel, a jump with no lift of its own
-// or a rail jump with one comes before the second landing's 48 ms. The second landing's end takes the first one's lift off, and
-// leaves a newer landing's own. A round's timers run in the order they were asked for, or the
-// order they fall due. Returns what the lift was after each of the lift's timers.
+// or a rail jump with one comes before the second landing's 48 ms. The first landing's lift comes
+// off by the end its own 48 ms callback asked for, 72 ms on, or by the second landing's end, and a
+// newer landing's own stays. A round's timers run in the order they were asked for, or the order
+// they fall due. Returns what the lift was after each of the lift's timers a render asked for.
 async function stoppedLift(move, order) {
   const STOP = new Error("stopped by Herdr");
   const { v, cx, sim } = await cutScene();
   v.probeDue = () => [];
   cx.timers = [];
-  const isLift = (x) => String(x.fn).includes("landLift");
+  const isLift = (x) => x.ms !== 72 && String(x.fn).includes("landLift");
   const lifts = () => cx.timers.filter(isLift).map((x) => x.ms);
   const name = new Map();
   const said = [];
@@ -3023,7 +3024,7 @@ async function stoppedLift(move, order) {
   v.bodyNow = function (...a) {
     const after = cx.timer.after;
     cx.timer.after = function (ms, fn) {
-      if (armed && this === cx.timer && ms === 120 && isLift({ fn })) { armed = false; throw STOP; }
+      if (armed && this === cx.timer && ms === 120 && isLift({ ms, fn })) { armed = false; throw STOP; }
       return after.call(this, ms, fn);
     };
     try { return bodyNow.apply(this, a); } finally { cx.timer.after = after; }
@@ -3062,14 +3063,173 @@ for (const order of ["asked", "due"]) {
     const off = { stops: 1, lift: 0, tall: 0 };
     for (const move of [null, "wheel", "jump"]) {
       const { one, said, end } = await stoppedLift(move, order);
-      expect([move, said, end]).toEqual([move, [["first 48", one], ["second 48", one], ["second 120", 0]], off]);
+      expect([move, said, end]).toEqual([move, [["first 48", one], ["second 48", order === "asked" && move ? 0 : one], ["second 120", 0]], off]);
     }
     const { one, own, said, end } = await stoppedLift("lifted", order);
-    expect([said, end]).toEqual([[["first 48", one], ["second 48", one], ...(order === "asked"
+    expect([said, end]).toEqual([[["first 48", one], ["second 48", order === "asked" ? 0 : one], ...(order === "asked"
       ? [["second 120", 0], ["newer 48", own], ["newer 120", 0]]
       : [["newer 48", own], ["second 120", own], ["newer 120", 0]])], off]);
   }, 60000);
 }
+
+// A rail landing on #65, past the cut, its lift's timers asked for: 48 ms on to put it on, 120 to
+// take it off, and 72 more from the first one's own callback. Or stopped by Herdr as it asks for
+// the 120, the render left open and nothing caught but the stop out of the draw. run takes the
+// timers due by ms, in the order they were asked for, or turned round.
+const ofLift = (x) => String(x.fn).includes("landLift");
+async function liftScene({ stop = false } = {}) {
+  const STOP = new Error("stopped by Herdr");
+  const r = await cutScene();
+  const { v, cx } = r;
+  v.probeDue = () => [];
+  cx.timers = [];
+  let armed = stop;
+  const after = cx.timer.after;
+  cx.timer.after = function (ms, fn) {
+    if (armed && ms === 120 && ofLift({ fn })) { armed = false; throw STOP; }
+    return after.call(this, ms, fn);
+  };
+  let stops = 0;
+  const step = () => { try { draw(v, cx); } catch (e) { if (e !== STOP) throw e; stops++; v.renderOpen = true; } };
+  const run = (ms, turned = false) => {
+    const due = cx.timers.filter((x) => x.ms <= ms);
+    cx.timers = cx.timers.filter((x) => x.ms > ms);
+    for (const x of turned ? due.reverse() : due) x.fn(cx);
+  };
+  // The lift's timers out of the queue, in the order they were asked for.
+  const take = () => { const out = cx.timers.filter(ofLift); cx.timers = cx.timers.filter((x) => !ofLift(x)); return out; };
+  const asked = scrollsOf(v);
+  v.railJump("0:65", cx);
+  for (let k = 0; k < 8 && !stops && v.scrollTo; k++) step();
+  const one = v.landed.lift;
+  expect([stops, one > 0, v.landLift ?? 0, cx.timers.filter(ofLift).map((x) => x.ms)]).toEqual([stop ? 1 : 0, true, 0, stop ? [48] : [48, 120]]);
+  return { ...r, one, asked, step, run, take };
+}
+// What is left of a lift, on its own and in the first item's height.
+const liftLeft = (v) => ({ lift: v.landLift ?? 0, tall: v.slotsMemo[0] - Math.ceil(v.sizesMemo[0]) });
+// The frames and the timers after it, until nothing of the landing is left.
+function runOut({ v, step, run }) {
+  for (let k = 0; k < 4; k++) { step(); run(120); }
+  step();
+  H.listWindow = null;
+  return liftLeft(v);
+}
+// A newer rail landing, on #66, with a lift of its own.
+function landNewer({ v, cx, step }) {
+  const n = v.landN;
+  v.railJump("0:66", cx);
+  for (let k = 0; k < 8 && v.scrollTo; k++) step();
+  expect([v.landN, v.landed.lift > 0]).toEqual([n + 1, true]);
+  return v.landed.lift;
+}
+
+// A wheel, or a jump with no lift of its own, after the 48 ms timer and before the stopped draw is
+// drawn again: nothing lands a second time, so the 120 is never asked for again.
+for (const [what, move] of [["a wheel", ({ sim }) => { sim.wheel(-60); }], ["a step up", ({ v, cx }) => { v.action("prev", cx); }]]) {
+  test(`a landing with a lift that Herdr stops as it asks for the lift's end, and ${what} after the lift is put on and before the next draw: no lift is left`, async () => {
+    const r = await liftScene({ stop: true });
+    r.run(48);
+    expect(r.v.landLift).toBe(r.one);
+    move(r);
+    expect(runOut(r)).toEqual({ lift: 0, tall: 0 });
+  }, 30000);
+}
+
+// Both timers late, so both due at once, and delivered either way round. As asked for, the lift
+// goes on and off before a frame is drawn. The other way round it shows for the frame drawn, until
+// the end its own callback asked for.
+test("a landing with a lift whose two timers run late, as they were asked for: no lift is left, and its place is asked for", async () => {
+  const r = await liftScene();
+  const place = r.v.rowsMemo[r.v.landed.j].key;
+  const n = r.asked.length;
+  r.run(120);
+  expect([r.asked.slice(n).includes(place), r.v.landLift ?? 0]).toEqual([true, 0]);
+  expect(runOut(r)).toEqual({ lift: 0, tall: 0 });
+}, 30000);
+test("a landing with a lift whose two timers run late, the end first: the lift shows for a frame and none is left, and its place is asked for", async () => {
+  const r = await liftScene();
+  const place = r.v.rowsMemo[r.v.landed.j].key;
+  const n = r.asked.length;
+  r.run(120, true);
+  expect(r.asked.slice(n)).toContain(place);
+  r.step();
+  expect(liftLeft(r.v)).toEqual({ lift: r.one, tall: Math.ceil(r.one) });
+  expect(runOut(r)).toEqual({ lift: 0, tall: 0 });
+}, 30000);
+
+test("a landing with a lift that Herdr stops as it asks for the lift's end, a wheel, and a newer landing that has put its own lift on: the newer lift stays until its own end", async () => {
+  const r = await liftScene({ stop: true });
+  const { v, cx, sim, run, take } = r;
+  run(48);
+  expect(v.landLift).toBe(r.one);
+  sim.wheel(-60);
+  const old = take();
+  const own = landNewer(r);
+  run(48);
+  expect(v.landLift).toBe(own);
+  for (const x of old) x.fn(cx);
+  expect(v.landLift).toBe(own);
+  run(120);
+  expect(v.landLift).toBe(0);
+  expect(runOut(r)).toEqual({ lift: 0, tall: 0 });
+}, 30000);
+for (const turned of [false, true]) {
+  test(`a landing with a lift whose two timers run late, ${turned ? "the end first" : "as they were asked for"}, after a newer landing has put its own lift on: the newer lift stays until its own end`, async () => {
+    const r = await liftScene();
+    const { v, cx, run, take } = r;
+    const old = take();
+    const own = landNewer(r);
+    run(48);
+    expect(v.landLift).toBe(own);
+    for (const x of turned ? old.reverse() : old) { x.fn(cx); expect(v.landLift).toBe(own); }
+    run(120);
+    expect(v.landLift).toBe(0);
+    expect(runOut(r)).toEqual({ lift: 0, tall: 0 });
+  }, 30000);
+}
+
+// The frames a landing's lift timers ask for, one drawn after each timer that asks: the 48, then
+// its own end and the render's, both due 120 ms on, so in a tie either can come first.
+async function liftFrames(nestedFirst) {
+  const r = await liftScene();
+  const { v, cx, step, take } = r;
+  let notes = 0;
+  cx.notifyHook = () => { notes++; };
+  const [on, end] = take();
+  let frames = 0;
+  const one = (x) => { const n = notes; x.fn(cx); if (notes > n) { frames++; step(); } };
+  one(on);
+  expect(v.landLift).toBe(r.one);
+  const own = take();
+  for (const x of nestedFirst ? [...own, end] : [end, ...own]) one(x);
+  cx.notifyHook = null;
+  expect(runOut(r)).toEqual({ lift: 0, tall: 0 });
+  return frames;
+}
+test("a landing with a lift draws two frames for it, one as it is put on and one as it comes off: the end its own callback asked for, run after the render's, asks for none", async () => {
+  expect(await liftFrames(false)).toBe(2);
+}, 30000);
+test("a landing with a lift, the end its own callback asked for run before the render's and a frame drawn between: three frames, one more than without it", async () => {
+  expect(await liftFrames(true)).toBe(3);
+}, 30000);
+
+// An older landing's lift with no end to come, as when Herdr stops the render between its two asks
+// and the callback too: its ends are dropped here by hand. The next landing's end takes it off,
+// though a wheel kept that landing's own lift from being put on.
+test("a landing's end takes off a lift an older landing left with no end of its own, its ends dropped by hand", async () => {
+  const r = await liftScene();
+  const { v, sim, one, run, take } = r;
+  run(48);
+  expect(v.landLift).toBe(one);
+  take();
+  landNewer(r);
+  sim.wheel(-60);
+  run(48);
+  expect(v.landLift).toBe(one);
+  run(120);
+  expect(v.landLift).toBe(0);
+  expect(runOut(r)).toEqual({ lift: 0, tall: 0 });
+}, 30000);
 
 test("a press's open 300 ms on is dropped by a jump from outside the list made in the wait: a pin's return to #30, or #30 picked in the Trajectory, stays on #30", async () => {
   noPins();
