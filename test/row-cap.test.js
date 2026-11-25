@@ -15,6 +15,7 @@ import {
   lastList,
   openAt,
   pane,
+  paneWith,
   PINS,
   probeFrame,
   rec,
@@ -27,6 +28,7 @@ import {
   state,
   stillAt,
   theme,
+  until,
 } from "./render-harness.js";
 import { capList, LIST_MAX, RowWindow } from "../mods/agent-threads/ui.js";
 
@@ -3213,9 +3215,29 @@ test("a landing with a lift, the end its own callback asked for run before the r
   expect(await liftFrames(true)).toBe(3);
 }, 30000);
 
-// An older landing's lift with no end to come, as when Herdr stops the render between its two asks
-// and the callback too: its ends are dropped here by hand. The next landing's end takes it off,
-// though a wheel kept that landing's own lift from being put on.
+// Herdr stops the draw between its two asks, and then the lift's own callback as it asks for its end:
+// that comes before the lift is put on, so no lift is on with no end to come. The wheel keeps the next
+// draw from landing again.
+test("a landing with a lift that Herdr stops as it asks for the lift's end, and its 48 ms callback as that asks for its own: the lift is not put on, and none is left", async () => {
+  const STOP = new Error("stopped by Herdr");
+  const r = await liftScene({ stop: true });
+  const { v, cx, sim, run } = r;
+  const after = cx.timer.after;
+  let armed = true;
+  cx.timer.after = function (ms, fn) {
+    if (armed && ms === 72 && ofLift({ fn })) { armed = false; throw STOP; }
+    return after.call(this, ms, fn);
+  };
+  expect(() => run(48)).toThrow(STOP);
+  expect([armed, v.landLift ?? 0]).toEqual([false, 0]);
+  sim.wheel(-60);
+  expect(runOut(r)).toEqual({ lift: 0, tall: 0 });
+}, 30000);
+
+// An older landing's lift with no end to come, made by hand: both its ends are dropped. No stop as
+// either is asked for leaves one, since the callback asks for its end before it puts the lift on (the
+// test above). The next landing's end takes it off, though a wheel kept that landing's own lift from
+// being put on.
 test("a landing's end takes off a lift an older landing left with no end of its own, its ends dropped by hand", async () => {
   const r = await liftScene();
   const { v, sim, one, run, take } = r;
@@ -4008,3 +4030,285 @@ for (const [out, leave] of Object.entries(OUT)) {
     expect(got).toEqual(want);
   }, 30000);
 }
+
+// Following alone does not say that the reader is on the newest turn. The way back ends at the Chat's
+// end only for a Trajectory that opened on the newest turn then, or on nothing.
+
+// A search's last match, stepped onto, follows (the matches are the rows then). y closes the search.
+// With slices, the rows after it are built over several draws: the search's are still the list's.
+const search = (v, cx, sim, q) => { v.command(`search:${q}`, cx); settleList(v, cx, sim); };
+const LAST_MATCH = {
+  "Down, then the command": { step: (v, cx) => { v.key(keyEv("down"), cx); } },
+  "latest, then the command": { step: (v, cx) => { v.command("latest", cx); } },
+  "Enter and End, then y": { step: (v, cx, sim) => { v.key(keyEv("enter"), cx); settleList(v, cx, sim); v.key(keyEv("end"), cx); }, into: (v, cx) => { v.key(keyEv("y"), cx); } },
+  "latest, then the command, the rows after the search built over several draws": { step: (v, cx) => { v.command("latest", cx); }, slices: true },
+};
+for (const [how, { step, into = INTO["the command"], slices = false }] of Object.entries(LAST_MATCH)) {
+  test(`a search's last match stepped onto by ${how}, into the Trajectory, and back without a step: the Chat is at that match, centred, and does not follow`, async () => {
+    const { v, cx, sim } = await narrowChat(false);
+    search(v, cx, sim, "order 120");
+    step(v, cx, sim);
+    settleList(v, cx, sim);
+    expect([v.sel, v.follow, v.query]).toEqual(["0:121", true, "order 120"]);
+    const whole = v.buildMax;
+    if (slices) v.buildMax = () => -1;
+    into(v, cx);
+    v.buildMax = whole;
+    expect([v.traj, v.query, v.filtering]).toEqual([true, "", false]);
+    trajFrames(v, cx);
+    v.key(keyEv("y"), cx);
+    expect(asksBack(v)).toEqual(toTurn("0:121"));
+    jumpFrames(v, cx, sim);
+    expect({ ...endsAt(v, sim), shows: shownIn(v, sim.last()).includes("0:121") }).toEqual({ end: false, sel: "0:121", follow: false, shows: true });
+  }, 30000);
+}
+test("control: a search's match not stepped onto, into the Trajectory, and back without a step: the Chat is at that match, centred, and does not follow", async () => {
+  const { v, cx, sim } = await narrowChat(false);
+  search(v, cx, sim, "order 120");
+  expect([v.sel, v.follow]).toEqual(["0:121", false]);
+  v.command("trajectory", cx);
+  trajFrames(v, cx);
+  v.key(keyEv("y"), cx);
+  expect(asksBack(v)).toEqual(toTurn("0:121"));
+  jumpFrames(v, cx, sim);
+  expect({ ...endsAt(v, sim), shows: shownIn(v, sim.last()).includes("0:121") }).toEqual({ end: false, sel: "0:121", follow: false, shows: true });
+}, 30000);
+test("control: a search's last match stepped onto that is the Chat's newest turn, into the Trajectory, and back without a step: the Chat is at its end and follows", async () => {
+  const { v, cx, sim } = await narrowChat(false);
+  search(v, cx, sim, "order 149");
+  v.key(keyEv("down"), cx);
+  settleList(v, cx, sim);
+  expect([v.sel, v.follow]).toEqual([NEWEST, true]);
+  v.command("trajectory", cx);
+  trajFrames(v, cx);
+  v.key(keyEv("y"), cx);
+  expect(asksBack(v)).toEqual(toEnd());
+  jumpFrames(v, cx, sim);
+  expect(endsAt(v, sim)).toEqual(atEnd());
+}, 30000);
+
+// A press on an open turn's text selects it and leaves the Chat following (click).
+async function pressedChat(key) {
+  const r = await narrowChat(false);
+  const { v, cx, sim } = r;
+  if (key !== NEWEST) v.key(keyEv("up"), cx);
+  settleList(v, cx, sim);
+  expect(v.sel).toBe(key);
+  v.key(keyEv("enter"), cx);
+  settleList(v, cx, sim);
+  v.key(keyEv("end"), cx);
+  settleList(v, cx, sim);
+  expect([v.sel, v.follow, sim.last().end]).toEqual([NEWEST, true, true]);
+  const text = shownIn(v, sim.last()).find((k) => k.startsWith(`md:${key}:`));
+  expect(text).toBeDefined();
+  v.click(text, cx);
+  settleList(v, cx, sim);
+  expect([v.sel, v.follow, sim.last().end]).toEqual([key, true, true]);
+  return r;
+}
+const shownTurn = (v, sim, key) => ({ sel: v.sel, follow: v.follow, shows: shownIn(v, sim.last()).includes(key) });
+for (const come of [0, 25]) {
+  test(`a press on the text of the turn before the newest, at the Chat's end and following, into the Trajectory by y${come ? ", 25 turns come meanwhile" : ""}, and back by y: the Chat is at the pressed turn, centred, and does not follow`, async () => {
+    const { v, cx, sim, came } = await pressedChat("0:149");
+    v.key(keyEv("y"), cx);
+    trajFrames(v, cx);
+    if (come) await came(Array.from({ length: come }, (_, i) => capTurn(150 + i)).flat());
+    trajFrames(v, cx);
+    v.key(keyEv("y"), cx);
+    expect(asksBack(v)).toEqual(toTurn("0:149"));
+    jumpFrames(v, cx, sim);
+    expect(shownTurn(v, sim, "0:149")).toEqual({ sel: "0:149", follow: false, shows: true });
+  }, 30000);
+}
+test("control: a press on the newest turn's text, at the Chat's end and following, into the Trajectory by y, and back by y: the Chat is at its end and follows", async () => {
+  const { v, cx, sim } = await pressedChat(NEWEST);
+  v.key(keyEv("y"), cx);
+  trajFrames(v, cx);
+  v.key(keyEv("y"), cx);
+  expect(asksBack(v)).toEqual(toEnd());
+  jumpFrames(v, cx, sim);
+  expect(endsAt(v, sim)).toEqual(atEnd());
+}, 30000);
+
+// A pane opened on a session of 25 turns that is still being read: 20 are in, nothing is selected,
+// and the rest waits for more(). Its keys wait too (openActive), but not the Trajectory's command.
+async function openingChat() {
+  noPins();
+  const turns = Array.from({ length: 25 }, (_, i) => capTurn(i));
+  const pieces = [turns.slice(0, 20).flat(), turns.slice(20).flat()];
+  const size = pieces[0].length + pieces[1].length;
+  let more;
+  const wait = new Promise((done) => { more = done; });
+  H.extractHook = async ([, , offset]) => {
+    const at = Number(offset);
+    if (at > 0) await wait;
+    const piece = at === 0 ? pieces[0] : at < size ? pieces[1] : [];
+    return { code: 0, stdout: [{ k: "file", size }, { k: "chunk", used: piece.length }, ...piece].map((e) => JSON.stringify(e)).join("\n"), stderr: "" };
+  };
+  const { v, cx } = await paneWith(fixture("--only", "1"), null, 0);
+  await until(() => v.current()?.turns.length === 20 && v.readWaiting && v.prefsLoaded, "the first piece of the session");
+  v.debug = false;
+  v.rootH = 600; v.listH = 500;
+  const sim = simList(v);
+  const chat = H.listWindow;
+  H.listWindow = (n) => (v.traj ? { start: 0, end: Math.min(n, 40) } : chat(n));
+  stillAt(v, 402);
+  probeFrame(v, cx);
+  v.command("trajectory", cx);
+  expect([v.traj, v.sel, v.follow, Boolean(v.current().loaded)]).toEqual([true, null, true, false]);
+  trajFrames(v, cx);
+  return { v, cx, sim, read: async () => { more(); await settle(v); } };
+}
+test("the Trajectory opened with nothing selected, a step up and down again onto the newest turn, and back: the Chat is at its end and follows", async () => {
+  const { v, cx, sim, read } = await openingChat();
+  v.key(keyEv("up"), cx);
+  expect(v.turnOfRow(v.tsel)).toBe("0:19");
+  v.key(keyEv("down"), cx);
+  expect(v.tsel).toBe("0:20");
+  v.key(keyEv("y"), cx);
+  expect(asksBack(v)).toEqual(toEnd("0:20"));
+  await read();
+  jumpFrames(v, cx, sim);
+  expect(endsAt(v, sim)).toEqual(atEnd("0:25"));
+}, 30000);
+test("the Trajectory opened with nothing selected, a step up, five more turns read, a step down onto the turn that was the newest, and back: the Chat is at its end on the newest turn and follows", async () => {
+  const { v, cx, sim, read } = await openingChat();
+  v.key(keyEv("up"), cx);
+  await read();
+  trajFrames(v, cx);
+  v.key(keyEv("down"), cx);
+  expect([v.tsel, v.sel, v.current().turns.length]).toEqual(["0:20", "0:25", 25]);
+  v.key(keyEv("y"), cx);
+  expect(asksBack(v)).toEqual(toEnd("0:25"));
+  jumpFrames(v, cx, sim);
+  expect(endsAt(v, sim)).toEqual(atEnd("0:25"));
+}, 30000);
+test("control: the Trajectory opened with nothing selected, and back without a step: the Chat is at its end and follows", async () => {
+  const { v, cx, sim, read } = await openingChat();
+  v.key(keyEv("y"), cx);
+  expect(asksBack(v)).toEqual(toEnd("0:20"));
+  await read();
+  jumpFrames(v, cx, sim);
+  expect(endsAt(v, sim)).toEqual(atEnd("0:25"));
+}, 30000);
+test("control: the Trajectory opened with nothing selected, a step up, and back: the Chat goes to that turn and does not follow", async () => {
+  const { v, cx, read } = await openingChat();
+  v.key(keyEv("up"), cx);
+  v.key(keyEv("y"), cx);
+  expect(asksBack(v)).toEqual(toTurn("0:19"));
+  await read();
+}, 30000);
+
+// As "not followed into the Trajectory, a new session read meanwhile", on the newest turn: the reader
+// scrolled up from the end and went in.
+test("control: not followed into the Trajectory on the newest turn, a new session read meanwhile, and back on the same turn: the Chat goes to that turn and does not follow", async () => {
+  const { v, cx, sim, s, came } = await narrowChat();
+  sim.wheel(1500);
+  settleList(v, cx, sim);
+  expect([v.sel, v.follow]).toEqual([NEWEST, false]);
+  v.openTraj();
+  trajFrames(v, cx);
+  const file = s.file.replace(/[^/]*$/, "next.jsonl");
+  const found = v.pinnedResult();
+  v.pinnedResult = () => ({ ...found, id: "00000000-0000-4000-8000-00000000000b", file });
+  state.terminals[0].turn = "next";
+  await came(capTurn(0), file);
+  expect([v.sessions.length, v.follow, v.sel]).toEqual([2, true, "1:1"]);
+  trajFrames(v, cx);
+  v.leaveTraj();
+  expect(asksBack(v)).toEqual(toTurn(NEWEST));
+}, 30000);
+
+// Each way back goes by its own way in.
+test("into the Trajectory and back three times, not followed on an older turn, then followed on the newest, then on one that came since: each way back goes by its own way in", async () => {
+  const { v, cx, sim, came } = await narrowChat(false);
+  const visit = () => {
+    v.key(keyEv("y"), cx);
+    trajFrames(v, cx);
+    v.key(keyEv("y"), cx);
+    const at = asksBack(v);
+    jumpFrames(v, cx, sim);
+    return at;
+  };
+  v.command("search:#100", cx);
+  v.command("escape", cx);
+  settleList(v, cx, sim);
+  const got = [visit()];
+  v.key(keyEv("end"), cx);
+  settleList(v, cx, sim);
+  got.push(visit());
+  await came(capTurn(150));
+  jumpFrames(v, cx, sim);
+  got.push(visit());
+  expect(got).toEqual([toTurn("0:100"), toEnd(), toEnd("0:151")]);
+}, 30000);
+
+// The end is asked for as latest asks for it (jumpLatest): the newest turn selected, and what would
+// come in its way dropped. A read takes a long change in pieces and selects the newest turn at its end.
+test("followed into the Trajectory, a new turn read in the first piece of a longer read, and back on the same turn: the Chat is at its end on that new turn, and follows the rest", async () => {
+  const { v, cx, sim, s } = await narrowChat(false);
+  v.openTraj();
+  trajFrames(v, cx);
+  const from = s.offset;
+  const pieces = [capTurn(150), capTurn(151)];
+  const size = from + pieces[0].length + pieces[1].length;
+  let more;
+  const wait = new Promise((done) => { more = done; });
+  H.extractHook = async ([, , offset]) => {
+    const at = Number(offset);
+    if (at > from) await wait;
+    const piece = at === from ? pieces[0] : at < size ? pieces[1] : [];
+    return { code: 0, stdout: [{ k: "file", size }, { k: "chunk", used: piece.length }, ...piece].map((e) => JSON.stringify(e)).join("\n"), stderr: "" };
+  };
+  for (const x of cx.everies) x.fn(cx);
+  await until(() => s.turns.length === 151 && v.readWaiting, "the first piece of the read");
+  trajFrames(v, cx);
+  expect([v.sel, v.follow]).toEqual([NEWEST, true]);
+  v.leaveTraj();
+  expect(asksBack(v)).toEqual(toEnd("0:151"));
+  more();
+  await settle(v);
+  jumpFrames(v, cx, sim);
+  expect(endsAt(v, sim)).toEqual(atEnd("0:152"));
+}, 30000);
+
+test("followed into the Trajectory by a step onto a new turn, its jump still to come and the new-turn dot on, and back on the same turn: the end is asked for, the jump dropped and the dot off", async () => {
+  const { v, cx, sim, came } = await narrowChat(false);
+  sim.wheel(1500);
+  settleList(v, cx, sim);
+  await came(capTurn(150));
+  settleList(v, cx, sim);
+  v.key(keyEv("down"), cx);
+  v.key(keyEv("y"), cx);
+  trajFrames(v, cx);
+  expect([v.sel, v.follow, v.unseen, Boolean(v.scrollTo)]).toEqual(["0:151", true, true, true]);
+  v.key(keyEv("y"), cx);
+  expect({ ...asksBack(v), unseen: v.unseen }).toEqual({ ...toEnd("0:151"), unseen: false });
+  jumpFrames(v, cx, sim);
+  expect(endsAt(v, sim)).toEqual(atEnd("0:151"));
+}, 30000);
+
+test("a press's open in its 300 ms, followed again by a wheel to the end, into the Trajectory by its button and back by the Chat button within them: the turn is not opened", async () => {
+  const { v, cx, sim } = await narrowChat(false);
+  sim.wheel(1000);
+  settleList(v, cx, sim);
+  expect([v.follow, v.bottomShown]).toEqual([false, false]);
+  dropTimers(v, cx);
+  const key = shownIn(v, sim.last()).find((k) => /^0:\d+$/.test(k) && k !== NEWEST);
+  v.click(key, cx);
+  const wait = cx.timers.filter((x) => x.ms === 300);
+  cx.timers = cx.timers.filter((x) => x.ms !== 300);
+  expect(wait.length).toBe(1);
+  sim.wheel(-1e6);
+  draw(v, cx);
+  draw(v, cx);
+  expect([v.sel, v.follow, v.openWait?.key]).toEqual([NEWEST, true, key]);
+  INTO["the button"](v, cx);
+  trajFrames(v, cx);
+  expect(v.openWait?.key).toBe(key);
+  OUT["the Chat button"](v, cx);
+  expect({ ...asksBack(v), wait: v.openWait ?? null }).toEqual({ ...toEnd(), wait: null });
+  for (const x of wait) x.fn(cx);
+  jumpFrames(v, cx, sim);
+  expect({ ...endsAt(v, sim), open: v.open.has(key) }).toEqual({ ...atEnd(), open: false });
+}, 30000);
