@@ -2489,7 +2489,7 @@ test("the window's memos carried over one to three changes of the rows give what
   const lastBand = (rows, at) => { for (let i = at; i >= 0; i--) if (rows[i].kind === "day") return i; return -1; };
   const turns = (rows, a, z) => rows.slice(a, z).filter((r) => TURN_ROW.has(r.kind)).length;
   const bad = [];
-  let carried = 0;
+  const carried = { above: 0, below: 0 };
   for (let k = 0; k < 400; k++) {
     const first = madeRows(rnd, 20 + Math.floor(rnd() * 60), `r${k}`);
     // A chain of changes, as the pane notes them (noteRows), every array its own.
@@ -2521,15 +2521,16 @@ test("the window's memos carried over one to three changes of the rows give what
     const a = pick(rows.length);
     const z = a + pick(rows.length - a);
     w.at = { a, z };
-    const c = v.rowsSince(first, 0);
-    if (c && ((a <= c.K && a0 <= c.K) || (a >= c.end && a0 + c.d >= c.end))) carried++;
+    // The counts the carry itself gave, not the edges it could have: null is a count afresh.
+    const carry = w.carry;
+    w.carry = (...args) => { const got = carry.apply(w, args); if (got != null) carried[args.at(-1) > 0 ? "above" : "below"]++; return got; };
     const out = w.outside({ rows, ver: 0, since: (r, ver) => v.rowsSince(r, ver) });
     const want = { earlier: turns(rows, 0, a), later: turns(rows, z, rows.length) };
     if (out.earlier !== want.earlier || out.later !== want.later) bad.push(`count ${k}: ${JSON.stringify(out)} for ${JSON.stringify(want)}`);
   }
   expect(bad).toEqual([]);
-  // Most edges were carried, not counted afresh.
-  expect(carried).toBeGreaterThan(100);
+  // Edges of both kinds were carried, not counted afresh.
+  expect(Math.min(carried.above, carried.below)).toBeGreaterThan(25);
 });
 
 // ---- the routes the window's tests had not tried: a resize, a filter, search steps, a new session ----
