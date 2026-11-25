@@ -9705,14 +9705,14 @@ export default class Threads extends View {
         const lift = p.lift ?? 0;
         this.landed = { key: rows[i]?.key ?? null, ...p };
         first(16, (cx) => { ask(j, "top"); cx.notify(); });
-        // The lift goes with the ask, and only that landing's own lift comes off (liftN): a newer
-        // jump keeps its own, or none.
+        // The lift goes with the ask, and comes off with any lift left by an older landing, whose
+        // own end Herdr stopped before it was asked for (liftN): a newer landing keeps its own.
         cx.timer.after(48, (cx) => {
           if (lift > 0 && still()) { this.landLift = lift; this.liftN = landN; this.fitKey = null; }
           ask(p.j, p.how);
           cx.notify();
         });
-        if (lift > 0) cx.timer.after(120, (cx) => { if (this.liftN !== landN) return; this.landLift = 0; this.fitKey = null; cx.notify(); });
+        if (lift > 0) cx.timer.after(120, (cx) => { if ((this.liftN ?? 0) > landN) return; this.landLift = 0; this.fitKey = null; cx.notify(); });
       } else if (i >= 0) {
         const top = lead(i);
         first(16, (cx) => { ask(i, how); cx.notify(); });
