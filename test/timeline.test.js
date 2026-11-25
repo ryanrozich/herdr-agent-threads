@@ -622,6 +622,11 @@ test("timeline press: reaches 4 px left of a turn exactly 2 px wide, where its u
   expect(timelineHit(L, heads, t.x - 3.9, "tools")).toEqual({ turn: heads[151].key, key: bash.key });
   // Past its bar's start: the long turn's heading.
   expect(timelineHit(L, heads, t.x - 4.1, "tools")).toEqual({ turn: heads[150].key, key: heads[150].key });
+  // With the y inside the lane (slice 1's view): on the Bash's bar, the Bash; above it, the
+  // long turn's heading.
+  const now = T0 + 1e10;
+  expect(timelineHit(L, heads, t.x - 3.9, "tools", now, 10)).toEqual({ turn: heads[151].key, key: bash.key });
+  expect(timelineHit(L, heads, t.x - 3.9, "tools", now, 1)).toEqual({ turn: heads[150].key, key: heads[150].key });
 });
 
 test("timeline press: in one turn, of two bars on the same layer under the press, the narrower, whichever is listed first", () => {
@@ -1041,8 +1046,9 @@ test("timeline press: a turn under 2 px at Fit is drawn as one span per lane; a 
     }
     const T = tlBox(L, 1000);
     // Turn 999's tools span, at least 1 px, runs over turn 1000, which has none: the press
-    // gets the nearest turn with a tools bar within 4 px, 999 (the next test).
+    // gets the turn whose span is under it, 999 (the next test), not at a y above the span.
     expect(timelineHit(L, heads, T.x + T.w / 2, "tools", T0, 4)).toEqual({ turn: "0:999", key: "tr:0:999:2" });
+    expect(timelineHit(L, heads, T.x + T.w / 2, "tools", T0, 1)).toEqual({ turn: "0:1000", key: "0:1000" });
     expect(timelineHit(L, heads, T.x + T.w / 2, "model", T0, 4)).toEqual({ turn: "0:1000", key: "tr:0:1000:3" });
   }
   // A wide turn's bar is its own (itemBox), as before.
@@ -1210,7 +1216,7 @@ test("timeline model: working on or off on the last turn alone places nothing in
   }
 });
 
-test("timeline press: on turns under 1 px whose spans join, a press on a drawn span gets the nearest turn within 4 px that has a bar in the lane, never a turn with none", () => {
+test("timeline press: on turns under 1 px whose spans join, a press on a drawn span gets a turn with a bar in the lane, none nearer, never a turn with none", () => {
   const heads = strip(4000);
   // Every other turn has no tools call, and turns 2000 to 2100 none at all.
   const bare = (q) => ({ ...q, cnt: { ...q.cnt, tools: 0, failed: 0 }, steps: [q.steps[0], q.steps[3]] });
