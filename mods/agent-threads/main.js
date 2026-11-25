@@ -9375,13 +9375,16 @@ export default class Threads extends View {
         if (!p || p.y < minTop) p = landExact(slots, i, Math.round(Math.max(minTop, st.at ?? minTop)));
         const lift = p.lift ?? 0;
         this.landed = { key: rows[i]?.key ?? null, ...p };
+        // The timer that takes the lift off is asked for first: a render Herdr stopped between
+        // the asks (its stop falls at any call) ran the one that sets it and never this one, and
+        // the first row stayed taller for good.
+        if (lift > 0) cx.timer.after(120, (cx) => { this.landLift = 0; this.fitKey = null; cx.notify(); });
         cx.timer.after(16, (cx) => { this.askScroll(j, "top"); cx.notify(); });
         cx.timer.after(48, (cx) => {
           if (lift > 0) { this.landLift = lift; this.fitKey = null; }
           this.askScroll(p.j, p.how);
           cx.notify();
         });
-        if (lift > 0) cx.timer.after(120, (cx) => { this.landLift = 0; this.fitKey = null; cx.notify(); });
       } else if (i >= 0) {
         const top = lead(i);
         cx.timer.after(16, (cx) => { this.askScroll(i, how); cx.notify(); });
