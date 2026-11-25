@@ -1645,7 +1645,10 @@ describe("the pane", () => {
     const s = o.read();
     s.loaded = true;
     v.sessions = [s];
-    const shown = () => { settleRows(v, cx); cx.flush(0); return v.rows().filter((r) => r.kind === "md" && r.turn).map((r) => r.src.trim()); };
+    v.sel = null;
+    v.rowsKey = null;
+    state.terminals[0].status = "working";
+    const shown = () => { settleRows(v, cx); cx.flush(0); v.sel = null; return v.rows().filter((r) => r.kind === "md" && r.turn).map((r) => r.src.trim()); };
     expect([shown(), v.code.has("0:1:1")]).toEqual([["First answer."], true]);
     const { st } = v.code.get("0:1:1");
     const { cutReply } = Object.getPrototypeOf(v);
