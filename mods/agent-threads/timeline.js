@@ -53,14 +53,17 @@ const rowF = (r, track) => (track ? TL_TRACK : 0) | (r.open ? TL_OPEN : 0) | (r.
 // first track to the turn's end; one that starts as the last ends stays on the first.
 export function tlTracks(h) { return runGen(tracksGen(h, null)); }
 // tlTracks' work; with S (a build's state), each row read counts in S.work and the build may
-// stop for the clock once a step has touched TL_BUILD_BARS bars (tlBuildGo).
+// stop for the clock once a step's work reaches TL_BUILD_BARS (tlBuildGo).
 function* tracksGen(h, S) {
   TL_MADE.tracks++;
   const n = stepN(h);
   let out = null;
   let end0 = -Infinity;
   for (let i = 0; i < n; i++) {
-    if (S && ++S.work >= TL_BUILD_BARS) { S.work = 0; yield 0; }
+    if (S) {
+      if (S.work >= TL_BUILD_BARS) { S.work = 0; yield 0; }
+      S.work++;
+    }
     const r = h.steps[i];
     const a = r.start;
     if (a == null || LEDGER_KINDS[r.lk]?.lane !== "tools") continue;
@@ -169,9 +172,11 @@ function roomOf(heads, scale, nowMs) {
   if (scale === "steps" || !h?.going || h.t0 == null) return 0;
   return liveRoom(Math.max(h.span ?? 0, nowMs - h.t0));
 }
-// A build stops after at most this many turns of one pass to look at the clock (tlBuildGo),
-// and inside a turn after this many bars (step rows read), so no step holds more than that,
-// however many calls a turn has.
+// A build stops to look at the clock (tlBuildGo) once a step's work reaches TL_BUILD_BARS:
+// each step row read, each span laid, and each span list entry its join reads, moves or drops
+// (tlJoin), so no step holds more than that and one join, however many calls a turn has or
+// however far back its spans join. It stops too after TL_BUILD_CHUNK turns of one pass: the
+// placing and the turn numbers read turns and lay no span, and a turn read is work too.
 export const TL_BUILD_CHUNK = 256;
 export const TL_BUILD_BARS = 1024;
 // Runs a build to its end: the whole build in one go.
@@ -345,27 +350,34 @@ const takeEnd = (s, b, torn) => {
 // place: after the last span that starts at or left of it, found from the end (one that comes
 // in order takes no step back). It joins that span when it starts within half a pixel of its
 // end, then the spans after it that it reaches; the spans it does not reach are left apart.
+// Gives its work, for a build's count (tlBuildGo): the entries it reads, those it walks back
+// over and the few it compares, and each entry its splices move or drop (a splice reads each).
+// At most four times the list's length, and five.
 export function tlJoin(list, a, b, torn = false) {
   let i = list.length;
   while (i > 0 && list[i - 1][0] > a) i--;
+  let work = list.length - i + 2;
   let s;
-  if (i > 0 && a <= list[i - 1][1] + 0.5) { i--; s = list[i]; takeEnd(s, b, torn); }
-  else { s = torn ? [a, b, 1] : [a, b]; list.splice(i, 0, s); }
+  if (i > 0 && a <= list[i - 1][1] + 0.5) { i--; s = list[i]; work++; takeEnd(s, b, torn); }
+  else { s = torn ? [a, b, 1] : [a, b]; work += list.length - i; list.splice(i, 0, s); }
   // The list was apart, so of the spans s reaches the last ends rightmost.
   let j = i + 1;
   while (j < list.length && list[j][0] <= s[1] + 0.5) j++;
-  if (j > i + 1) { const e = list[j - 1]; takeEnd(s, e[1], e[2] === 1); list.splice(i + 1, j - i - 1); }
+  work += j - i;
+  if (j > i + 1) { const e = list[j - 1]; takeEnd(s, e[1], e[2] === 1); work += list.length - i; list.splice(i + 1, j - i - 1); }
+  return work;
 }
 // range: the focus range as { ia, ib, pos } (the first and last row's place in the ledger's
 // rows, and every row's place): bars outside it get their own spans, with "|o" on the key.
 // The running turn's unfinished bars are not spans: each is in out.grow ({ k, x0, tx, w, wall,
 // t0 }), whose right end tlGrow finds at a given time, so a layout holds while the turn runs.
 const TL_MARGIN = 40;
+// add(k, a, b, torn) gives the span's work: 1, and its join's (tlJoin).
 function spanAdder(out) {
   return (k, a, b, torn = false) => {
     let list = out.spans.get(k);
     if (!list) { list = []; out.spans.set(k, list); }
-    tlJoin(list, a, b, torn);
+    return 1 + tlJoin(list, a, b, torn);
   };
 }
 // A layout's state before its last turn: each span list's length and a copy of its last span
@@ -411,8 +423,10 @@ function tlTail(P, heads, was, G = P.geo) {
 // One turn of a layout: its number's place, its spans (or one per lane under 2 px), its fail
 // marks, its growing bars, its ticks and the break after it. S: the layout's state (timelineLayout).
 // false once the turn is past the strip's end and its margin. A generator: inside a wide turn
-// it yields 0 (no turn walked) each TL_BUILD_BARS bars read (S.work), so a build step can end
-// inside a turn; the result is the same as laid out in one go.
+// it yields 0 (no turn walked) before a row once the step's work (S.work: rows read, spans laid
+// and their joins' work) reaches TL_BUILD_BARS, so a build step can end inside a turn; the
+// result is the same as laid out in one go. A turn under 2 px looks at it before each span it
+// lays. So a step is over TL_BUILD_BARS by one row and one span's join at most.
 function* layTurn(S, ti) {
   const { out, heads, G, z, x0, cw, scale, range, walls, add, M, kept } = S;
   const n = G.turns.length;
@@ -430,9 +444,18 @@ function* layTurn(S, ti) {
     // A turn too narrow for its steps is inside the range when any of its rows is.
     const ih = range ? range.pos.get(h.key) : null;
     const o = range && !(ih != null && ih <= range.ib && ih + stepN(h) >= range.ia) ? "|o" : "";
-    if (c.input) add(`${c.user ? "input|user|0" : c.agent ? "input|agent|0" : "input|context|0"}${o}`, x, x1);
-    if (c.model) add(`model|model|0${o}`, x, x1);
-    if (c.tools) add(`${c.failed ? "tools|failed|0" : "tools|tools|0"}${o}`, x, x1);
+    if (c.input) {
+      if (S.work >= TL_BUILD_BARS) { S.work = 0; yield 0; }
+      S.work += add(`${c.user ? "input|user|0" : c.agent ? "input|agent|0" : "input|context|0"}${o}`, x, x1);
+    }
+    if (c.model) {
+      if (S.work >= TL_BUILD_BARS) { S.work = 0; yield 0; }
+      S.work += add(`model|model|0${o}`, x, x1);
+    }
+    if (c.tools) {
+      if (S.work >= TL_BUILD_BARS) { S.work = 0; yield 0; }
+      S.work += add(`${c.failed ? "tools|failed|0" : "tools|tools|0"}${o}`, x, x1);
+    }
     // A failure mark is drawn at its bar's centre, and spaced by it from the last, 6 px or
     // more, across turns as inside one.
     const fx = x + w / 2;
@@ -449,7 +472,8 @@ function* layTurn(S, ti) {
       out.tracks.set(h, tk);
     }
     for (let i = 0; i < len; i++) {
-      if (++S.work >= TL_BUILD_BARS) { S.work = 0; yield 0; }
+      if (S.work >= TL_BUILD_BARS) { S.work = 0; yield 0; }
+      S.work++;
       const r = h.steps[i];
       const sk = laneKeys(r);
       if (!sk) continue;
@@ -461,7 +485,7 @@ function* layTurn(S, ti) {
         continue;
       }
       const ip = range ? range.pos.get(r.key) : null;
-      add(range && !(ip != null && ip >= range.ia && ip <= range.ib) ? `${k}|o` : k, b.x0, b.x1, Boolean(b.open));
+      S.work += add(range && !(ip != null && ip >= range.ia && ip <= range.ib) ? `${k}|o` : k, b.x0, b.x1, Boolean(b.open));
       if (r.failed) {
         if (!marks) marks = [];
         marks.push((b.x0 + b.x1) / 2);
