@@ -332,7 +332,7 @@ const AGENT_CALL = /^(task|agent|subagent|spawn(_\w+)?|delegate(_\w+)?)$/i;
 function say(w, e) {
   if (!e.a && w.after.marked) {
     takeFinal(w);
-    w.after.note = true;
+    if (w.finals) w.after.note = true;
   } else if (e.a && w.after.note) noteStep(w);
   const after = w.after;
   if (!after.length) w.afterAt = ms(e.ts);
@@ -364,13 +364,16 @@ function takeFinal(w) {
 // reasoning that came before it and not what came since.
 function noteStep(w) {
   const { thought, held } = w.after;
-  const since = w.reasoning?.slice(thought);
-  const more = (w.held ?? 0) - held;
-  if (w.reasoning) w.reasoning = w.reasoning.slice(0, thought);
-  if (w.held) w.held = held;
-  const left = textStep(w, w.after.join("\n\n").trim(), w.reasoning?.join("\n\n") || "") + more;
-  if (since) w.reasoning = since;
-  if (left || w.held) w.held = left;
+  const text = w.after.join("\n\n").trim();
+  if (text) {
+    const since = w.reasoning?.slice(thought);
+    const more = (w.held ?? 0) - held;
+    if (w.reasoning) w.reasoning = w.reasoning.slice(0, thought);
+    if (w.held) w.held = held;
+    const left = textStep(w, text, w.reasoning?.join("\n\n") || "") + more;
+    if (since) w.reasoning = since;
+    if (left || w.held) w.held = left;
+  }
   w.after = [];
   w.afterAt = null;
 }
@@ -565,9 +568,10 @@ function applyOne(s, e) {
     const above = s.turns[s.turns.length - 1];
     // A count the row above already has is not work: Codex writes its last one again.
     if ((e.k === "t" && e.t) || e.k === "h" || e.k === "u" || e.k === "e" || (e.k === "m" && !(above && e.id in above.usage))) openSelf(s);
-    // A prompt takes the work (a command line does not yet), and a stop ends it. An end with nothing done leaves no row, and
-    // its time is not the row above's. A turn_duration that comes while the row above has only
-    // its estimate (case "s") is the row above's real time, and the work still waits.
+    // A prompt takes the work (a command line does not yet), and a stop ends it. An end with
+    // nothing done leaves no row, and its time is not the row above's. A turn_duration that comes
+    // while the row above has only its estimate (case "s") is the row above's real time, and the
+    // work still waits.
     else if (e.k === "d" && e.ms != null && above && s.guess?.turn === above) { /* the row above's */ }
     else if ((e.k === "p" && !e.cmd) || e.k === "i" || e.k === "d" || e.k === "s") {
       s.pendingSelf = null;
@@ -837,7 +841,7 @@ export function reply(turn) {
 // Whether a row has an answer its harness marked. Before the row ends, only such a text is known
 // to be the reply: one with no mark can be a note before the next call.
 export function answered(turn) {
-  return Boolean(turn.finals?.length || turn.after?.marked);
+  return Boolean(turn.finals?.length || (turn.after?.marked && turn.after.some((x) => /\S/.test(x))));
 }
 // Whether a row has a reply, without joining it.
 export function hasReply(turn) {
