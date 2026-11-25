@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { draw, dropTimers, fixture, pane, settleRows, setup } from "./render-harness.js";
+import { draw, dropTimers, fixture, pane, scripted, settleRows, setup } from "./render-harness.js";
 
 setup();
 
@@ -112,4 +112,163 @@ test("a splice of the open turns Herdr stops before its record is made rebuilds 
     got.push([stop, stops, builds, Boolean(v.againOpen), v.open.has(key)]);
   }
   expect(got).toEqual([[false, 0, 1, false, true], [true, 1, 1, false, true]]);
+}, 60000);
+
+// A stop thrown from a timer call while a draw runs (drawing), once (armed), in the method
+// named: before the timer is registered, or just after it (at "after").
+function stopAt(v, cx, name, when = "before") {
+  const s = { armed: true, drawing: false, asked: 0, stops: 0 };
+  const own = v[name];
+  v[name] = function (cx) {
+    const after = cx.timer.after;
+    cx.timer.after = function (...a) {
+      s.asked++;
+      if (s.armed && s.drawing && this === cx.timer && when === "before") { s.armed = false; throw STOP; }
+      const r = after.apply(this, a);
+      if (s.armed && s.drawing && this === cx.timer && when === "after") { s.armed = false; throw STOP; }
+      return r;
+    };
+    try { return own.call(this, cx); } finally { cx.timer.after = after; }
+  };
+  s.frame = () => { s.drawing = true; try { draw(v, cx); } catch (e) { if (e !== STOP) throw e; s.stops++; } finally { s.drawing = false; } };
+  s.settled = async () => { for (let i = 0; i < 6; i++) { s.frame(); cx.flush(0); await settleCx(cx); } };
+  s.done = () => { delete v[name]; };
+  return s;
+}
+
+// An open card's code blocks get their editors when it opens. A code block that comes in later
+// (the running turn's reply grows) is noted as the rows are built, and gets its editor from a
+// timer (flushCode), since an editor cannot be made while drawing: the render marks the timer as
+// asked for (codeTick), then asks for it. A stop between the two left the mark with no timer to
+// clear it, and no code editor was made again in that pane: later code blocks drew as plain
+// text (the 1 s timer's flushCode returns while the mark is set).
+test("a render Herdr stops after it marked the code editors' timer as asked for and before it asked for it still makes the editor of a code block that came in later", async () => {
+  const ts = (s) => `2026-11-01T09:00:${String(s).padStart(2, "0")}.000Z`;
+  const { v, cx, s } = await scripted([{ k: "p", o: "human", t: "Add a total to the cart", ts: ts(0) },
+    { k: "t", t: "The total:\n\n```js\nexport const total = (xs) => xs.reduce((a, x) => a + x, 0);\n```" }, { k: "d", ms: 4000, ts: ts(4) }]);
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  v.debug = false;
+  cx.pending = [];
+  const run = stopAt(v, cx, "flushCode");
+  await run.settled();
+  v.toggle("0:1", cx);
+  await run.settled();
+  const opened = [...v.code.keys()];
+  // The running turn's reply grows by a second code block.
+  apply(s, { k: "t", t: "And its test:\n\n```sh\nbun test cart\n```" });
+  await run.settled();
+  const afterDraws = [...v.code.entries()].map(([k, c]) => [k, Boolean(c.st)]);
+  // A selection change and back.
+  v.action("next", cx);
+  await run.settled();
+  v.action("prev", cx);
+  await run.settled();
+  run.done();
+  expect([run.armed, run.stops, opened, afterDraws, [...v.code.entries()].map(([k, c]) => [k, Boolean(c.st)]), Boolean(v.codeTick)])
+    .toEqual([false, 1, ["0:1:1"], [["0:1:1", true], ["0:1:3", true]], [["0:1:1", true], ["0:1:3", true]], false]);
+});
+
+// A turn's pasted images are decoded by a timer that reads them one prompt at a time
+// (flushImages): the render marks the decode as running (imgBusy), then asks for the timer. A
+// stop between the two left the mark with no timer to clear it, and no image was decoded again
+// in that pane: its tiles stayed empty.
+test("a render Herdr stops after it marked the images' decode as running and before it asked for its timer still decodes the images", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2", "--images"));
+  v.debug = false;
+  v.width = 380;
+  cx.pending = [];
+  const turns = v.current().turns.filter((t) => t.images.length);
+  const run = stopAt(v, cx, "flushImages");
+  const decoded = async () => {
+    for (let i = 0; i < 40 && !turns.every((t) => v.imgState(t) === "ok"); i++) {
+      run.frame(); cx.flush(0); await settleCx(cx);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return turns.map((t) => v.imgState(t));
+  };
+  const got = await decoded();
+  run.done();
+  expect([run.armed, run.stops, got, Boolean(v.imgBusy)]).toEqual([false, 1, ["ok", "ok", "ok"], false]);
+}, 30000);
+
+// flushCalls asks for its timer, then marks the read as running. A stop that falls after the
+// timer is registered and before the mark is set lets the next render ask for a second timer, so
+// two reads run at once. Each timer takes its own job from the queue, and one that finds none
+// clears the mark and stops: each call is read once, and the mark ends cleared.
+test("a render Herdr stops after the calls' timer is registered and before the read is marked as running reads each call once and ends with no mark", async () => {
+  const { v, cx, run: base } = await callsPane();
+  v.sel = "0:1";
+  v.action("deeper", cx);
+  await base.settled();
+  const read = [];
+  let running = 0;
+  let most = 0;
+  v.callDue = [];
+  v.callDue.shift = function () {
+    const job = Array.prototype.shift.call(this);
+    if (job) { read.push(...job.ids); running++; most = Math.max(most, running); }
+    return job;
+  };
+  const pruneCalls = v.pruneCalls;
+  v.pruneCalls = function () { running--; return pruneCalls.call(this); };
+  const run = stopAt(v, cx, "flushCalls", "after");
+  // → opens the groups: their calls are queued (a job a group), and the render that asked for
+  // the read is stopped after its timer was registered. Herdr runs that timer before the next
+  // render (it asks for none after a stopped one), so the first read starts; a render while it
+  // runs finds no mark and asks for a second timer, which starts the second read.
+  v.action("deeper", cx);
+  run.frame();
+  cx.flush(0);
+  run.frame();
+  cx.flush(0);
+  await run.settled();
+  run.done();
+  delete v.pruneCalls;
+  expect([run.armed, run.stops, run.asked, most, read.sort(), base.read(), Boolean(v.callBusy)])
+    .toEqual([false, 1, 2, 2, ["toolu_b1", "toolu_b2", "toolu_b3"], ["ok", "ok", "ok"], false]);
+});
+
+// spliceRows reads againOpen, rebuilds the open turns and clears it with the record. A splice
+// runs inside one draw and no timer runs inside a draw, so the shaping's timer (the one writer
+// of againOpen) can only ask again between draws. Here a splice is stopped before the rebuild
+// (shapeStart) or after it (sizing the rebuilt rows); the shaping's timer then asks again, as
+// it does when the rebuild left parts out of time; the next draw rebuilds the open turn again.
+test("a splice of the open turns Herdr stops before or after the rebuild, with the shaping's timer asking again before the next draw, rebuilds them in the next draw", async () => {
+  const got = [];
+  for (const where of ["shapeStart", "height"]) {
+    const { v, cx } = await pane(fixture("--extra", "2"));
+    v.debug = false;
+    settleRows(v, cx);
+    const key = v.baseRows.filter((r) => r.kind === "turn").at(-1).key;
+    v.toggle(key, cx);
+    settleRows(v, cx);
+    dropTimers(v, cx);
+    let builds = 0;
+    let rebuilt = false;
+    const turnRows = v.turnRows;
+    v.turnRows = function (r, ...a) { const out = turnRows.call(this, r, ...a); if (r?.key === key) { builds++; rebuilt = true; } return out; };
+    let armed = true;
+    let stops = 0;
+    const splice = v.spliceRows;
+    v.spliceRows = function (...a) {
+      const own = this[where];
+      this[where] = function (...b) { if (armed && (where === "shapeStart" || rebuilt)) { armed = false; throw STOP; } return own.apply(this, b); };
+      try { return splice.apply(this, a); } finally { delete this[where]; }
+    };
+    v.otherLeft = 1;
+    v.againOpen = true;
+    v.rowsKey = "again";
+    try { draw(v, cx); } catch (e) { if (e !== STOP) throw e; stops++; }
+    // Between draws: the shaping's timer, as when the rebuild left parts out of time.
+    v.otherLeft = 1;
+    v.againOpen = true;
+    v.rowsKey = v.rowsKey == null ? null : "again";
+    const left = Boolean(v.againOpen);
+    for (let k = 0; k < 6; k++) { draw(v, cx); cx.flush?.(0); }
+    delete v.turnRows;
+    delete v.spliceRows;
+    const at = v.baseIndex.get(key);
+    got.push([where, stops, left, builds, Boolean(v.againOpen), v.open.has(key), v.baseRows[at]?.key === key]);
+  }
+  expect(got).toEqual([["shapeStart", 1, true, 1, false, true, true], ["height", 1, true, 2, false, true, true]]);
 }, 60000);
