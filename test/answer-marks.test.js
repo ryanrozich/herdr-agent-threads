@@ -1747,6 +1747,10 @@ describe("the pane", () => {
     v.syncSel();
     const sent = () => state.shared["threads.turnSel"][v.terminal];
     const first = sent().id;
+    // Sent once: a sync with nothing new writes nothing.
+    const entry = sent();
+    v.syncSel();
+    expect(sent()).toBe(entry);
     // Another turn at that number (a file read again from its start), the selection where it was.
     const turn = v.findTurn(key);
     turn.prompt = "Another question";
