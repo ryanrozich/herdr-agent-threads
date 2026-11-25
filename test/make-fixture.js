@@ -337,7 +337,8 @@ if (agents) {
     origin: { kind: "peer", from: "a0f0e0d0c0b0a0901", senderTaskId: "task-0001", name: "general-purpose" },
     message: { role: "user", content: [{ type: "text", text: 'Another Claude session sent a message: <agent-message from="a0f0e0d0c0b0a0901">The survey of the cart module is done: three call sites use the old price field.</agent-message>' }] },
     uuid: uid(), timestamp: tick(30) });
-  // A meta line from a scheduled turn (no origin object) stays bookkeeping, not a turn.
+  // A meta line from a scheduled turn (no origin object): the schedule's own row, whose
+  // injected reminder text never shows.
   push({ ...base(), type: "user", isMeta: true, promptSource: "system", turnOrigin: "scheduled",
     message: { role: "user", content: [{ type: "text", text: "Reminder: keep the summary short." }] }, uuid: uid(), timestamp: tick(0) });
   assistant([{ type: "text", text: "Thanks, I will update the three call sites." }], { out: 20 });

@@ -35,7 +35,9 @@
 // prompt is the message without its wrapper tags. A typed prompt a sender rule matches is
 // an agent message too (ruleSender).
 
-const OWN_ROW = new Set(["human", "peer", "scheduled", "sdk"]);
+// goal, loop: work the agent started on its own (a Codex goal, a Claude Code loop tick),
+// from a record naming its trigger; the row shows the trigger, never the injected prompt.
+const OWN_ROW = new Set(["human", "peer", "scheduled", "sdk", "goal", "loop"]);
 
 export function newSession(id, file) {
   return {
@@ -249,6 +251,14 @@ function newTurn(s, e) {
     agent: sender.kind !== "you",
     cmd: Boolean(e.cmd),
     after: [],
+    // The harness's own marked answers, in transcript order: each { parts, at, end, id },
+    // text the record called final (Codex phase "final_answer", Claude Code end_turn …).
+    // The reply is these joined; `after` keeps only text no record classified.
+    answers: [],
+    // The message id of the last text seen, so a later block of the message that closed the
+    // row still lands on that row, not on a new one (Claude Code streams one message as
+    // records sharing an id).
+    lastMsg: null,
     tools: 0,
     // Tool calls in background wake-ups after the reply (not in tools), and in the latest one.
     followTools: 0,
@@ -355,6 +365,20 @@ function addStep(s, turn, name, id = null, e = null, owner = turn) {
   g.count++;
 }
 
+// Commentary ahead of a marked answer, or left at a close where answers exist, becomes a
+// Worked text step (addStep's text part alone: no call follows here). Reasoning stays put,
+// for the reply cell it precedes in the Trajectory.
+function flushText(turn) {
+  const text = turn.after.join("\n\n").trim();
+  if (text) {
+    if (turn.steps.length < STEP_MAX) {
+      turn.steps.push({ k: "text", t: text.length > STEP_TEXT ? `${text.slice(0, STEP_TEXT - 1)}…` : text, cut: text.length > STEP_TEXT, ...(turn.afterAt != null ? { at: turn.afterAt } : {}) });
+    } else turn.stepsDropped = (turn.stepsDropped ?? 0) + 1;
+  }
+  turn.after = [];
+  turn.afterAt = null;
+}
+
 // A model turn starts: an "s" estimates its time from here.
 function startModelTurn(s, e) {
   s.since = e.ts ? Date.parse(e.ts) : null;
@@ -362,9 +386,10 @@ function startModelTurn(s, e) {
 }
 
 function openRow(s, e) {
+  s.softClose = false;
   // Later events go to the new row, so an open row with its reply has nothing more to come.
   s.open = s.open.filter((t) => {
-    if (!t.after.length) return true;
+    if (!hasReply(t)) return true;
     t.done = true;
     if (!t.durationMs && t.endTs && t.ts) t.durationMs = Math.max(0, t.endTs - t.ts);
     return false;
@@ -391,10 +416,10 @@ const CUT_OFF = /^No response requested\b|\bhit your\b.*\blimit\b|\b(usage|rate)
 
 // The rows before a turn with a reply that had no reply of their own and were only cut off.
 function linkAnswer(s, cur) {
-  if (!cur.after.length) return;
+  if (!hasReply(cur)) return;
   for (let i = cur.n - 2; i >= 0; i--) {
     const t = s.turns[i];
-    if (t.after.length || t.interrupted || t.answeredBy || !t.errors.length || !t.errors.every((x) => CUT_OFF.test(x))) return;
+    if (hasReply(t) || t.interrupted || t.answeredBy || !t.errors.length || !t.errors.every((x) => CUT_OFF.test(x))) return;
     t.answeredIn = cur.n;
     t.v = s.version;
   }
@@ -405,13 +430,18 @@ function closeOpen(s, cur, end, e) {
   for (const t of s.open) {
     t.done = true;
     if (end) t.endTs = end;
+    // With marked answers, text no record classified is commentary: Worked, not the reply.
+    if (t.answers.length && t.after.length) flushText(t);
     // Answered together with a later prompt: its reply is on that row. Not a turn with a line
     // left out (noteSkip): its reply may be the line itself.
-    if (t !== cur && !t.after.length && !t.skipped) t.answeredBy = cur.n;
+    if (t !== cur && !hasReply(t) && !t.skipped) t.answeredBy = cur.n;
   }
   if (s.clock) for (const t of s.open) clockEnd(s, t, e);
   s.open = [];
   s.followActive = false;
+  // soft: a close an error or a Stop hook made, not the task's end. Work after it is the
+  // same task's (a retry, a hook continuation), so it stays on the closed row, not a new one.
+  s.softClose = Boolean(e.soft);
   linkAnswer(s, cur);
 }
 
@@ -446,7 +476,16 @@ function applyOne(s, e) {
   // of its own for the model, is not what the model is working on, so it never takes a row.
   if (s.pendingCmd && !s.open.length && !s.followActive && (e.k === "t" || e.k === "h" || e.k === "u" || e.k === "m" || e.k === "e")) promote(s);
   if (s.pendingCmd && e.k !== "c" && e.k !== "title" && e.k !== "an" && e.k !== "r" && e.k !== "n" && e.k !== "x") s.pendingCmd = null;
-  const cur = s.turns[s.turns.length - 1];
+  let cur = s.turns[s.turns.length - 1];
+  // Work after every row has closed, with no prompt event the reader knows between them: the
+  // agent started something of its own (a goal, a loop tick, a schedule fire whose record
+  // named no trigger). It is a row of its own, as a task notification already is: what the
+  // agent says then is a reply for the person. Text of the message that closed the row still
+  // belongs to that row (Claude Code streams one message as records sharing an id).
+  if ((e.k === "t" || e.k === "u") && s.seg === "own" && !s.open.length && cur?.done && !s.softClose && !(e.k === "t" && e.id != null && cur.lastMsg === e.id)) {
+    openRow(s, { o: "background", ts: e.ts, t: null });
+    cur = s.turns[s.turns.length - 1];
+  }
   switch (e.k) {
     case "p": {
       if (s.startedAt === null && e.ts) s.startedAt = Date.parse(e.ts);
@@ -498,8 +537,29 @@ function applyOne(s, e) {
     case "t":
       if (!cur || !e.t) return;
       if (s.seg === "own") {
+        // A marked answer: the record itself called this text final. Text no record
+        // classified that sits after the last call joins it (the position rule's reading of
+        // the same blocks), so one answer is never split; only a call between them keeps
+        // text apart, as Worked. A block of the message that already made an answer group
+        // (a streamed message, closed in between) joins that group.
+        if (e.f) {
+          const g = cur.answers[cur.answers.length - 1];
+          if (g && e.id != null && g.id === e.id) {
+            g.parts.push(e.t);
+            g.end = ms(e.ts);
+          } else {
+            const parts = cur.after.length ? [...cur.after, e.t] : [e.t];
+            const at = cur.after.length ? cur.afterAt : ms(e.ts);
+            cur.after = [];
+            cur.afterAt = null;
+            cur.answers.push({ parts, at, end: ms(e.ts), id: e.id ?? null });
+          }
+          cur.lastMsg = e.id ?? null;
+          return;
+        }
         if (!cur.after.length) cur.afterAt = ms(e.ts);
         cur.after.push(e.t);
+        cur.lastMsg = e.id ?? null;
       } else {
         // A background update's text: kept apart, so the reply to the prompt stays the reply.
         if (!cur.latestParts.length) cur.latestAt = ms(e.ts);
@@ -595,6 +655,7 @@ function applyOne(s, e) {
       return;
     }
     case "i": {
+      s.softClose = false;
       if (!s.open.length) { s.followActive = false; return; }
       const last = s.open[s.open.length - 1];
       for (const t of s.open) t.done = true;
@@ -661,6 +722,7 @@ export function rewindTail(s) {
   s.turns.length = Math.min(s.turns.length, s.settled ?? 0);
   s.open = [];
   s.seg = null;
+  s.softClose = false;
   s.pendingCmd = null;
   s.followActive = false;
   s.updateAt = null;
@@ -692,9 +754,20 @@ export function replaced(s, c) {
     || Boolean(s.anchor && "anchor" in c && c.anchor !== s.anchor);
 }
 
+// The reply of a turn: every marked answer, whole and in transcript order, joined as the
+// paragraphs of one reply are. With no mark, the text after the last call (the old rule,
+// for transcripts whose records never say which text is the answer).
 export function reply(turn) {
+  if (turn.answers?.length) {
+    const marked = turn.answers.map((a) => a.parts.join("\n\n").trim()).filter(Boolean).join("\n\n").trim();
+    if (marked) return marked;
+  }
   return turn.after.join("\n\n").trim();
 }
+
+// Whether a turn has a reply of its own, without joining it: the cheap check for row
+// visibility, borrowing and cache boundaries. Whitespace-only answers count as none.
+export const hasReply = (turn) => Boolean(turn.answers?.some((a) => a.parts.some((p) => p.trim())) || turn.after.length);
 
 // What every background update after the reply said, in order, one paragraph each: the
 // text under LATEST UPDATE. The last of turn.updates is always latest, so it is the earlier

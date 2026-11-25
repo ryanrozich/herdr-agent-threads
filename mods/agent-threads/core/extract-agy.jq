@@ -47,8 +47,10 @@ def reply:
    | {k: "u", n: (.value.name // "tool")} + (if ($s | type) == "number" then {id: "s\($s).\(.key)"} else {} end)),
   tokens,
   (if .status == "ERROR" then {k: "e", t: ((.error // "error") | tostring | cap)} else empty end),
+  # soft: a text step with no call ends that answer, not the whole task: the next text step
+  # still belongs to the same turn, so its answer joins the reply rather than opening a row.
   (if ((.content // "") | length) > 0 and ((.tool_calls // []) | length) == 0
-   then {k: "d"} + (if .created_at then {ts: .created_at} else {} end) else empty end);
+   then {k: "d", soft: 1} + (if .created_at then {ts: .created_at} else {} end) else empty end);
 
 (fromjson? // empty) | select(type == "object")
 | if .type == "USER_INPUT" and (.source // "USER_EXPLICIT") == "USER_EXPLICIT" then {k: "d"}, prompt

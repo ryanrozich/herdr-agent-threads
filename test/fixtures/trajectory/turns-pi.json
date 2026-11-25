@@ -13,6 +13,8 @@
   "after": [
    "Three pages still load `legacy-analytics.js`:\n\n1. `pages/checkout.tsx`\n2. `pages/account/orders.tsx`\n3. `pages/help.tsx`"
   ],
+  "answers": [],
+  "lastMsg": null,
   "tools": 1,
   "followTools": 0,
   "wakeTools": 0,
@@ -82,6 +84,8 @@
   "after": [
    "Removed the script tag from all three pages. Nothing else imports it, so `legacy-analytics.js` can go too."
   ],
+  "answers": [],
+  "lastMsg": null,
   "tools": 0,
   "followTools": 0,
   "wakeTools": 0,

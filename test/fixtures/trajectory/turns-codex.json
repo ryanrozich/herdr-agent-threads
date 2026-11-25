@@ -10,9 +10,18 @@
   },
   "agent": false,
   "cmd": false,
-  "after": [
-   "Tax is rounded on each line and then summed, so three lines can round up three times.\n\n- `cart/total.ts` rounds in `lineTax()`\n- The receipt sums the rounded values\n\nRounding once, on the order's tax total, fixes it. Want me to change it?"
+  "after": [],
+  "answers": [
+   {
+    "parts": [
+     "Tax is rounded on each line and then summed, so three lines can round up three times.\n\n- `cart/total.ts` rounds in `lineTax()`\n- The receipt sums the rounded values\n\nRounding once, on the order's tax total, fixes it. Want me to change it?"
+    ],
+    "at": 1793523617000,
+    "end": 1793523617000,
+    "id": null
+   }
   ],
+  "lastMsg": null,
   "tools": 2,
   "followTools": 0,
   "wakeTools": 0,
@@ -53,7 +62,7 @@
     ]
    }
   ],
-  "afterAt": 1793523617000,
+  "afterAt": null,
   "usage": {
    "t48820": {
     "i": 7200,
@@ -91,9 +100,18 @@
   },
   "agent": false,
   "cmd": false,
-  "after": [
-   "Done. `totalTax()` now rounds once, and `cart/total.test.ts` checks three items at $3.33 come to $10.79 with tax. All 214 tests pass."
+  "after": [],
+  "answers": [
+   {
+    "parts": [
+     "Done. `totalTax()` now rounds once, and `cart/total.test.ts` checks three items at $3.33 come to $10.79 with tax. All 214 tests pass."
+    ],
+    "at": 1793523705000,
+    "end": 1793523705000,
+    "id": null
+   }
   ],
+  "lastMsg": null,
   "tools": 2,
   "followTools": 0,
   "wakeTools": 0,
@@ -129,7 +147,7 @@
     ]
    }
   ],
-  "afterAt": 1793523705000,
+  "afterAt": null,
   "usage": {
    "t53010": {
     "i": 5100,

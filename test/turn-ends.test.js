@@ -248,7 +248,7 @@ test("turn_duration replaces the estimate, and is not added to it", () => {
   expect(read(u.file()).turns[0].durationMs).toBe(7000);
 });
 
-test("a Stop hook that sends the model back keeps one row, and the last reply is its reply", () => {
+test("a Stop hook that sends the model back keeps one row, and the reply keeps every answer", () => {
   const t = transcript();
   t.prompt("First question");
   t.say("m1", "Done, I think.");
@@ -259,7 +259,7 @@ test("a Stop hook that sends the model back keeps one row, and the last reply is
   t.duration(20000);
   const s = read(t.file());
   expect(s.turns.length).toBe(1);
-  expect(reply(s.turns[0])).toBe("Done now.");
+  expect(reply(s.turns[0])).toBe("Done, I think.\n\nDone now.");
   expect(s.turns[0].durationMs).toBe(20000);
   expect(s.turns[0].done).toBe(true);
 });
@@ -470,4 +470,114 @@ test("a skill's turn that ended, then a background wake-up still running: done, 
   expect(row.wakeTools).toBe(2);
   // The wake-up's clock starts at its notification, not at the prompt.
   expect(s.followSince).toBeGreaterThan(row.ts + 600 * 1000);
+});
+
+// ---- work the agent starts on its own after a turn completed (TRD-164) ----------------------
+
+test("a Claude loop tick starts a second row without its injected prompt", () => {
+  const t = transcript();
+  t.prompt("Check the build.");
+  t.say("m1", "Build passed.");
+  t.hooks();
+  // A loop tick: a meta line the wakeup source names, with no typed prompt.
+  t.user("Continue the watch loop.", { isMeta: true, wakeupSource: "loop_wakeup" }, 60);
+  t.tool("m2");
+  t.say("m3", "Tests passed.");
+  t.hooks();
+  const s = read(t.file());
+  expect(prompts(s)).toEqual(["Check the build.", ""]);
+  expect(s.turns[1].origin).toBe("loop");
+  expect(s.turns[1].sender).toEqual({ kind: "loop" });
+  expect(s.turns[1].agent).toBe(true);
+  // The completed turn keeps its answer; the tick's reply is the tick row's own.
+  expect(reply(s.turns[0])).toBe("Build passed.");
+  expect(reply(s.turns[1])).toBe("Tests passed.");
+  expect(s.turns[1].tools).toBe(1);
+  expect(s.turns[1].steps.map((st) => st.k)).toEqual(["group"]);
+  expect(s.turns.every((x) => x.done)).toBe(true);
+});
+
+test("a Claude scheduled fire starts a second row without its injected prompt", () => {
+  const t = transcript();
+  t.prompt("Check the build.");
+  t.say("m1", "Build passed.");
+  t.hooks();
+  // A scheduled prompt with only the coarse origin on a meta line: "Scheduled", no text.
+  t.user("Reminder: rerun the suite.", { isMeta: true, turnOrigin: "scheduled" }, 60);
+  t.say("m2", "Suite is green.");
+  t.hooks();
+  const s = read(t.file());
+  expect(prompts(s)).toEqual(["Check the build.", ""]);
+  expect(s.turns[1].sender).toEqual({ kind: "scheduled" });
+  expect(reply(s.turns[0])).toBe("Build passed.");
+  expect(reply(s.turns[1])).toBe("Suite is green.");
+});
+
+test("a wakeup field on a queued command names its trigger row", () => {
+  const t = transcript();
+  t.prompt("Check the build.");
+  t.say("m1", "Build passed.");
+  t.hooks();
+  t.queued("Run the nightly checks.", "human", {}, 60);
+  t.lines[t.lines.length - 1] = t.lines[t.lines.length - 1].replace('"commandMode":"prompt"', '"commandMode":"prompt","wakeupSource":"schedule_wakeup"');
+  t.say("m2", "Nightly checks pass.");
+  t.hooks();
+  const s = read(t.file());
+  expect(prompts(s)).toEqual(["Check the build.", ""]);
+  expect(s.turns[1].sender).toEqual({ kind: "scheduled" });
+  expect(reply(s.turns[1])).toBe("Nightly checks pass.");
+});
+
+test("a long marked answer stays whole when later work follows it", () => {
+  const t = transcript();
+  t.prompt("Check the build.");
+  const long = `All 300 tests pass. ${"Detail: the retry loop now stops after five tries and backs off exponentially. ".repeat(90).trim()}`;
+  t.say("m1", long);
+  t.hooks();
+  t.user("Continue the watch loop.", { isMeta: true, wakeupSource: "loop_wakeup" }, 60);
+  t.tool("m2");
+  t.say("m3", "Still passing.");
+  t.hooks();
+  const s = read(t.file());
+  expect(prompts(s)).toEqual(["Check the build.", ""]);
+  // The reply keeps every character: answer text never passes the Worked step limit.
+  expect(reply(s.turns[0])).toBe(long);
+  expect(s.turns[0].steps).toEqual([]);
+  expect(reply(s.turns[1])).toBe("Still passing.");
+});
+
+test("a later Claude answer record converges with a complete read", () => {
+  const t = transcript();
+  t.prompt("Check the build.");
+  t.tool("m1");
+  // Two blocks of the final message: a partial read can end between them.
+  t.message("m2", [{ type: "text", text: "Build passed." }, { type: "text", text: "Tests passed." }], "end_turn");
+  t.hooks();
+  t.user("Continue the watch loop.", { isMeta: true, wakeupSource: "loop_wakeup" }, 60);
+  t.say("m3", "Rechecked.");
+  t.hooks();
+  const file = t.file();
+  const whole = read(file);
+  const pieced = read(file, 130);
+  expect(pieced.turns.map((t2) => t2.prompt)).toEqual(whole.turns.map((t2) => t2.prompt));
+  expect(pieced.turns.map(reply)).toEqual(whole.turns.map(reply));
+  expect(pieced.turns.map(reply)).toEqual(["Build passed.\n\nTests passed.", "Rechecked."]);
+});
+
+test("commentary ahead of a marked answer becomes work, and the answer stays whole", () => {
+  const t = transcript();
+  t.prompt("Check the build.");
+  t.message("m1", [{ type: "text", text: "Checking the log first." }], null);
+  t.message("m2", [{ type: "text", text: "Build passed." }], "end_turn");
+  t.hooks();
+  const s = read(t.file());
+  expect(reply(s.turns[0])).toBe("Checking the log first.\n\nBuild passed.");
+  // No mark anywhere: the old position rule still reads the same text as the reply.
+  const t2 = transcript();
+  t2.prompt("Check the build.");
+  t2.message("m1", [{ type: "text", text: "Checking the log first." }], null);
+  t2.message("m2", [{ type: "text", text: "Build passed." }], null);
+  t2.hooks();
+  const s2 = read(t2.file());
+  expect(reply(s2.turns[0])).toBe("Checking the log first.\n\nBuild passed.");
 });

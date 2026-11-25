@@ -238,7 +238,7 @@ test("the new extractor gives the old event stream, less repeated usage, non-own
   const file = made("--peer", "--notify");
   const norm = (list) => {
     const seen = new Set();
-    return list.filter((e) => e.k !== "s" && e.k !== "b" && e.k !== "an" && e.k !== "x" && (e.k !== "m" || (!seen.has(e.id) && seen.add(e.id)))).map((e) => (e.cmd ? { ...e, u: undefined } : e)).map((e) => (e.k === "u" ? { ...e, id: undefined, ts: undefined, in: undefined } : e)).map((e) => (e.k === "t" ? { ...e, ts: undefined } : e)).map((e) => JSON.stringify({ ...e, t: e.k === "p" && e.o === "task-notification" ? null : e.t }));
+    return list.filter((e) => e.k !== "s" && e.k !== "b" && e.k !== "an" && e.k !== "x" && (e.k !== "m" || (!seen.has(e.id) && seen.add(e.id)))).map((e) => (e.cmd ? { ...e, u: undefined } : e)).map((e) => (e.k === "u" ? { ...e, id: undefined, ts: undefined, in: undefined } : e)).map((e) => (e.k === "t" ? { ...e, ts: undefined, f: undefined, id: undefined } : e)).map((e) => JSON.stringify({ ...e, t: e.k === "p" && (e.o === "task-notification" || e.t == null) ? null : e.t }));
   };
   expect(norm(events(file))).toEqual(norm(events(file, before)));
 });
@@ -438,10 +438,18 @@ test("a peer hand-back marked isMeta is an agent message named by its origin; ot
     line({ isMeta: true, origin: { kind: "human" }, message: { role: "user", content: "meta with a human origin" } }),
   ].join("\n")}\n`);
   const ev = events(file).filter((e) => e.k === "p");
-  expect(ev).toEqual([{ k: "p", o: "peer", ts: "2026-11-02T03:30:24.000Z", t: hand, n: "general-purpose" }]);
+  // A meta line naming a scheduled trigger is that trigger's row, with no injected text;
+  // auto-continuations and bare meta lines stay dropped.
+  expect(ev).toEqual([
+    { k: "p", o: "peer", ts: "2026-11-02T03:30:24.000Z", t: hand, n: "general-purpose" },
+    { k: "p", o: "scheduled", ts: "2026-11-02T03:30:24.000Z", t: null },
+  ]);
   const s = newSession("s", "f");
   for (const e of events(file)) apply(s, e);
-  expect(s.turns.map((t) => [t.sender, t.agent, t.prompt])).toEqual([[{ kind: "peer", name: "general-purpose" }, true, "Done."]]);
+  expect(s.turns.map((t) => [t.sender, t.agent, t.prompt])).toEqual([
+    [{ kind: "peer", name: "general-purpose" }, true, "Done."],
+    [{ kind: "scheduled" }, true, ""],
+  ]);
   // Without an origin name the message's from is the label; a teammate_id wins over both.
   expect(senderOf("peer", hand).sender.name).toBe("a0f0e0d0c0b0a0901");
   expect(senderOf("peer", '<teammate-message teammate_id="helper-b">x</teammate-message>', "general-purpose").sender.name).toBe("helper-b");
@@ -461,6 +469,7 @@ test("--agents, --commands, --latest and --skill fixtures round trip with sender
     ["peer", "helper-b +1", true, false, "The checkout tests pass on the branch.\n\nDocs are updated."],
     ["peer", null, true, false, "Another Claude session asks: which branch is the release on?"],
     ["peer", "general-purpose", true, false, "The survey of the cart module is done: three call sites use the old price field."],
+    ["scheduled", null, true, false, ""],
     ["scheduled", null, true, false, "Check the nightly build status"],
     ["hc", "t3 lead", true, false, "Review the checkout copy changes"],
     ["you", null, false, false, "Explain what the <hc from=...> tag in the last report means"],
@@ -470,14 +479,14 @@ test("--agents, --commands, --latest and --skill fixtures round trip with sender
     ["you", null, false, false, "Start the nightly export in the background"],
   ]);
   expect(s.turns.every((t) => !t.prompt.startsWith("<"))).toBe(true);
-  expect(s.turns[9].sender.request).toBe(true);
+  expect(s.turns[10].sender.request).toBe(true);
   // the auto-continuation folded into "Fix both bugs" as a background update
   const fix = s.turns[3];
   expect(fix.followups).toBe(1);
   expect(reply(fix)).toBe("Fixed both: the guard now rejects 0 and negative quantities.");
   expect(fix.latest).toBe("Added a test for the zero-quantity case.");
   // the auto-continuation after turn_duration said something new; the reply is unchanged
-  const exp = s.turns[14];
+  const exp = s.turns[15];
   expect(reply(exp)).toBe("Started the export; I will report when it finishes.");
   expect(exp.latest).toBe("The export finished: 1,204 rows, no errors. The file is out/export.csv.");
   expect(exp.tools).toBe(1);
@@ -821,4 +830,99 @@ test("sessionStats: the status line's sums over a session, and nothing for what 
   expect(sessionStats([])).toEqual({ tools: 0, tokens: null, cachePct: null, context: null, contextPct: null });
   // A turn with no usage after one with usage leaves the context at the last response.
   expect(sessionStats([b, { tools: 0, usage: {} }]).context).toBe(1620);
+});
+
+// ---- marked answers: the record, not the position, decides the reply (TRD-164) ------------
+
+test("marked answers survive calls and stay out of Worked", () => {
+  const s = newSession("s", "f");
+  const ev = [
+    { k: "p", o: "human", t: "Fix the cart total", ts: "2026-11-01T09:00:00.000Z" },
+    { k: "t", t: "Answer one: the guard rejects 0.", f: 1, id: "m1", ts: "2026-11-01T09:00:10.000Z" },
+    { k: "u", n: "Read", id: "r1", ts: "2026-11-01T09:00:20.000Z" },
+    { k: "t", t: "Answer two: the tests cover it.", f: 1, id: "m2", ts: "2026-11-01T09:00:30.000Z" },
+    { k: "d", ms: 40000, ts: "2026-11-01T09:00:40.000Z" },
+  ];
+  for (const e of ev) apply(s, e);
+  expect(reply(s.turns[0])).toBe("Answer one: the guard rejects 0.\n\nAnswer two: the tests cover it.");
+  // Worked holds the intervening work only: one call group, and no marked text.
+  expect(s.turns[0].steps.map((st) => st.k)).toEqual(["group"]);
+  expect(s.turns[0].steps[0].calls).toEqual(["Read"]);
+  expect(JSON.stringify(s.turns[0].steps)).not.toContain("Answer one");
+  expect(JSON.stringify(s.turns[0].steps)).not.toContain("Answer two");
+});
+
+test("unclassified text between marked answers becomes work, not reply", () => {
+  const s = newSession("s", "f");
+  const ev = [
+    { k: "p", o: "human", t: "Fix the cart total" },
+    { k: "t", t: "Answer one.", f: 1, id: "m1" },
+    { k: "t", t: "Interim commentary while checking." },
+    { k: "u", n: "Grep" },
+    { k: "t", t: "Answer two.", f: 1, id: "m2" },
+    { k: "d", ms: 1000 },
+  ];
+  for (const e of ev) apply(s, e);
+  expect(reply(s.turns[0])).toBe("Answer one.\n\nAnswer two.");
+  expect(s.turns[0].steps.map((st) => st.k)).toEqual(["text", "group"]);
+  expect(s.turns[0].steps[0].t).toBe("Interim commentary while checking.");
+});
+
+test("an unmarked legacy turn still replies with text after the last call", () => {
+  const s = newSession("s", "f");
+  const ev = [
+    { k: "p", o: "human", t: "Fix the cart total" },
+    { k: "t", t: "Looking at the cart." },
+    { k: "u", n: "Read" },
+    { k: "t", t: "Fixed the rounding." },
+    { k: "d", ms: 1000 },
+  ];
+  for (const e of ev) apply(s, e);
+  expect(reply(s.turns[0])).toBe("Fixed the rounding.");
+  expect(s.turns[0].steps.map((st) => st.k)).toEqual(["text", "group"]);
+});
+
+test("blocks of one streamed message join one answer across a soft close", () => {
+  const s = newSession("s", "f");
+  const ev = [
+    { k: "p", o: "human", t: "Summarise" },
+    { k: "t", t: "First block.", f: 1, id: "m1" },
+    { k: "s", soft: 1 },
+    { k: "t", t: "Second block of the same message.", f: 1, id: "m1" },
+    { k: "d", ms: 1000 },
+  ];
+  for (const e of ev) apply(s, e);
+  expect(s.turns.length).toBe(1);
+  expect(reply(s.turns[0])).toBe("First block.\n\nSecond block of the same message.");
+});
+
+test("an interrupted or failed turn with no marked answer shows no reply", () => {
+  const s = newSession("s", "f");
+  const ev = [
+    { k: "p", o: "human", t: "Fix the cart total" },
+    { k: "u", n: "Read" },
+    { k: "i", ts: "2026-11-01T09:00:20.000Z" },
+    { k: "p", o: "human", t: "Try again" },
+    { k: "u", n: "Read" },
+    { k: "e", t: "API Error: overloaded" },
+    { k: "s", soft: 1 },
+    { k: "d", ms: 1000 },
+  ];
+  for (const e of ev) apply(s, e);
+  expect(s.turns[0].interrupted).toBe(true);
+  expect(reply(s.turns[0])).toBe("");
+  expect(reply(s.turns[1])).toBe("");
+  expect(s.turns[1].errors).toEqual(["API Error: overloaded"]);
+  // A marked answer before the failure is kept.
+  const s2 = newSession("s", "f");
+  const ev2 = [
+    { k: "p", o: "human", t: "Fix the cart total" },
+    { k: "t", t: "Answer one.", f: 1, id: "m1" },
+    { k: "u", n: "Read" },
+    { k: "e", t: "API Error: overloaded" },
+    { k: "s", soft: 1 },
+    { k: "d", ms: 1000 },
+  ];
+  for (const e of ev2) apply(s2, e);
+  expect(reply(s2.turns[0])).toBe("Answer one.");
 });

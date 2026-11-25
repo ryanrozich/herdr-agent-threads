@@ -113,6 +113,29 @@ def notice($t):
       {k: "n", a: ($a | .[0:80]), st: ($st | .[0:40]), ms: (tag($t; "duration_ms") | tonumber? // null), tok: (tag($t; "subagent_tokens") | tonumber? // null)}
     else empty end;
 
+# The trigger that woke the agent to work of its own, where the line says it: "loop" for a
+# loop tick (wakeupSource "loop_wakeup"), "scheduled" for a scheduler fire (wakeupSource
+# "schedule_wakeup", turnOrigin "scheduled", origin.kind "scheduled", or a task-notification
+# origin with the scheduled-trigger subkind). Else null: a line with no trigger of its own.
+def wakeup($l):
+  ($l.wakeupSource // null) as $w
+  | if $w == "loop_wakeup" then "loop"
+    elif $w == "schedule_wakeup" then "scheduled"
+    elif ($l.turnOrigin // null) == "scheduled" then "scheduled"
+    elif ($l.origin.kind? // null) == "scheduled" then "scheduled"
+    elif ($l.origin.kind? // null) == "task-notification" and ($l.origin.subkind? // null) == "scheduled-trigger" then "scheduled"
+    else null end;
+
+# The trigger a wakeup field names on a prompt line of its own (not through origin.kind,
+# whose prompts keep the text they have): a loop tick or a schedule fire with no typed
+# prompt. Else null.
+def wakes($l):
+  ($l.wakeupSource // null) as $w
+  | if $w == "loop_wakeup" then "loop"
+    elif $w == "schedule_wakeup" then "scheduled"
+    elif ($l.turnOrigin // null) == "scheduled" then "scheduled"
+    else null end;
+
 def user_event:
   . as $l
   | ($l.message.content) as $c
@@ -132,7 +155,11 @@ def user_event:
     elif $l.isMeta == true and ($ENV.THREADS_SKILL // "") != "" and $l.uuid == $ENV.THREADS_SKILL then
       {k: "p", o: "human", ts: $l.timestamp, t: ($c | text_of | cap)}
     elif $l.isMeta == true and ($l.origin.kind? // null) != "peer" then
-      if ($l.parentUuid | type) == "string" then {k: "b", pu: $l.parentUuid} else empty end
+      # A meta line the wakeup field names a trigger for (a loop tick, a schedule fire) is
+      # that trigger's prompt: a row of its own with no text, so the injected prompt never
+      # shows in the Chat. Other meta lines stay bookkeeping.
+      (if (wakeup($l) // null) != null then {k: "p", o: wakeup($l), ts: $l.timestamp, t: null}
+       elif ($l.parentUuid | type) == "string" then {k: "b", pu: $l.parentUuid} else empty end)
     else ($c | text_of) as $t
       | if ($t | startswith("[Request interrupted")) then {k: "i", ts: $l.timestamp}
         # Slash commands, in either tag order, with or without origin: local ones (/clear,
@@ -157,6 +184,10 @@ def user_event:
         # counts it.
         elif ($t | startswith("<task-notification>")) then
           notice($t), {k: "p", o: (if ($l.origin.kind? | type) == "string" then $l.origin.kind else "task-notification" end), ts: $l.timestamp, t: null}
+        # A prompt line a wakeup field names a trigger for: that trigger's row, with no
+        # injected text. Before the origin and human branches, so an explicit loop_wakeup
+        # beats a coarse schedule origin.
+        elif (wakes($l) // null) != null then {k: "p", o: wakes($l), ts: $l.timestamp, t: null}
         elif ($l.origin | type) == "object" then
           ($l.origin.kind // "human") as $o
           | {k: "p", o: $o, ts: $l.timestamp, t: (if own($o) then ($t | cap) else null end)} + imgs($l; $c)
@@ -169,7 +200,8 @@ def user_event:
     end;
 
 # A prompt sent while Claude works. A task notification is only its state (notice): its user
-# line, when there is one, counts it, and one in mid-turn changes no row.
+# line, when there is one, counts it, and one in mid-turn changes no row. A queued command a
+# wakeup field names a trigger for is that trigger's row, with no injected text.
 def queued_event:
   . as $l
   | $l.attachment as $a
@@ -177,6 +209,8 @@ def queued_event:
   | ($a.prompt | text_of) as $t
   | {uuid: $l.uuid, imagePasteIds: ($a.imagePasteIds // null)} as $img
   | if ($t | startswith("<task-notification>")) then notice($t)
+    elif (wakes($l) // wakes($a) // null) != null then
+      {k: "p", o: (wakes($l) // wakes($a)), ts: ($l.timestamp // $a.timestamp), t: null}
     elif (own($o) | not) or ($a.commandMode // "prompt") != "prompt" then empty
     elif $a.isMeta == true and $o != "peer" then empty
     elif ($t | length) == 0 and (imgs($img; $a.prompt) == {}) then empty
@@ -193,11 +227,18 @@ def ends_reply:
 def assistant_event:
   . as $l
   | if ($l.message.model == "<synthetic>") or ($l.isApiErrorMessage == true) then
-      {k: "e", t: ($l.message.content | text_of)}, {k: "s", ts: $l.timestamp}
+      # soft: this close is the error's, not the task's: work after it is the same task.
+      {k: "e", t: ($l.message.content | text_of)}, {k: "s", ts: $l.timestamp, soft: 1}
     else
       ( $l.message.content[]?
         | select(type == "object")
-        | if .type == "text" then {k: "t", t: ((.text // "") | cap), ts: $l.timestamp}
+        | if .type == "text" then
+            # Text of a message that ends the reply is a marked answer: it is the turn's
+            # reply wherever later work follows it. id: the message's, so the reader can
+            # join the blocks of one streamed message into one answer.
+            {k: "t", t: ((.text // "") | cap), ts: $l.timestamp}
+            + (if ($l | ends_reply) then {f: 1} else {} end)
+            + (if ($l.message.id | type) == "string" then {id: $l.message.id} else {} end)
           elif ($ARGS.named.reasoning // "") == "1" and (.type == "thinking" or .type == "reasoning" or .type == "analysis" or .type == "redacted_thinking") then
             (if .type == "redacted_thinking" then "" else (.text // .thinking // "") | tostring | gsub("^\\s+|\\s+$"; "") end) as $r
             | if ($r | length) > 0 then {k: "h", t: ($r | cap), ts: $l.timestamp} else {k: "h", w: 1, ts: $l.timestamp} end
@@ -207,7 +248,7 @@ def assistant_event:
         | {k: "m", id: $l.message.id, m: $l.message.model, e: ($l.effort // $l.perTurnEffort // null), ts: $l.timestamp,
            u: ($l.message.usage | {i: (.input_tokens // 0), o: (.output_tokens // 0),
                                    cr: (.cache_read_input_tokens // 0), cc: (.cache_creation_input_tokens // 0)})} ),
-      ( select($l | ends_reply) | {k: "s", ts: $l.timestamp} )
+      ( select($l | ends_reply) | {k: "s", ts: $l.timestamp, soft: 1} )
     end;
 
 # A subagent's own transcript (subagents/agent-<id>.jsonl) marks every line isSidechain: the
@@ -218,7 +259,7 @@ def event:
   elif .type == "user" then user_event
   elif .type == "assistant" then assistant_event
   elif .type == "system" and .subtype == "turn_duration" then {k: "d", ms: .durationMs, ts: .timestamp}
-  elif .type == "system" and .subtype == "stop_hook_summary" then {k: "s", ts: .timestamp}
+  elif .type == "system" and .subtype == "stop_hook_summary" then {k: "s", ts: .timestamp, soft: 1}
   elif .type == "attachment" then (if .attachment.type? == "queued_command" then queued_event else empty end)
   elif .type == "system" and .subtype == "compact_boundary" then {k: "c", ts: .timestamp}
   elif .type == "custom-title" then {k: "title", t: .customTitle}

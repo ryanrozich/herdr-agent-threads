@@ -13,6 +13,8 @@
   "after": [
    "The search page keeps its text in component state, which resets when the page mounts again on back.\n\nKeeping it in the URL (`?q=`) fixes both back and reload:\n\n- `SearchBox` reads `q` from the URL on mount\n- typing updates `q` with `replace`, so it adds no history entry\n\nShall I make the change?"
   ],
+  "answers": [],
+  "lastMsg": null,
   "tools": 2,
   "followTools": 0,
   "wakeTools": 0,
@@ -86,6 +88,8 @@
   "after": [
    "Done. `SearchBox` now keeps the query in `?q=`, and going back restores it."
   ],
+  "answers": [],
+  "lastMsg": null,
   "tools": 1,
   "followTools": 0,
   "wakeTools": 0,

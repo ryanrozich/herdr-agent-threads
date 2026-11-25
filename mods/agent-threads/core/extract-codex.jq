@@ -3,7 +3,9 @@
 #   ctx    the model and effort of the turn about to start  {m, e}
 #   p      a prompt   {o: "human", ts, t}, with pasted images {img: [media types], u: "<turn id>_<ordinal>"}
 #                     a subagent's message  {o: "peer", ts, t, n: its name}
-#   t      assistant text (commentary and the final answer)  {t, ts}
+#   t      assistant text (commentary and the final answer)  {t, ts}, with f: 1 when the
+#          message's phase is "final_answer" (a marked answer: the turn's reply), id: the
+#          message's id when it has one
 #   u      tool call  {n: tool name, id: call id, ts, in: its input in up to 120 characters}
 #   x      a call's output  {id, ts, f: whether it failed}: extract.sh turns each output line
 #          into a short "_x" line before jq, so the output is never parsed here
@@ -81,6 +83,11 @@ def event_msg($l; $p):
     # (or the same model with another window) shows from its first count on.
     + (if ($p.info.model_context_window | type) == "number" and $p.info.model_context_window > 0 then {w: $p.info.model_context_window} else {} end)
   elif $p.type == "task_complete" then {k: "d", ms: ($p.duration_ms // 0), ts: $l.timestamp}
+  # A task the agent started on its own (a goal): its turn gets a row of its own, with no
+  # prompt, so the goal's injected instruction never shows as typed text. A task a person
+  # started ("user") takes no row: its typed prompt is the row.
+  elif $p.type == "task_started" and ($p.turn_attribution.trigger? // null) != null and $p.turn_attribution.trigger != "user" then
+    {k: "p", o: ($p.turn_attribution.trigger | tostring), ts: $l.timestamp, t: null}
   elif $p.type == "turn_aborted" then {k: "i", ts: $l.timestamp}
   elif $p.type == "error" then {k: "e", t: (($p.message // "") | tostring | cap)}
   elif $p.type == "thread_name_updated" and ($p.thread_name | type) == "string" then {k: "title", t: $p.thread_name}
@@ -89,7 +96,11 @@ def event_msg($l; $p):
 def response_item($l; $p):
   if $p.type == "message" and $p.role == "assistant" then
     ($p.content | blocks_text) as $t
-    | if ($t | length) > 0 then {k: "t", t: ($t | cap), ts: $l.timestamp} else empty end
+    | if ($t | length) > 0
+      then {k: "t", t: ($t | cap), ts: $l.timestamp}
+           + (if $p.phase == "final_answer" then {f: 1} else {} end)
+           + (if ($p.id | type) == "string" then {id: $p.id} else {} end)
+      else empty end
   elif $p.type == "reasoning" and ($ARGS.named.reasoning // "") == "1" then
     # The ATIF export only (extract.sh's "reasoning" argument): the summary's text, else the
     # item's own reasoning text (content), else a mark that the reasoning was withheld

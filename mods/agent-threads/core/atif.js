@@ -415,7 +415,7 @@ async function main(argv) {
     const m = day.match(/^(.*)\/(\d{4})\/(\d{2})\/(\d{2})$/);
     const dirs = new Set([day]);
     if (m) {
-      const times = s.turns.flatMap((t) => [t.ts, t.afterAt]).filter((x) => typeof x === "number" && x > 0);
+      const times = s.turns.flatMap((t) => [t.ts, t.afterAt, t.answers?.[0]?.at]).filter((x) => typeof x === "number" && x > 0);
       const lo = Date.UTC(+m[2], +m[3] - 1, +m[4]) - 864e5;
       const hi = Math.max(lo + 2 * 864e5, (times.length ? Math.max(...times) : 0) + 864e5);
       for (let t = lo, k = 0; t <= hi && k < CODEX_DAYS; t += 864e5, k++) {

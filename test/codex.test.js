@@ -319,3 +319,90 @@ test("the context window comes from the newest count, through a model change", (
   st = at([win(900, 480000, 400000, 30, 475000)]);
   expect(st.contextPct).toBe(101);
 });
+
+// ---- goals: work the agent starts on its own after a turn completed (TRD-164) ----------------
+
+function goalRollout() {
+  ordinal = 0;
+  second = 0;
+  const dir = mkdtempSync(join(tmpdir(), "threads-codex-goal-"));
+  const file = join(dir, `rollout-2026-01-02T03-00-00-${ID}.jsonl`);
+  writeFileSync(file, [
+    line("session_meta", { id: ID, cwd: "/home/dev/shop" }),
+    ctx("gpt-5.5-codex", "medium"),
+    prompt("turn-0001", [{ type: "text", text: "Check the build." }]),
+    say("Build passed.", "final_answer"),
+    done(4000),
+    // A goal task starts with no typed prompt: its injected instruction is internal context,
+    // not a row's text. The task makes a tool call before its own answer.
+    line("event_msg", { type: "task_started", id: "task-0009", turn_attribution: { trigger: "goal" } }),
+    context("<goal>Keep watching the build.</goal>"),
+    tool("exec_command"),
+    say("Tests passed.", "final_answer"),
+    done(6000),
+    // A typed prompt after the goal task: its own row, typed as the person's.
+    ctx("gpt-5.5-codex", "medium"),
+    prompt("turn-0002", [{ type: "text", text: "Summarise." }]),
+    say("All green.", "final_answer"),
+    done(1000),
+  ].join(""));
+  return file;
+}
+
+test("a Codex goal has its own row and leaves the completed answer whole", () => {
+  const s = read(goalRollout(), 1 << 20);
+  expect(s.turns.map((t) => t.prompt)).toEqual(["Check the build.", "", "Summarise."]);
+  const [build, goal, sum] = s.turns;
+  // The first turn keeps its whole answer even though the goal made a call after it.
+  expect(reply(build)).toBe("Build passed.");
+  expect(build.steps).toEqual([]);
+  expect(build.done).toBe(true);
+  // The goal row: a sender that names the trigger, no injected prompt, its own reply.
+  expect(goal.origin).toBe("goal");
+  expect(goal.sender).toEqual({ kind: "goal" });
+  expect(goal.agent).toBe(true);
+  expect(goal.prompt).toBe("");
+  expect(goal.tools).toBe(1);
+  expect(reply(goal)).toBe("Tests passed.");
+  expect(goal.done).toBe(true);
+  // A typed prompt after it is a typed row again.
+  expect(sum.sender).toEqual({ kind: "you" });
+  expect(reply(sum)).toBe("All green.");
+});
+
+test("goal rows and replies survive a rollout replacement", () => {
+  const file = goalRollout();
+  // A read whose chunks cross line boundaries, then one whole: the same turns.
+  const whole = read(file, 1 << 20);
+  const pieced = read(file, 90);
+  expect(pieced.turns.map((t) => t.prompt)).toEqual(whole.turns.map((t) => t.prompt));
+  expect(pieced.turns.map(reply)).toEqual(whole.turns.map(reply));
+  expect(pieced.turns.map((t) => t.sender.kind)).toEqual(["you", "goal", "you"]);
+  // And a second read of the same records from the top: no answer moved or doubled.
+  const again = read(file, 1 << 20, newSession(ID, file));
+  expect(again.turns.map(reply)).toEqual(whole.turns.map(reply));
+  expect(again.turns.map((t) => t.steps.map((st) => st.k))).toEqual(whole.turns.map((t) => t.steps.map((st) => st.k)));
+});
+
+test("work after a completed task with no start record gets a background row", () => {
+  ordinal = 0;
+  second = 0;
+  const dir = mkdtempSync(join(tmpdir(), "threads-codex-bg-"));
+  const file = join(dir, `rollout-2026-01-02T03-00-00-${ID}.jsonl`);
+  writeFileSync(file, [
+    line("session_meta", { id: ID, cwd: "/home/dev/shop" }),
+    ctx("gpt-5.5-codex", "medium"),
+    prompt("turn-0001", [{ type: "text", text: "Check the build." }]),
+    say("Build passed.", "final_answer"),
+    done(4000),
+    // No task_started the reader can see: model work after the hard close.
+    tool("exec_command"),
+    say("Rechecked the logs.", "final_answer"),
+    done(2000),
+  ].join(""));
+  const s = read(file, 1 << 20);
+  expect(s.turns.map((t) => t.prompt)).toEqual(["Check the build.", ""]);
+  expect(reply(s.turns[0])).toBe("Build passed.");
+  expect(s.turns[1].sender).toEqual({ kind: "background" });
+  expect(reply(s.turns[1])).toBe("Rechecked the logs.");
+});

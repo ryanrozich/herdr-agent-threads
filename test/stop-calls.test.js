@@ -153,7 +153,7 @@ function stopAt(v, cx, name, when = "before") {
 test("a render Herdr stops after it marked the code editors' timer as asked for and before it asked for it still makes the editor of a code block that came in later", async () => {
   const ts = (s) => `2026-11-01T09:00:${String(s).padStart(2, "0")}.000Z`;
   const { v, cx, s } = await scripted([{ k: "p", o: "human", t: "Add a total to the cart", ts: ts(0) },
-    { k: "t", t: "The total:\n\n```js\nexport const total = (xs) => xs.reduce((a, x) => a + x, 0);\n```" }, { k: "d", ms: 4000, ts: ts(4) }]);
+    { k: "t", t: "The total:\n\n```js\nexport const total = (xs) => xs.reduce((a, x) => a + x, 0);\n```" }]);
   const { apply } = await import("../mods/agent-threads/core/turns.js");
   v.debug = false;
   cx.pending = [];
@@ -164,6 +164,7 @@ test("a render Herdr stops after it marked the code editors' timer as asked for 
   const opened = [...v.code.keys()];
   // The running turn's reply grows by a second code block.
   apply(s, { k: "t", t: "And its test:\n\n```sh\nbun test cart\n```" });
+  apply(s, { k: "d", ms: 4000, ts: ts(4) });
   await run.settled();
   const afterDraws = [...v.code.entries()].map(([k, c]) => [k, Boolean(c.st)]);
   // A selection change and back.
@@ -315,7 +316,7 @@ test("a render Herdr stops after it marked the output editors' timer as asked fo
 test("a render Herdr stops after the code editors' timer is registered and before the mark is set makes each editor once and ends with no mark", async () => {
   const ts = (s) => `2026-11-01T09:00:${String(s).padStart(2, "0")}.000Z`;
   const { v, cx, s } = await scripted([{ k: "p", o: "human", t: "Add a total to the cart", ts: ts(0) },
-    { k: "t", t: "The total:\n\n```js\nexport const total = (xs) => xs.reduce((a, x) => a + x, 0);\n```" }, { k: "d", ms: 4000, ts: ts(4) }]);
+    { k: "t", t: "The total:\n\n```js\nexport const total = (xs) => xs.reduce((a, x) => a + x, 0);\n```" }]);
   const { apply } = await import("../mods/agent-threads/core/turns.js");
   v.debug = false;
   cx.pending = [];
@@ -325,6 +326,7 @@ test("a render Herdr stops after the code editors' timer is registered and befor
   await run.settled();
   const was = editors.length;
   apply(s, { k: "t", t: "And its test:\n\n```sh\nbun test cart\n```" });
+  apply(s, { k: "d", ms: 4000, ts: ts(4) });
   run.frame();
   run.frame();
   cx.flush(0);
@@ -462,7 +464,7 @@ test("two draws before the images' timer runs start one decode, not two", async 
 test("two draws before the code editors' timer runs ask for one timer, not two", async () => {
   const ts = (s) => `2026-11-01T09:00:${String(s).padStart(2, "0")}.000Z`;
   const { v, cx, s } = await scripted([{ k: "p", o: "human", t: "Add a total to the cart", ts: ts(0) },
-    { k: "t", t: "The total:\n\n```js\nexport const total = (xs) => xs.reduce((a, x) => a + x, 0);\n```" }, { k: "d", ms: 4000, ts: ts(4) }]);
+    { k: "t", t: "The total:\n\n```js\nexport const total = (xs) => xs.reduce((a, x) => a + x, 0);\n```" }]);
   const { apply } = await import("../mods/agent-threads/core/turns.js");
   v.debug = false;
   cx.pending = [];
@@ -473,6 +475,7 @@ test("two draws before the code editors' timer runs ask for one timer, not two",
   const was = editors.length;
   const before = run.asked;
   apply(s, { k: "t", t: "And its test:\n\n```sh\nbun test cart\n```" });
+  apply(s, { k: "d", ms: 4000, ts: ts(4) });
   run.frame();
   run.frame();
   const asked = run.asked - before;

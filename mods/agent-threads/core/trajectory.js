@@ -81,7 +81,9 @@ export function trajectory(s, turn, id = null) {
   };
   addSteps(turn.steps);
   const text = reply(turn);
-  if (text || turn.reasoning?.length) open().cells.push({ kind: "message", text, ...(turn.reasoning?.length ? { reason: turn.reasoning.join("\n\n") } : {}), start: at(turn.afterAt), end: at(turn.endTs) });
+  // The reply's start: the first marked answer's own time, else where the tail text began.
+  const replyAt = turn.answers?.length ? turn.answers[0].at : turn.afterAt;
+  if (text || turn.reasoning?.length) open().cells.push({ kind: "message", text, ...(turn.reasoning?.length ? { reason: turn.reasoning.join("\n\n") } : {}), start: at(replyAt), end: at(turn.endTs) });
   // Withheld reasoning after the turn's last step is counted on that step. With no step to
   // carry it, no step is made for it: the trajectory counts it (heldOut) for the notes.
   let heldOut = 0;

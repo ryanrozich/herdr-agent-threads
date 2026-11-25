@@ -140,7 +140,7 @@ test("the all-hidden empty state and a running agent turn draw", async () => {
   // drop the person's own turns, and the agents' replies (an agent turn with a reply of its own
   // stays, its message folded): every turn hidden
   w.current().turns = w.current().turns.filter((t) => t.agent);
-  for (const t of w.current().turns) t.after = [];
+  for (const t of w.current().turns) { t.after = []; t.answers = []; }
   w.current().version++;
   draw(w, wx);
   expect(w.turnKeys(w.rows()).length).toBe(0);
@@ -1602,8 +1602,8 @@ test("no list row registers an event handler: Herdr throws on one inside the ite
   const ks = v.turnKeys(v.rows());
   const s = v.current();
   const [t1, t2] = [v.findTurn(ks[1]), v.findTurn(ks[3])];
-  t1.after = []; t1.answeredBy = t1.n + 1; t1.shapeKey = null;
-  t2.after = []; t2.answeredIn = t2.n + 1; t2.errors = ["cut off"]; t2.shapeKey = null;
+  t1.after = []; t1.answers = []; t1.answeredBy = t1.n + 1; t1.shapeKey = null;
+  t2.after = []; t2.answers = []; t2.answeredIn = t2.n + 1; t2.errors = ["cut off"]; t2.shapeKey = null;
   expect(s.turns.includes(t1)).toBe(true);
   v.rowsKey = null;
   // Open every turn, select one, and draw every row the list has.
@@ -5829,6 +5829,7 @@ test("a table in a reply takes the pane's room past its step's line, as Full gav
   const turn = v.findTurn(key);
   const cells = Array.from({ length: 9 }, (_x, i) => `Column ${i} heading words`);
   turn.after = [`Plan:\n\n| ${cells.join(" | ")} |\n|${"---|".repeat(9)}\n| ${cells.map((c) => `${c} and a long value`).join(" | ")} |\n`];
+  turn.answers = [];
   turn.shapeKey = null;
   v.rowsKey = null;
   for (const [px, chars] of [[650, 70], [750, 90], [950, 120], [1400, 120]]) {
@@ -6430,6 +6431,7 @@ test("a reply longer than Herdr draws in one Markdown view opens whole: list ite
   // A made-up reply with the shape of the one that vanished: over 4,096 characters, a table of
   // prices, bold spans between two prices, and a numbered list after "These are the open choices:".
   turn.after = [readFileSync(join(root, "test/fixtures/long-reply.md"), "utf8").trim()];
+  turn.answers = [];
   turn.shapeKey = null;
   const key = `${v.sessions.length - 1}:${turn.n}`;
   v.open = new Set([key]);
@@ -6544,6 +6546,7 @@ test("an open reply past 200,000 characters stops there and says how much is lef
   const key = keys.at(-2);
   const turn = v.findTurn(key);
   turn.after = [longProse(36000)];
+  turn.answers = [];
   turn.shapeKey = null;
   v.sel = key;
   v.toggle(key, cx);
@@ -8335,6 +8338,7 @@ test("a drag ending on Collapse under a long reply or on the strip under it does
   const { v, cx } = await pane(fixture("--extra", "2"));
   const turn = v.sessions.at(-1).turns.at(-1);
   turn.after = [readFileSync(join(root, "test/fixtures/long-reply.md"), "utf8").trim()];
+  turn.answers = [];
   turn.shapeKey = null;
   const key = `${v.sessions.length - 1}:${turn.n}`;
   v.open = new Set([key]);
@@ -8463,6 +8467,7 @@ test("o shows the outline: one row per turn under the same day bands, with the s
   // stays hidden.
   const quiet = w.current().turns.find((t) => t.agent);
   quiet.after = [];
+  quiet.answers = [];
   w.current().version++;
   w.action("outline", wx);
   const own = w.rows().filter((r) => r.kind === "line").length;
@@ -9858,6 +9863,7 @@ test("a reply's table may run wider than the reading line, centred on it, up to 
     "| us-east-1 | checkout-api | 4.12.3 | 4.13.0 | Payments platform, rotation A | Drain traffic through the canary pool first |",
   ].join("\n");
   turn.after = [`Here is the plan:\n\n${table}\n\nWhich region first?`];
+  turn.answers = [];
   turn.shapeKey = null;
   v.rowsKey = null;
   draw(v, cx);
@@ -10633,7 +10639,9 @@ test("a rebuild keeps a closed turn's rows until the turn or the look changes, w
   expect(rowOf(b)).toBe(before.b);
   // The reader changed one turn (a new version): only that one is built again.
   const tb = v.findTurn(b);
-  tb.after = [`${tb.after?.[0] ?? ""}\n\nOne more line from the agent.`];
+  const extra = "\n\nOne more line from the agent.";
+  if (tb.answers.length) tb.answers[tb.answers.length - 1].parts.push(extra.slice(2));
+  else tb.after = [`${tb.after?.[0] ?? ""}${extra}`];
   tb.v += 1;
   // The reader moves the session version with the turn.
   v.current().version++;
@@ -16061,7 +16069,7 @@ test("the shared selection never selects a turn the Chat hides; a turn it shows 
   v.paneW = 700;
   v.prefs = { ...v.prefs, agentTurns: false };
   // Agent turns with no reply of their own: hidden while agent turns are.
-  for (const turn of v.current().turns) if (turn.agent) turn.after = [];
+  for (const turn of v.current().turns) if (turn.agent) { turn.after = []; turn.answers = []; }
   v.current().version++;
   draw(v, cx);
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
@@ -20728,7 +20736,7 @@ test("the opening ends when every turn read is hidden (No user messages yet): Do
   // Only agent turns with no reply, and agent messages off: every turn is hidden.
   const s = v.current();
   s.turns = s.turns.filter((t) => t.agent);
-  for (const t of s.turns) t.after = [];
+  for (const t of s.turns) { t.after = []; t.answers = []; }
   s.version++;
   go(() => false);
   await settle(v);

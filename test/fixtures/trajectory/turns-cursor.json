@@ -13,6 +13,8 @@
   "after": [
    "Added a phone rule to `checkout.module.css`:\n\n```css\n@media (max-width: 480px) {\n  .payButton { width: 100%; }\n}\n```\n\nThe button keeps its width on tablets and up."
   ],
+  "answers": [],
+  "lastMsg": null,
   "tools": 2,
   "followTools": 0,
   "wakeTools": 0,
@@ -68,6 +70,8 @@
   "after": [
    "Yes. Both now span the full width below 480 px, with the same 16 px side margin."
   ],
+  "answers": [],
+  "lastMsg": null,
   "tools": 0,
   "followTools": 0,
   "wakeTools": 0,

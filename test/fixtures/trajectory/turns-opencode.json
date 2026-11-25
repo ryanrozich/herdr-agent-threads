@@ -13,6 +13,8 @@
   "after": [
    "Renamed `useCart` to `useBasket` in 14 files, including the hook's own file and its tests. The old name is gone from `src/`."
   ],
+  "answers": [],
+  "lastMsg": null,
   "tools": 2,
   "followTools": 0,
   "wakeTools": 0,
@@ -75,6 +77,8 @@
   "after": [
    "The README's **Cart state** example now imports `useBasket`."
   ],
+  "answers": [],
+  "lastMsg": null,
   "tools": 1,
   "followTools": 0,
   "wakeTools": 0,

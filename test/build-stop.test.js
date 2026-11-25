@@ -98,7 +98,9 @@ test("a closed row's reshape that Herdr stops as it works out the height leaves 
   // time is spent before the first shape, so the row is built with its old shape, to be reshaped.
   const T = v.sessions.at(-1).turns;
   const t = T.find((x, k) => k < T.length - 1 && v.baseRows.some((r) => r.kind === "turn" && r.turn === x && !r.live && !r.last));
-  t.after = [`${(t.after ?? []).join("\n\n")}\n\nA longer made-up reply.\n\nWith more lines.\n\nAnd more.`];
+  const grown = "\n\nA longer made-up reply.\n\nWith more lines.\n\nAnd more.";
+  if (t.answers?.length) t.answers[t.answers.length - 1].parts.push(grown.slice(2));
+  else t.after = [`${(t.after ?? []).join("\n\n")}${grown}`];
   t.shapeKey = null;
   v.shapeMax = () => -1;
   v.rowsKey = null;

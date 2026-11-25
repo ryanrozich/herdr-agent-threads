@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, symlinkSync, existsSync, chmodSync, openSync, writeSync, closeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, noteSkip, skipNote, readCap } from "../mods/agent-threads/core/turns.js";
+import { reply, newSession, apply, parseChunk, nextChunk, noteSkip, skipNote, readCap } from "../mods/agent-threads/core/turns.js";
 
 const core = join(import.meta.dir, "../mods/agent-threads/core");
 const CHUNK = 2 * 1024 * 1024; // main.js
@@ -75,7 +75,7 @@ test("a 3 MB reply line is read whole, also where tail -n 1 prints only a line's
   for (const env of [process.env, { ...process.env, PATH: `${uutilsTail()}:${process.env.PATH}` }]) {
     const { s, skipped } = read(f, env);
     expect(s.turns.map((t) => t.prompt)).toEqual(Array.from({ length: 9 }, (_, i) => `Turn ${i + 1}: check month ${i + 1}.`));
-    expect(s.turns[4].after.join("").length).toBeGreaterThan(100000);
+    expect(reply(s.turns[4]).length).toBeGreaterThan(100000);
     expect(skipped).toBe(0);
     expect(s.offset).toBe(s.size);
   }
@@ -85,9 +85,9 @@ test("a line longer than the ceiling is skipped to its end, counted, and the tur
   const f = session(3);
   const { s, calls, skipped } = read(f, { ...process.env, THREADS_LINE_MAX: String(1 << 20) });
   expect(s.turns.length).toBe(9);
-  expect(s.turns[3].after.join("")).toBe("Turn 4 is done.");
-  expect(s.turns[4].after.join("")).toBe("");
-  expect(s.turns[5].after.join("")).toBe("Turn 6 is done.");
+  expect(reply(s.turns[3])).toBe("Turn 4 is done.");
+  expect(reply(s.turns[4])).toBe("");
+  expect(reply(s.turns[5])).toBe("Turn 6 is done.");
   // parseChunk carries the skipped bytes (read() sums c.skipped), for the debug report.
   expect(skipped).toBeGreaterThan(3 * 1048576);
   expect(s.offset).toBe(s.size);
@@ -168,7 +168,7 @@ test("a Cursor line longer than the ceiling is read whole, and the session goes 
   expect(s.offset).toBe(s.size);
   expect(skipped).toBe(0);
   expect(s.turns.map((t) => t.prompt)).toEqual(["Turn 1: check the cart.", "Turn 2: print the log.", "Turn 3: and now?"]);
-  expect(s.turns[2].after.join("")).toBe("Turn 3 is done.");
+  expect(reply(s.turns[2])).toBe("Turn 3 is done.");
 });
 
 test("readCap: a call the extractor cut (its output over 6 MiB, it says cut) halves the rest of the read's calls, never below the first call's size", () => {
