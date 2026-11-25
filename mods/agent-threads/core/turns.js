@@ -493,11 +493,13 @@ function promote(s) {
 // What a turn ends with when it was cut off, not refused or broken.
 const CUT_OFF = /^No response requested\b|\bhit your\b.*\blimit\b|\b(usage|rate) limit\b|\blimit reached\b|^API Error: 429\b/i;
 
-// The rows before a turn with a reply that had no reply of their own and were only cut off.
+// The rows before a turn with a reply that had no reply of their own and were only cut off. Work
+// that started by itself answers none, and one that stands between is stepped over.
 function linkAnswer(s, cur) {
-  if (!hasReply(cur)) return;
+  if (!hasReply(cur) || cur.self) return;
   for (let i = cur.n - 2; i >= 0; i--) {
     const t = s.turns[i];
+    if (t.self) continue;
     if (hasReply(t) || t.interrupted || t.answeredBy || !t.errors.length || !t.errors.every((x) => CUT_OFF.test(x))) return;
     t.answeredIn = cur.n;
     t.v = s.version;
@@ -1030,7 +1032,9 @@ export function threadMatches(turns, turn, q) {
   const needle = q.toLowerCase();
   const n = turn.answeredIn ?? turn.answeredBy;
   if (n && reply(turns[n - 1] ?? { after: [] }).toLowerCase().includes(needle)) return true;
-  for (let i = turn.n - 2; i >= 0 && (turns[i].answeredIn === turn.n || turns[i].answeredBy === turn.n); i--)
+  // Work that started by itself answers no other row, and can stand between (linkAnswer).
+  if (turn.self) return false;
+  for (let i = turn.n - 2; i >= 0 && (turns[i].self || turns[i].answeredIn === turn.n || turns[i].answeredBy === turn.n); i--)
     if (turns[i].prompt.toLowerCase().includes(needle)) return true;
   return false;
 }

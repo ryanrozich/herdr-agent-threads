@@ -2250,7 +2250,9 @@ export function isShown(turn, { agentTurns = false, live = false, turns = null }
 // this for every turn.
 export function agentReplied(turn, turns) {
   if (!turn.agent || !(turn.finals?.length || turn.after?.some((x) => /\S/.test(x)))) return false;
-  for (let i = turn.n - 2; i >= 0 && turns[i] && (turns[i].answeredIn === turn.n || turns[i].answeredBy === turn.n); i--) {
+  // Work that started by itself answers no other turn, and can stand between (linkAnswer).
+  if (turn.self) return true;
+  for (let i = turn.n - 2; i >= 0 && turns[i] && (turns[i].self || turns[i].answeredIn === turn.n || turns[i].answeredBy === turn.n); i--) {
     if (!turns[i].agent && !hasReply(turns[i])) return false;
   }
   return true;
