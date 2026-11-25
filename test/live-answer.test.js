@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newSession, apply } from "../mods/agent-threads/core/turns.js";
-import { MD_MAX, itemWords, pane, settleRows, setup, state } from "./render-harness.js";
+import { MD_MAX, draw, dropTimers, itemWords, pane, settleRows, setup, state } from "./render-harness.js";
 
 setup();
 
@@ -205,22 +205,31 @@ test("a long answer of a running turn is cut and linked once, not at each event"
   expect(md(v).endsWith("Second answer.")).toBe(true);
 });
 
-// Red at c37c64f3: the pane has no keptCut.
-test("an answer cut with no time left has no links, is not kept, and is linked in a later draw", async () => {
-  const { v, s } = await live([PROMPT, call(), answer("See ACME-12.")]);
-  const turn = s.turns[0];
-  v.links = [{ made: "up" }];
-  v.linkedSegs = () => null;
-  v.linkOne = (src) => ({ md: `${src} (linked)`, links: 1 });
-  v.shapeMax = () => 5;
-  v.shapeSpent = 6;
-  const left = v.otherLeft ?? 0;
-  const first = v.keptCut(A, turn, "See ACME-12.");
-  expect([first.cut[0].parts[0].lk.md, v.otherLeft]).toEqual(["See ACME-12.", left + 1]);
-  v.shapeSpent = 0;
-  const later = v.keptCut(A, turn, "See ACME-12.");
-  expect(later.cut[0].parts[0].lk.md).toBe("See ACME-12. (linked)");
-  expect(v.keptCut(A, turn, "See ACME-12.")).toBe(later);
+// Red at c37c64f3: there is no answer to link. The frame that links it is one the draw out of
+// time asked for: no event comes between.
+test("an answer cut with no time left shows with no links, and the next frame links it, once", async () => {
+  const { v, cx, add } = await live([PROMPT, call(), answer("See ACME-12.")]);
+  v.debug = false;
+  const { cutReply } = Object.getPrototypeOf(v);
+  let linking = 0;
+  v.cutReply = function (key, segs, plain) { if (!plain) linking++; return cutReply.call(this, key, segs, plain); };
+  const shown = () => mine(v).filter((r) => r.kind === "md").map((r) => [r.key, r.md, r.links]);
+  v.applyPrefs(JSON.stringify({ links: [{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.example/ACME-$1" }] }));
+  expect(v.links.length).toBe(1);
+  dropTimers(v, cx);
+  // Out of time from the start of the draw.
+  v.shapeBudget = -1;
+  draw(v, cx);
+  expect([shown(), linking]).toEqual([[[`md:${A}:0`, "See ACME-12.", 0]], 0]);
+  // With time again.
+  v.shapeBudget = 1e9;
+  cx.flush(0);
+  draw(v, cx);
+  const linked = shown();
+  expect([linked.length, linked[0][1].includes("https://linear.example/ACME-12"), linked[0][2], linking]).toEqual([1, true, 1, 1]);
+  settleRows(v, cx);
+  add(call(20));
+  expect([shown(), linking, v.shapeLeft]).toEqual([linked, 1, 0]);
 });
 
 // Red at c37c64f3: no editor for a running turn's code.
