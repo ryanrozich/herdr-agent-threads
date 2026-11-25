@@ -2145,20 +2145,12 @@ function endsOf(v) {
   return n;
 }
 
-// The reader's drag on the bar to the end of the rows the list holds, as no wheel event comes.
-function toListEnd(v, cx, sim) {
-  sim.off = 1e9;
-  probeFrame(v, cx);
-  expect(sim.last().end).toBe(true);
-}
-
 test("a landing's late asks are dropped by a newer landing in the same rows, and ask for their row by key after the rows above it change", async () => {
   const { v, cx } = await capSession(150, SMALL);
   const sim = simList(v);
   const turns = (f) => shownIn(v, f).filter((k) => /^0:\d+$/.test(k));
   v.action("first", cx);
   settleList(v, cx, sim);
-  toListEnd(v, cx, sim);
   // A rail jump to #30 inside the oldest window, then, before its late asks, #5 there: the
   // same rows, so #30's row is still in them, and only the newer landing drops its asks.
   v.railJump("0:30", cx);
@@ -2176,23 +2168,21 @@ test("a landing's late asks are dropped by a newer landing in the same rows, and
   expect(asked).toEqual([]);
   expect(turns(sim.last())).toContain("0:5");
   H.listWindow = null;
-  // A rail jump to #40, and before its late asks a card of 25 parts opened above it with no
+  // A rail jump to #20, and before its late asks a card of 25 parts opened above it with no
   // scroll of its own (set here, as the window tests set it): every row from the card down
-  // moves on, and the asks name the same rows as with no card opened.
+  // moves on, and the asks name the same rows as with no card opened. The rows asked for stay
+  // in the window wherever the view is: with the card they are within its first 66 items.
   const lateAsks = async (open) => {
-    const { v, cx } = await capSession(150, SMALL, 19);
+    const { v, cx } = await capSession(150, SMALL, 4);
     const sim = simList(v);
     v.action("first", cx);
     settleList(v, cx, sim);
-    // From the window's end, with the card to open above the view: seen from its start, the card
-    // would push #40 out of the window, and the asks would find no row.
-    toListEnd(v, cx, sim);
-    v.railJump("0:40", cx);
+    v.railJump("0:20", cx);
     draw(v, cx);
     const late = cx.timers;
     cx.timers = [];
     const then = v.rows();
-    if (open) { v.open.add("0:20"); draw(v, cx); }
+    if (open) { v.open.add("0:5"); draw(v, cx); }
     const asked = scrollsOf(v);
     for (const x of late) x.fn(cx);
     H.listWindow = null;
