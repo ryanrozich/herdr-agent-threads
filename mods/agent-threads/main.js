@@ -3121,6 +3121,9 @@ export default class Threads extends View {
     // Until the record below is made, a draw Herdr stops (its stop falls at any call) would
     // leave these rows under the old record and key: with no key, the next build is of every row.
     this.rowsKey = null;
+    // No memo carries over rows with no note (rowsSince), so the notes before them go too: they
+    // hold their rows, and so those rows' sessions, one picked away from too.
+    if (!noted) this.rowsLog = null;
     this.baseRows = out;
     this.railTurns = this.buildRail;
     this.baseSizes = job.sizes;
