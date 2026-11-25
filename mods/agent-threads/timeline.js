@@ -732,8 +732,8 @@ function* numbersGen(out, heads, nti, nx, nw) {
   out.labels = roomOfNumbers(list, heads, out);
 }
 // A turn's length on the strip in words, beside its number: wall, or "running". A length of 0 ms
-// has words only where it is the turn's recorded one, as in its heading (ledger.js headParts:
-// ended, and with a step that has a time); no length is recorded for the other turns of 0 ms.
+// has words only where it is the turn's recorded one (ledger.js ledgerTurn's total: ended or
+// interrupted) and a step of it has a time; the other turns of 0 ms have none.
 function lengthWords(h, wall) {
   if (h.going) return "running";
   return wall > 0 || (h.timed && h.total === 0) ? durText(wall) : null;
