@@ -2751,9 +2751,9 @@ test("latest pressed after a landing is taken and before the next frame ends the
 }, 60000);
 
 // A rail landing Herdr stops as it asks for its lift's end, 120 ms on: its 48 ms timer still sets
-// the lift, before the watch draw (CUT_WATCH_MS) takes the jump on again and lands a second time,
-// asking for both timers. A wheel, a jump with no lift of its own or a rail jump with one comes
-// before the second landing's 48 ms. The second landing's end takes the first one's lift off, and
+// the lift, before the next draw (a late frame, or the watch, CUT_WATCH_MS) takes the jump on
+// again and lands a second time, asking for both timers. A wheel, a jump with no lift of its own
+// or a rail jump with one comes before the second landing's 48 ms. The second landing's end takes the first one's lift off, and
 // leaves a newer landing's own. A round's timers run in the order they were asked for, or the
 // order they fall due. Returns what the lift was after each of the lift's timers.
 async function stoppedLift(move, order) {
@@ -2790,7 +2790,7 @@ async function stoppedLift(move, order) {
   expect([one > 0, lifts()]).toEqual([true, [48]]);
   round("first");
   expect(v.landLift).toBe(one);
-  // The watch draw.
+  // The next draw (a late frame, or the watch).
   drawTill(() => lifts().length === 2);
   expect([v.landed.lift, lifts()]).toEqual([one, [48, 120]]);
   for (const x of cx.timers) if (isLift(x)) name.set(x, `second ${x.ms}`);
