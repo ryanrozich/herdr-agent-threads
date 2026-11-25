@@ -233,8 +233,8 @@ export function paintKit(on) {
   painted.length = 0;
   if (on) {
     windowWas = globalThis.window;
-    globalThis.window = { paint_path: (path, color) => { painted.push([path, color]); return el; } };
-  } else if (globalThis.window?.paint_path) globalThis.window = windowWas;
+    globalThis.window = { paintKit: true, paint_path: (path, color) => { painted.push([path, color]); return el; } };
+  } else if (globalThis.window?.paintKit) globalThis.window = windowWas;
 }
 // The module stand-ins for gpui-kit, gpui-base and Herdr, and the settings reset. Installed
 // here before main.js is imported, and again by each test file as it starts: another file may
