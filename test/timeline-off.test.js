@@ -970,7 +970,7 @@ test("timeline build: no step touches more than 1,024 bars and span entries toge
     const most = Math.max(...per.map((b, k) => b + perJ[k]));
     const over = 4 * longest + 6 + M.L.spans.size;
     expect([name, most <= 1024 + over, Math.max(...perT) <= 260]).toEqual([name, true, true]);
-    // Not a build that skips its work: every bar is touched, and it ends as a whole build.
+    // Not a build that skips its work: the strip it ends with is a whole build's, field for field.
     sameStrip(M, W);
   }
 }, 120000);
