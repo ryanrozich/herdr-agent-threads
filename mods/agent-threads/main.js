@@ -12256,7 +12256,11 @@ export default class Threads extends View {
   tlShown() {
     if (!this.tlCan()) return false;
     if (this.tlHidden != null) return !this.tlHidden;
-    const left = rowsLeft(this.tlBase, TL_H);
+    return this.tlFits(this.tlBase);
+  }
+  // Whether a list base px tall with no timeline keeps TL_ROWS_MIN rows under one.
+  tlFits(base) {
+    const left = rowsLeft(base, TL_H);
     return left != null && left >= TL_ROWS_MIN;
   }
   // b, or the heading's button. false where the pane has no timeline, so the key passes on.
@@ -12596,8 +12600,16 @@ export default class Threads extends View {
       // be with no timeline above it (tlBase: TL_H px more when the frame drew one, tlSlot).
       .on_size_change((size, cx) => {
         const h = size.height / this.zoom();
-        const base = h + (this.tlSlot ? TL_H : 0);
-        if (Math.abs(h - (this.tlistH ?? -9)) >= 1 || Math.abs(base - (this.tlBase ?? -9)) >= 1) { this.tlistH = h; this.tlBase = base; cx.notify(); }
+        const slot = Boolean(this.tlSlot);
+        const base = h + (slot ? TL_H : 0);
+        // A change under 1 px is taken only where it takes or gives the timeline its fourth row,
+        // and then not from a size measured with the timeline the other way to one with it this
+        // way: those two can differ by a fraction of a px of their own (the zoom's division), and
+        // taking that would show and hide it by turns.
+        const last = this.tlSeen;
+        this.tlSeen = { slot, base };
+        const flips = last?.slot === slot && last.base !== base && this.tlFits(base) !== this.tlFits(this.tlBase);
+        if (flips || Math.abs(h - (this.tlistH ?? -9)) >= 1 || Math.abs(base - (this.tlBase ?? -9)) >= 1) { this.tlistH = h; this.tlBase = base; cx.notify(); }
       })
       .child(v_virtual_list("th-traj-list", shown.length, LEDGER_ROW, (j) => shown[j]?.key ?? `gone:${j}`,
         (range) => {
