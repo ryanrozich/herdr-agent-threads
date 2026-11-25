@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as TL from "../mods/agent-threads/timeline.js";
 import { LEDGER_KINDS, trajInks } from "../mods/agent-threads/ledger.js";
-import { fixture, frame, H, handlerAfterId, makeCx, pane, settle, setup, theme, Threads, unsliced } from "./render-harness.js";
+import { fixture, frame, H, handlerAfterId, makeCx, pane, settle, setup, theme, Threads, unsliced, until } from "./render-harness.js";
 
 setup();
 
@@ -261,6 +261,155 @@ test("timeline view: while the session is read again, a strip's build left from 
   expect(M.heads === b.ledger().totals.heads).toBe(true);
   sameStrip(M, TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null));
 });
+
+// ---- another transcript picked ----
+// The rows are built in slices over draws here, which a test pane turns off (unsliced): with
+// buildMax at -1 a slice is one turn. Until the build is done the ledger gives the rows it had.
+const oneTurnASlice = (v) => { v.buildMax = () => -1; };
+// The Trajectory in the Chat's own pane: y in a Chat under its split width, the pane then made
+// 800 px wide, so it has the strip. The Chat's rows are built whole. y again goes back to the
+// Chat, where a person picks.
+function enterOwn(v, cx) {
+  v.buildMax = () => 1e9;
+  v.paneW = 400;
+  v.width = 400;
+  v.command("trajectory", cx);
+  v.tdetail = false;
+  v.paneW = 800;
+  v.width = 800;
+  expect(v.traj).toBe(true);
+}
+function leaveOwn(v, cx) {
+  v.command("trajectory", cx);
+  expect(v.traj).toBe(false);
+}
+// Such a pane with its strip shown for a first transcript, and the Chat back in it.
+async function ownPane() {
+  const { v, cx } = await pane(fixture("--extra", "30"));
+  enterOwn(v, cx);
+  shownFrame(v, cx);
+  expect([v.tlModel.heads === v.ledger().totals.heads, v.tlModel.heads.length]).toEqual([true, v.current().turns.length]);
+  leaveOwn(v, cx);
+  return { v, cx };
+}
+// The pane's own asks for a next draw of the rows' build among its timers, run and taken off.
+function rowAsks(cx) {
+  const at = (x) => x.ms === 0 && /this\.buildNext = (false|!1)/.test(String(x.fn));
+  const due = cx.timers.filter(at);
+  cx.timers = cx.timers.filter((x) => !at(x));
+  for (const x of due) x.fn(cx);
+  return due.length;
+}
+// What each frame drew until no build of the rows or of the strip is left: the strip's headings,
+// or the words it waits with. While one is left the frame asks for the next: the pane is still.
+function stripFrames(v, cx) {
+  rowAsks(cx);
+  buildAsks(cx);
+  const seen = [];
+  for (let k = 0; k < 600; k++) {
+    const c = frame(v, cx);
+    seen.push(own(c, "th-tl-lanes") ? v.tlModel.heads : words(own(c, "th-tl-wait")).join(" "));
+    const asks = rowAsks(cx) + buildAsks(cx);
+    if (!v.ledgerJob && !v.tlJob) return seen;
+    expect([k, asks > 0]).toEqual([k, true]);
+  }
+  throw new Error("the builds did not end in 600 frames");
+}
+const told = (x, named) => named.find(([h]) => h === x)?.[1] ?? (Array.isArray(x) ? `a strip of ${x.length} other turns` : x);
+const READ_WAIT = "The timeline shows once the whole session is read";
+// The strip waited in every frame but the last, which drew the turns of the transcript the pane is
+// on; and nothing waits or asks for a draw after it.
+function onlyThePick(v, cx, seen) {
+  const heads = v.ledgerMemo.totals.heads;
+  expect([v.ledgerMemo.sessions === v.sessions, heads.length]).toEqual([true, v.current().turns.length]);
+  expect(seen.length).toBeGreaterThan(10);
+  expect(seen.map((x) => told(x, [[heads, "the pick's strip"]]))).toEqual([...new Array(seen.length - 1).fill(READ_WAIT), "the pick's strip"]);
+  for (let k = 0; k < 3; k++) {
+    const c = frame(v, cx);
+    expect([ids(c).includes("th-tl-wait"), v.tlModel.heads === heads, v.ledgerJob ?? null, v.tlJob ?? null, rowAsks(cx) + buildAsks(cx)]).toEqual([false, true, null, null, 0]);
+  }
+}
+
+test("timeline view: another transcript picked, its rows built a slice a draw once it is read: the strip waits for them, draws none of the turns of the transcript before, and is then the picked one's", async () => {
+  const { v, cx } = await ownPane();
+  v.pick({ path: fixture("--extra", "12") }, cx);
+  await settle(v);
+  enterOwn(v, cx);
+  oneTurnASlice(v);
+  onlyThePick(v, cx, stripFrames(v, cx));
+}, 30000);
+
+for (const [what, first] of [
+  ["its rows are built", async (v, cx, file) => {
+    v.pick({ path: file }, cx);
+    await settle(v);
+    enterOwn(v, cx);
+    oneTurnASlice(v);
+    for (let k = 0; k < 4; k++) frame(v, cx);
+    expect([v.ledgerJob?.sessions === v.sessions, v.ledgerJob?.next >= 0]).toEqual([true, true]);
+    leaveOwn(v, cx);
+  }],
+  ["it is read", async (v, cx, file) => {
+    v.pick({ path: file }, cx);
+    expect([v.reading, Boolean(v.current()?.loaded)]).toEqual([true, false]);
+  }],
+]) {
+  test(`timeline view: a pick replaced by a second one while ${what}: the strip waits for the second one's rows and is then its strip, and nothing waits after it`, async () => {
+    const { v, cx } = await ownPane();
+    await first(v, cx, fixture("--extra", "20"));
+    v.pick({ path: fixture("--extra", "12") }, cx);
+    await settle(v);
+    enterOwn(v, cx);
+    oneTurnASlice(v);
+    onlyThePick(v, cx, stripFrames(v, cx));
+  }, 30000);
+}
+
+test("timeline view: a pick whose read fails: the strip waits for the read alone and asks for no draw; a second pick that is read has its strip, and nothing waits after it", async () => {
+  const { v, cx } = await ownPane();
+  const bad = fixture("--extra", "20");
+  H.extractHook = async (args) => (args.includes(bad) ? { code: 3, stdout: "", stderr: "made-up failure" } : null);
+  v.pick({ path: bad }, cx);
+  await until(() => v.current()?.error && !v.reading, "the read to fail");
+  enterOwn(v, cx);
+  oneTurnASlice(v);
+  expect(stripFrames(v, cx)).toEqual([READ_WAIT]);
+  for (let k = 0; k < 5; k++) {
+    const c = frame(v, cx);
+    expect(words(own(c, "th-tl-wait"))).toEqual([READ_WAIT]);
+    // The ledger's rows are the pick's own (none): what the strip waits for is its read.
+    expect([v.ledgerMemo.sessions === v.sessions, v.ledgerMemo.rows.length, v.unread()]).toEqual([true, 0, true]);
+    expect([v.ledgerJob ?? null, v.tlJob ?? null, rowAsks(cx) + buildAsks(cx)]).toEqual([null, null, 0]);
+  }
+  leaveOwn(v, cx);
+  v.pick({ path: fixture("--extra", "12") }, cx);
+  await settle(v);
+  enterOwn(v, cx);
+  oneTurnASlice(v);
+  onlyThePick(v, cx, stripFrames(v, cx));
+}, 30000);
+
+test("timeline view: the same transcript read again with more turns, its rows built a slice a draw: the strip is drawn in every frame, of the turns it had until they are built, then of them all", async () => {
+  const file = fixture("--extra", "30");
+  const lines = readFileSync(file, "utf8").split("\n").filter(Boolean);
+  writeFileSync(file, `${lines.slice(0, Math.floor(lines.length / 2)).join("\n")}\n`);
+  const { b, cb } = await dockPane(file);
+  shownFrame(b, cb);
+  const was = b.tlModel.heads;
+  expect([was === b.ledger().totals.heads, was.length > 5]).toEqual([true, true]);
+  writeFileSync(file, `${lines.join("\n")}\n`);
+  b.read(cb);
+  await settle(b);
+  expect(b.current().turns.length).toBeGreaterThan(was.length);
+  // Every turn's rows made again, so the build takes a draw a turn.
+  b.turnLedger = new WeakMap();
+  oneTurnASlice(b);
+  const seen = stripFrames(b, cb);
+  const heads = b.ledgerMemo.totals.heads;
+  expect(heads.length).toBe(b.current().turns.length);
+  expect(seen.length).toBeGreaterThan(10);
+  expect(seen.map((x) => told(x, [[was, "the turns it had"], [heads, "them all"]]))).toEqual([...new Array(seen.length - 1).fill("the turns it had"), "them all"]);
+}, 30000);
 
 // ---- the last turn's bars over the turns before ----
 // A session of n turns drawn as one span a lane each, under 2 px, but the first, so long that
