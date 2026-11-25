@@ -3,7 +3,7 @@
 // what is drawn on top and what a press there selects, and an older Herdr's torn bars. The
 // model is timeline.js (test/timeline.test.js); the pane is on the render harness.
 import { test, expect, setSystemTime } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as TL from "../mods/agent-threads/timeline.js";
@@ -422,4 +422,40 @@ test("timeline press: an ordinary call and a subagent's on one track: the ordina
   // Running: the growing bars over all, half height over full, the ordinary call over a
   // subagent's that began before or after it; above the half track the full one.
   expect([at(2, 12000), at(2, 25000), at(2, 35000), at(2, 35000, 4)]).toEqual([4, 3, 3, 2]);
+});
+
+test("timeline view: a press acts on the strip as it was drawn: past a growing bar's drawn end it gets no call the clock has reached since; drawn again, it does", async () => {
+  // One turn cut just after its second call, so it runs: that call's bar grows to now.
+  const file = fixture("--only", "1");
+  const lines = readFileSync(file, "utf8").split("\n").filter(Boolean);
+  writeFileSync(file, `${lines.slice(0, lines.findLastIndex((l) => l.includes('"tool_use"')) + 1).join("\n")}\n`);
+  const { b, cb } = await dockPane(file);
+  try {
+    const { t0, span } = b.ledger().totals.heads.at(-1);
+    // Two moments in one room (timeline.js liveRoom), the one after the call's own.
+    const room = TL.liveRoom(span) * TL.TL_ROOM_GROW;
+    const at = (f) => setSystemTime(new Date(t0 + f * room));
+    H.state.terminals[0].status = "working";
+    b.ledgerMemo = null;
+    at(0.7);
+    const c = shownFrame(b, cb);
+    const M = b.tlModel;
+    expect([M.geo.room, M.grow.length, M.heads.length]).toEqual([room, 1, 1]);
+    const open = M.heads[0].steps.find((r) => r.open);
+    const x = M.geo.turns[0].x + 0.8 * M.geo.turns[0].w;
+    expect(M.grow[0].x1).toBeLessThan(x - 8);
+    const pressed = (calls, px) => {
+      handlerAfterId(calls, "th-tl-lanes", "on_mouse_down")({ local_position: { x: px, y: 2 * TL.TL_LANE + 8 }, position: { x: px, y: 0 } }, cb);
+      return b.tsel;
+    };
+    // The clock moves on with no draw: the strip is the one drawn at 0.7.
+    at(0.85);
+    expect(pressed(c, x)).toBe(M.heads[0].key);
+    expect(pressed(c, M.grow[0].x1 - 2)).toBe(open.key);
+    // Drawn again at 0.85, the bar is under the same press.
+    expect(pressed(frame(b, cb), x)).toBe(open.key);
+  } finally {
+    setSystemTime();
+    H.state.terminals[0].status = "idle";
+  }
 });
