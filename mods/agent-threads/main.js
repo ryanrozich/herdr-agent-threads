@@ -5779,14 +5779,13 @@ export default class Threads extends View {
       const keys = [...this.codeDue];
       this.codeDue.clear();
       for (const k of keys) {
-        // In the middle of a read the answer can be half there: its editors wait for the end,
-        // asking for no frame (the next draw, or the 1 s timer, asks again).
-        if (this.midRead(k)) { this.codeDue.add(k); continue; }
         const live = this.runs(k);
         if (this.open.has(k) || (live && this.liveCode?.has(k))) this.makeCode(k);
         else if (this.liveCode?.has(k)) this.dropCode(`${k}:`);
         if (!live) this.liveCode?.delete(k);
       }
+      // Keys that wait for the end of a read (makeCode) ask for no frame: the next draw, or the
+      // 1 s timer, asks again.
       if (this.codeDue.size < keys.length) cx.notify();
     });
     this.codeTick = true;
@@ -5877,6 +5876,9 @@ export default class Threads extends View {
   // block's text changed (a running turn's interim reply, a replaced file), and editors
   // for blocks the reply no longer has are released.
   makeCode(key) {
+    // In the middle of a read the answer can be half there: its editors wait for the end
+    // (flushCode), also when a click opens the turn.
+    if (this.midRead(key)) { (this.codeDue ??= new Set()).add(key); return; }
     const turn = this.findTurn(key);
     if (!turn) return;
     const t = theme();
