@@ -338,6 +338,8 @@ function say(w, e) {
   if (!after.length) w.afterAt = ms(e.ts);
   after.push(e.t);
   if (e.a) after.marked = after.length;
+  // Once the row has ended, a note after its answer is work at once: no end need follow it.
+  else if (w.done) foldNote(w);
   if (!e.a && !after.note) return;
   after.thought = w.reasoning?.length ?? 0;
   after.held = w.held ?? 0;
