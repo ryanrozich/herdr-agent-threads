@@ -651,7 +651,7 @@ export function tlBuildGo(J, until, clock) {
     const r = J.gen.next();
     if (r.done) {
       const L = r.value;
-      J.model = { heads: J.heads, cw: J.cw, scale: J.scale, geo: L.geo, vk: J.vk, L, grow: tlGrow(L, J.nowMs) };
+      J.model = { heads: J.heads, cw: J.cw, scale: J.scale, geo: L.geo, vk: J.vk, L, nowMs: J.nowMs, grow: tlGrow(L, J.nowMs) };
       return J.model;
     }
     J.ran += r.value;
@@ -1031,7 +1031,7 @@ export function timelineModel(prev, heads, cw, scale = "clock", nowMs = Date.now
   }
   const geo = same || tail ? prev.geo : (regeo ?? timelineGeo(heads, cw, scale, nowMs));
   const L = same && prev.vk === vk ? prev.L : (tail || regeo) && prev.vk === vk ? tlTail(prev.L, heads, was, geo) : timelineLayout(heads, cw, scale, nowMs, view, geo, null, prev?.L?.tracks ?? null);
-  return { heads, cw, scale, geo, vk, L, grow: tlGrow(L, nowMs) };
+  return { heads, cw, scale, geo, vk, L, nowMs, grow: tlGrow(L, nowMs) };
 }
 // One draw's model, and the build it leaves for the next draw: { M, J, wait }. M: the model
 // the last draw showed (null for none); J: a build in progress (tlBuildStart), or null; until

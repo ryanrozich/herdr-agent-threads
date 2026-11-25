@@ -12278,7 +12278,7 @@ export default class Threads extends View {
     };
   }
   // A press on the lanes: the nearest step in that lane within 4 px, else its turn's heading
-  // (timeline.js timelineHit), at the clock now for the running turn's growing bars.
+  // (timeline.js timelineHit), with the running turn's growing bars as the last draw had them.
   // local_position is in Herdr px from the lanes' corner.
   tlPress(e, cx) {
     const M = this.tlModel;
@@ -12287,7 +12287,7 @@ export default class Threads extends View {
     const z = this.zoom();
     const li = p.y == null ? -1 : Math.floor(p.y / z / TL_LANE);
     const lane = TL_LANES[li] ?? null;
-    const hit = timelineHit(M.L, M.heads, p.x / z, lane, Date.now(), lane ? p.y / z - li * TL_LANE : null);
+    const hit = timelineHit(M.L, M.heads, p.x / z, lane, M.nowMs, lane ? p.y / z - li * TL_LANE : null);
     if (hit && this.tlPick(hit)) cx.notify();
   }
   // The row a press picked, as a row click does (ledgerClick): selected, or on the selected
@@ -12379,7 +12379,7 @@ export default class Threads extends View {
       const lane = si >= 0 ? LEDGER_KINDS[tlRow(h, si).lk]?.lane : null;
       // The bar as drawn: on a turn under 2 px its lane's span (timeline.js tlBar), so the
       // outline is around what the layers drew, not left of it.
-      const b = lane ? tlBar(T, M.heads, ti, si, Date.now()) : null;
+      const b = lane ? tlBar(T, M.heads, ti, si, M.nowMs) : null;
       if (b && b.x1 >= 0 && b.x0 <= cw) {
         kids.push(div().id("th-tl-sel").absolute().left(b.x0 - 2).w(b.x1 - b.x0 + 4).top(TL_LANES.indexOf(lane) * TL_LANE + (b.track ? 8 : 2) - 2)
           .h((b.track ? 6 : 12) + 4).rounded(2).border_1().border_color(t.foreground));
