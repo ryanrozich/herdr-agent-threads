@@ -1,14 +1,15 @@
 // bun test: TRD-23 slice 1, the timeline at its edges: a session with no turns, the heads
 // changing while the strip is built from nothing, the spans the last turn reaches back over,
-// what is drawn on top and what a press there selects, and an older Herdr's torn bars. The
-// model is timeline.js (test/timeline.test.js); the pane is on the render harness.
+// what is drawn on top and what a press there selects, an older Herdr's torn bars, and the room
+// of a turn's number. The model is timeline.js (test/timeline.test.js); the pane is on the
+// render harness.
 import { test, expect, setSystemTime } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as TL from "../mods/agent-threads/timeline.js";
-import { LEDGER_KINDS } from "../mods/agent-threads/ledger.js";
-import { fixture, frame, H, handlerAfterId, makeCx, pane, settle, setup, Threads, unsliced } from "./render-harness.js";
+import { LEDGER_KINDS, trajInks } from "../mods/agent-threads/ledger.js";
+import { fixture, frame, H, handlerAfterId, makeCx, pane, settle, setup, theme, Threads, unsliced } from "./render-harness.js";
 
 setup();
 
@@ -505,6 +506,80 @@ test("timeline model: an event in the running turn that keeps its places counts 
   m = { ...TL.TL_MADE };
   const S = TL.timelineModel(N, more, CW, "clock", t0 + r0 + 1000, null);
   expect([...since(), S.geo.stale, S.geo.steps]).toEqual([0, 0, 1, true, 1025]);
+});
+
+// ---- the room of a turn's number ----
+// A number is drawn with a 1 px line at its left, 5 px of padding and then its digits, 10.5 px.
+// A wide digit takes 7 px there (measured on the test machine's UI font), so this is the room a
+// number needs, from its line's left edge to its last digit's end.
+const DIGIT_PX = 7;
+const numNeeds = (text) => 1 + 5 + text.length * DIGIT_PX;
+const NUM_WIDTHS = [1143, 1370, 1440, 1479];
+const NUM_TURNS = [9, 99, 999, 1234, 2000, 10000];
+// The turns selected in turn, n turns long: none, the first, one inside, and the last two.
+const numPicks = (n) => [null, 0, Math.floor(n * 0.617), n - 2, n - 1];
+
+test("timeline number room: a number of 1 to 5 digits has its line, its padding and 7 px a digit", () => {
+  expect(TL.TL_NUM_PAD).toBe(6);
+  const short = [1, 2, 3, 4, 5].filter((k) => TL.tlNumW("8".repeat(k)) < numNeeds("8".repeat(k)));
+  expect(short).toEqual([]);
+});
+
+test("timeline number room: the last number's digits end inside the strip at 9 to 10,000 turns, with a turn selected or none", () => {
+  const cut = [];
+  for (const n of NUM_TURNS) {
+    const heads = doneTurns(n);
+    for (const cw of NUM_WIDTHS) {
+      const L = TL.timelineLayout(heads, cw, "clock", T0, null);
+      for (const ti of numPicks(n)) {
+        const nums = TL.tlNumbers(L, heads, ti);
+        const last = nums.at(-1);
+        // The last turn's number, or the selected one's in its place.
+        expect([n, n - 1]).toContain(Number(last.text));
+        const past = last.x + numNeeds(last.text) - cw;
+        if (past > 0) cut.push([cw, n, ti, last.text, Math.round(past * 10) / 10]);
+      }
+    }
+  }
+  expect(cut).toEqual([]);
+});
+
+test("timeline number room: drawn in the pane, every number's digits end inside the strip, from its drawn left over its line and padding", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "3"));
+  shownFrame(b, cb);
+  // The numbers drawn, each with the left, the padding, the line and the text size it is under.
+  const numbersDrawn = (c) => {
+    const out = [];
+    let at = null;
+    for (const [name, v] of own(c, "th-tl-labels")) {
+      if (name === "left") at = { x: v };
+      else if (at && ["pl", "border_l", "text_size"].includes(name)) at[name] = v;
+      else if (at && name === "child" && typeof v === "string" && /^\d+$/.test(v)) out.push({ ...at, text: v });
+    }
+    return out;
+  };
+  const cut = [];
+  for (const n of NUM_TURNS) {
+    const heads = doneTurns(n);
+    for (const cw of NUM_WIDTHS) {
+      b.paneW = b.width = cw + TL.TL_GUT + 12;
+      for (const ti of numPicks(n)) {
+        H.rec = [];
+        b.timelineView(theme, { totals: { heads }, partial: false }, ti == null ? [] : [{ key: heads[ti].key }], ti == null ? -1 : 0, trajInks(theme, true));
+        const c = H.rec;
+        H.rec = null;
+        expect([b.tlModel.heads === heads, b.tlModel.L.cw]).toEqual([true, cw]);
+        const nums = numbersDrawn(c);
+        expect(nums.map((l) => l.text)).toEqual(TL.tlNumbers(b.tlModel.L, heads, ti).map((l) => l.text));
+        for (const l of nums) {
+          expect([l.pl, l.border_l, l.text_size]).toEqual([5, 1, 10.5]);
+          const past = l.x + numNeeds(l.text) - cw;
+          if (past > 0) cut.push([cw, n, ti, l.text, Math.round(past * 10) / 10]);
+        }
+      }
+    }
+  }
+  expect(cut).toEqual([]);
 });
 
 // ---- a seeded fuzz of the strip's draws ----
