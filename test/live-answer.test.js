@@ -11,6 +11,7 @@ import { MD_MAX, itemWords, pane, settleRows, setup, state } from "./render-harn
 
 setup();
 
+const STOP = new Error("stopped by Herdr");
 const ID = "00000000-0000-4000-8000-0000000000f2";
 const at = (s) => new Date(Date.UTC(2026, 10, 1, 9, 0, s)).toISOString();
 const A = "0:1";
@@ -185,7 +186,6 @@ test("a long answer of a running turn is cut and linked once, not at each event"
   add(call(40));
   add(call(41));
   expect(n.cut).toBe(2);
-  // The turn that ended is cut by its own draw, as any open turn.
   expect(md(v).endsWith("Second answer.")).toBe(true);
 });
 
@@ -242,6 +242,35 @@ test("a running answer's editor stays when the turn ends open, and a turn that r
   add({ ...done, ts: at(30) }, { k: "p", o: "human", t: "And", ts: at(31) }, call(32), answer(code, 33));
   cx.flush(0);
   expect([...v.code.keys()]).toEqual(["0:3:1"]);
+});
+
+// Red before its own cure: the rows on screen say nothing of a build not all done, and the
+// editor was let go before its rows were drawn, with no later build to ask for it again.
+test("a running answer's editor is made while the rows it came with are still being built", async () => {
+  const { v, cx } = await live([PROMPT, call(), answer("One.\n\n```js\nconst a = 1;\n```")]);
+  cx.flush(0);
+  v.dropCode();
+  // A build's slice has asked for the editors (replyRows); the rows drawn are the ones before it.
+  v.codeDue.add(A);
+  v.liveCode.add(A);
+  v.baseIndex = new Map();
+  v.flushCode(cx);
+  cx.flush(0);
+  expect([[...v.code.keys()], v.liveCode.has(A)]).toEqual([["0:1:1"], true]);
+});
+
+// Red at c37c64f3: there is no cut.
+test("a draw Herdr stops in the cut of a running answer keeps nothing of it, and the next draw has its rows", async () => {
+  const { v, cx, s } = await live([PROMPT, call(), answer("First answer.")]);
+  const { cutReply } = Object.getPrototypeOf(v);
+  let stops = 0;
+  v.cutReply = function (...a) { if (!stops) { stops++; throw STOP; } return cutReply.apply(this, a); };
+  apply(s, answer("Second answer.", 5));
+  try { v.render(cx); } catch (e) { if (e !== STOP) throw e; v.renderOpen = true; }
+  expect([stops, v.cutOf.get(s.turns[0]).text]).toEqual([1, "First answer."]);
+  settleRows(v, cx);
+  v.sel = null;
+  expect([md(v), kinds(v)]).toEqual(["First answer.\n\nSecond answer.", ["wrow", "grp", "md", "wspin"]]);
 });
 
 // Red at c37c64f3: no row says what is left out.
