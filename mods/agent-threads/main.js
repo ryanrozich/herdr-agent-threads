@@ -5602,6 +5602,8 @@ export default class Threads extends View {
     // list's, which Herdr scales by zoom.
     this.listOff = (this.listOff ?? 0) - dy / this.zoom();
     this.wheelN = (this.wheelN ?? 0) + 1;
+    // A step's ask that it drops is not owed to the next step (the landing, render).
+    this.stepDue = null;
     // The reader's own scroll drops a jump still to come (one waiting for the rows or a card's
     // measures, asked again each frame): it would pull the view back from under the wheel.
     // A landing's own asks after it is taken check the count (wheels, render).
@@ -9597,6 +9599,9 @@ export default class Threads extends View {
     // A scroll to a place waits 2 s at most: while renders keep being stopped the rows never
     // settle. The end is held to in every frame while they do (below).
     const bottomHeld = this.toBottom && !this.scrollTo;
+    // A step's ask dropped for the end, which can be held for long before it lands, or never land,
+    // is not owed to the next step either.
+    if (bottomHeld) this.stepDue = null;
     // The opening's end is held in this frame while parts above it are still measured (each
     // measure moves the end down, and a scroll a frame later showed it slip and Jump to latest
     // flash), and in every frame the list is drawn hidden under the loading state, the one that
