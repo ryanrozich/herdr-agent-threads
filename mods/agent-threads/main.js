@@ -5579,7 +5579,8 @@ export default class Threads extends View {
 
   flushImages(cx) {
     if (this.imgBusy || !this.imgDue?.length) return;
-    this.imgBusy = true;
+    // The timer is asked for before the decode is marked as running, as in flushCalls: a render
+    // Herdr stopped between the two left the mark with no timer to clear it.
     cx.timer.after(0, (cx) => {
       const job = this.imgDue.shift();
       if (!job) { this.imgBusy = false; return; }
@@ -5602,6 +5603,7 @@ export default class Threads extends View {
         cx.notify();
       });
     });
+    this.imgBusy = true;
   }
 
   // The decoded file for a turn's image i ({path, w, h}), or null; whether its file is gone;
@@ -5643,7 +5645,8 @@ export default class Threads extends View {
 
   flushCode(cx) {
     if (!this.codeDue?.size || this.codeTick) return;
-    this.codeTick = true;
+    // The timer is asked for before it is marked as asked for, as in flushCalls: a render Herdr
+    // stopped between the two left the mark with no timer to clear it.
     cx.timer.after(0, (cx) => {
       this.codeTick = false;
       const keys = [...this.codeDue];
@@ -5651,6 +5654,7 @@ export default class Threads extends View {
       for (const k of keys) if (this.open.has(k)) this.makeCode(k);
       cx.notify();
     });
+    this.codeTick = true;
   }
 
   // Releases the code editors whose key starts with prefix (all of them when no prefix).
