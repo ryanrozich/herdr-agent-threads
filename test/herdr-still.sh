@@ -45,11 +45,15 @@ case $THEME in dark | light) ;; *) usage ;; esac
 W=${SIZE%x*}
 H=${SIZE#*x}
 case $W$H$PX in *[!0-9]*) usage ;; esac
-RIG=${HERDR_RIG:-$(pwd)/.herdr-rig}
+RIG=$(abs "${HERDR_RIG:-.herdr-rig}")
 APP=$RIG/bin/herdr-app
 X11=${HERDR_STILL_X11:-/tmp/.X11-unix}
 
+# The processes that run already: the cleanup leaves them alone.
+OLD=$(echo /proc/[0-9]*)
 R=$(mktemp -d "${TMPDIR:-/tmp}/herdr-still.XXXXXX") || exit 2
+# As the system gives a working folder: links followed.
+R=$(cd "$R" && pwd -P) || exit 2
 A=$R/a
 n=99
 XPID=""
@@ -85,9 +89,12 @@ cleanup() {
   [ -n "$WPID" ] && kill "$WPID" 2> /dev/null
   [ -n "$HPID" ] && kill "$HPID" 2> /dev/null
   [ -n "$APID" ] && { appenv timeout -k 2 8 "$APP" "do" app.quit > /dev/null 2>&1; sleep 1; kill "$APID" 2> /dev/null; }
-  # The core and anything it started carry the folder in their environment.
+  # The core and anything it started have the folder in their command line or work in it. A
+  # process that ran before this script is never one of them. No environment is read.
   for p in /proc/[0-9]*; do
-    grep -qs "$R" "$p/environ" && kill "${p#/proc/}" 2> /dev/null
+    case " $OLD " in *" $p "*) continue ;; esac
+    grep -qsF "$R" "$p/cmdline" && { kill "${p#/proc/}" 2> /dev/null; continue; }
+    case $(readlink "$p/cwd" 2> /dev/null)/ in "$R"/* | "$R (deleted)/") kill "${p#/proc/}" 2> /dev/null ;; esac
   done
   [ -n "$XPID" ] && kill "$XPID" 2> /dev/null
   rm -rf "$R"
@@ -137,7 +144,9 @@ while [ ! -e "$X11/X$n" ]; do
   sleep 0.5
 done
 
-(X="exec"; appenv "$APP") > "$R/app.log" 2>&1 &
+# In the run's folder: the core it starts names only the rig in its command line, but keeps the
+# folder it was started in, so the cleanup finds it by that.
+(cd "$R" && X="exec" && appenv "$APP") > "$R/app.log" 2>&1 &
 APID=$!
 i=0
 until h status > "$R/status.json" 2> /dev/null && [ -s "$R/status.json" ]; do
