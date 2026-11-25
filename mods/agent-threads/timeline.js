@@ -976,7 +976,9 @@ export function timelineModel(prev, heads, cw, scale = "clock", nowMs = Date.now
   // turn's heading. When only the last heading is new and its length on the strip is the
   // same (its room while it runs), the places hold, and only that turn is laid out again.
   const n = heads.length;
-  const wall = room > 0 ? room : wallOf(heads[n - 1]);
+  // With no turns (an empty session, or one just cleared) there is no last heading: the strip is
+  // empty, its gutter and lanes drawn with no bar, number or tick (geoGen, layoutGen).
+  const wall = room > 0 ? room : n ? wallOf(heads[n - 1]) : 0;
   const only = !same && scale === "clock" && prev && prev.cw === cw && prev.scale === scale && lastOnly(prev.heads, heads);
   const tail = only && base && prev.geo.walls[n - 1] === wall;
   // Working on or off (the room comes or goes) with only the last heading new: only that turn's
