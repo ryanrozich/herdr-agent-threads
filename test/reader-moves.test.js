@@ -606,8 +606,8 @@ for (const gap of [1, 2]) test(`a drag on the bar ${gap} frame${gap > 1 ? "s" : 
 // "land") only brings the turn to the nearest edge, so a drag that keeps it on screen stays
 // until the landing. The jump then lands, and a drag after it counts once: the held asks, one
 // a frame, leave no mark that swallows the reader's later moves. The whole jump counts once,
-// at its key or command: a jump by debugScroll is the person's (no settle after it, so only
-// the count of the pane's own asks keeps its held asks from counting as the reader's).
+// at its key or command. A key's jump is settled for 500 ms after it lands (scrollBusyUntil),
+// and a drag in that time does not count either; the test moves past it.
 const capTurn = (i, long = false, parts = 25) => {
   const ts = new Date(Date.UTC(2026, 10, 1, 9, 0, 0) + i * 1000).toISOString();
   const said = long ? Array.from({ length: parts }, (_, j) => `Part ${j}: ${"word ".repeat(600)}`).join("\n\n") : `Reply ${i}: the order is fine.`;
@@ -632,6 +632,8 @@ async function heldThenDrag(go) {
     v.buildMax = () => 0;
     v.rowsKey = null;
     probeFrame(v, cx);
+    // The search's own landing is settled before the jump.
+    v.scrollBusyUntil = 0;
     const n00 = moves(v);
     go(v, cx);
     probeFrame(v, cx);
