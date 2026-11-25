@@ -9719,7 +9719,13 @@ export default class Threads extends View {
         if (lift > 0) cx.timer.after(120, (cx) => { if ((this.liftN ?? 0) > landN) return; this.landLift = 0; this.fitKey = null; cx.notify(); });
       } else if (i >= 0) {
         const top = lead(i);
-        first(16, (cx) => { ask(i, how); cx.notify(); });
+        // A key held down can repeat before the ask below, which a newer jump drops, every time.
+        // So a landing right after one whose ask was never made asks in its own frame too.
+        if (!st.held) {
+          if (this.stepDue === landN - 1) this.ownAsk(i, how);
+          this.stepDue = landN;
+        }
+        first(16, (cx) => { if (still()) this.stepDue = null; ask(i, how); cx.notify(); });
         if (top !== i) cx.timer.after(48, (cx) => { ask(top, how); cx.notify(); });
       }
     }
