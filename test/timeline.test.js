@@ -802,7 +802,10 @@ test("timeline model: with events arriving in the running turn, the finished tur
     // placed again whole at once instead.
     const b3 = { ...TL.TL_MADE };
     const m3 = timelineModel(m2, [...done, runningHead(n, 33, t0)], cw, "clock", t0 + 260000, null);
-    expect([n, TL.TL_MADE.geo - b3.geo, TL.TL_MADE.layout - b3.layout, TL.TL_MADE.tail - b3.tail]).toEqual([n, ...(n === 8 ? [1, 1, 0] : [0, 0, 1])]);
+    const c3 = [TL.TL_MADE.geo - b3.geo, TL.TL_MADE.layout - b3.layout, TL.TL_MADE.tail - b3.tail];
+    // At 8 turns its places are a whole placing's.
+    if (n === 8) expect(m3.geo).toEqual(timelineGeo(m3.heads, cw, "clock", t0 + 260000));
+    expect([n, ...c3]).toEqual([n, ...(n === 8 ? [1, 1, 0] : [0, 0, 1])]);
     const moved = Math.abs(m3.geo.turns[n - 1].w - m2.geo.turns[n - 1].w);
     expect([n, m3.geo.room, m3.geo.stale, moved > 1]).toEqual([n, liveRoom(260000), n === 2000 ? true : undefined, n !== 5600]);
     // A finished heading that is new (another session, or the turn before the running one
@@ -816,10 +819,15 @@ test("timeline model: with events arriving in the running turn, the finished tur
 });
 
 test("timeline model: working on or off on the last turn alone places nothing in that frame: the finished turns keep their places and only the last is laid out; working off, or on with its end moved more than 1 px, marks the places the old scale's for the bounded build, past 1,024 steps; at 3 turns either is placed again whole at once", () => {
-  for (const [n, cw, kept] of [[2000, 1370, true], [5600, 1143, true], [3, 1370, false]]) {
+  // on: what working on does. kept: its end moves 1 px or less, so the places are kept and not
+  // marked; marked: it moves more on a session past 1,024 steps (a running turn of 12 calls,
+  // 174 s long, whose room is the next step, 256.3 s), so they are kept and marked; whole: it
+  // moves more on a session of 1,024 steps or fewer, placed again whole.
+  for (const [n, cw, k, on] of [[2000, 1370, 6, "kept"], [5600, 1143, 6, "kept"], [257, 1370, 12, "marked"], [3, 1370, 6, "whole"]]) {
     const done = strip(n - 1);
     const t0 = T0 + (n - 1) * 100000;
-    const run = runningHead(n, 6, t0);
+    const run = runningHead(n, k, t0);
+    const big = 4 * (n - 1) + k + 1 > TL.TL_BUILD_BARS;
     const fin = { ...run, going: false, total: run.span };
     const at = t0 + run.span + 1000;
     const room = liveRoom(run.span + 1000);
@@ -836,17 +844,26 @@ test("timeline model: working on or off on the last turn alone places nothing in
     const fresh = timelineGeo(m1.heads, cw, "clock", at);
     const moved = Math.max(...fresh.turns.map((t, ti) => Math.abs(t.x - m0.geo.turns[ti].x)));
     const wide = (m) => (tlBox(m.L, n - 1).w >= 2 ? 1 : 0);
-    if (kept) {
+    expect([n, big]).toEqual([n, on !== "whole"]);
+    if (on === "kept") {
       expect(moved).toBeLessThanOrEqual(1);
       expect(c1).toEqual({ geo: 0, layout: 0, tail: 1, tracks: wide(m1) });
       expect(m1.geo.turns.slice(0, -1).every((t, ti) => t === m0.geo.turns[ti])).toBe(true);
       expect(m1.geo.turns[n - 1].x).toBe(m0.geo.turns[n - 1].x);
       for (let ti = 0; ti < n; ti++) expect(Math.abs(m1.geo.turns[ti].x - fresh.turns[ti].x)).toBeLessThanOrEqual(1);
       expect(m1.geo.stale).toBeUndefined();
+    } else if (on === "marked") {
+      // Its end moves more than 1 px past 1,024 steps: the places are kept all the same, marked
+      // the old scale's, and only the last turn is laid out, its tracks worked out alone (it is
+      // 2 px or wider); tlDraw places them again over the draws after (test/timeline-off.test.js).
+      expect(moved).toBeGreaterThan(1);
+      expect([n, wide(m1)]).toEqual([n, 1]);
+      expect(c1).toEqual({ geo: 0, layout: 0, tail: 1, tracks: 1 });
+      expect(m1.geo.stale).toBe(true);
+      expect(m1.geo.turns.slice(0, -1).every((t, ti) => t === m0.geo.turns[ti])).toBe(true);
     } else {
       // Its end moves more than 1 px on a session of 1,024 steps or fewer: placed again whole at
-      // once, nothing marked (test/timeline-off.test.js holds the edge, and past it the places
-      // kept and marked the old scale's).
+      // once, nothing marked (test/timeline-off.test.js holds the edge).
       expect(moved).toBeGreaterThan(1);
       expect(c1).toEqual({ geo: 1, layout: 1, tail: 0, tracks: wide(m1) });
       expect(m1.geo.stale).toBeUndefined();
@@ -861,7 +878,7 @@ test("timeline model: working on or off on the last turn alone places nothing in
     expect([m2.geo.room, m2.geo.live, m2.geo.walls[n - 1]]).toEqual([0, -1, run.span]);
     // Placed nothing, and marked the old scale's either way, so the bounded build makes it exact;
     // at 3 turns placed again whole at once.
-    if (kept) {
+    if (big) {
       expect(count(before)).toEqual({ geo: 0, layout: 0, tail: 1, tracks: wide(m2) });
       expect(m2.geo.stale).toBe(true);
       expect(m2.geo.turns.every((t, ti) => ti === n - 1 ? t.w === m0.geo.turns[ti].w : t === m0.geo.turns[ti])).toBe(true);
