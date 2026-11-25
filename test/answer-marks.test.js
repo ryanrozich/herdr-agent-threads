@@ -15,7 +15,7 @@ import { trajectories } from "../mods/agent-threads/core/trajectory.js";
 import { hash, turnIds } from "../mods/agent-threads/core/ids.js";
 import { atif } from "../mods/agent-threads/core/atif.js";
 import { seenOf } from "../mods/agent-threads/pins.js";
-import { ledgerTurn } from "../mods/agent-threads/ledger.js";
+import { detailOf, ledgerTurn } from "../mods/agent-threads/ledger.js";
 import { agentReplied, noticeTurn, senderLabel } from "../mods/agent-threads/ui.js";
 import { pane, settleRows, setup } from "./render-harness.js";
 
@@ -1108,6 +1108,43 @@ describe("E: the export and the ledger take the same reply", () => {
     const rows = ledgerTurn(s, s.turns[0], 0).steps;
     expect(rows.map((r) => [r.lk, r.lk === "tool" ? r.tool : r.text])).toEqual([["you", "One"], ["text", "Looking."], ["tool", "exec_command"], ["reply", "First answer."], ["tool", "exec_command"], ["reply", "Second answer."]]);
   });
+});
+
+// Red on the base: the first text is cut to 3,400 characters.
+test("the export keeps a background update's marked text whole before its later calls", () => {
+  const t = claudeReplied("One.");
+  t.wake();
+  t.say("m3", long("build"));
+  t.tool("m4");
+  t.say("m5", "And the tests.");
+  t.hooks();
+  const s = newSession("s", "f");
+  s.keepWakes = true;
+  const x = atif(read(t.file(), "claude", 1 << 20, s), { agent: "claude" });
+  expect(said(x, 1)).toEqual(["One.", long("build"), "And the tests."]);
+});
+
+// Red on the base: no row of its own. A row that started by itself is not a finished task's.
+test("the ledger's row and detail of a goal's task say what started it", () => {
+  const s = read(goalRollout().file(), "codex");
+  const [first] = ledgerTurn(s, s.turns[1], 0).steps;
+  expect([first.lk, first.text]).toEqual(["agent", "Goal"]);
+  expect(detailOf(first).fields[0]).toEqual(["From", "the harness · work that started by itself, nobody typed this"]);
+});
+
+// Red on the base: the last text, which Codex marks as a note, is the reply row.
+test("the ledger marks a note after the last answer as a text, running or ended", () => {
+  const c = codex();
+  c.prompt("One");
+  c.final("First answer.");
+  c.call("call_1");
+  c.note("Tidying up.");
+  const kinds = (s) => ledgerTurn(s, s.turns[0], 0).steps.map((r) => [r.lk, r.text]);
+  const running = kinds(read(c.file(), "codex"));
+  c.done(1000);
+  const ended = kinds(read(c.file(), "codex"));
+  expect(running).toEqual([["you", "One"], ["reply", "First answer."], ["tool", "ls cart"], ["text", "Tidying up."]]);
+  expect(ended).toEqual(running);
 });
 
 describe("E: a pin stays on its turn while numbers move", () => {

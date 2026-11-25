@@ -284,9 +284,11 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
   // reader never keeps) is no step of its own.
   for (const g of tr.groups) for (const c of g.cells) if (!(c.kind === "message" && !String(c.text ?? "").trim())) cells.push(c);
   // The reply is the last message cell when the turn has one (trajectory puts it last but
-  // for a background update).
+  // for a background update). With marked answers in their places (final), each is a reply, and
+  // the last message is one only when it holds an answer too, not a note after them.
+  const last = !turn.finals?.length || Boolean(turn.after.marked);
   let replyAt = -1;
-  if (hasReply) for (let i = cells.length - 1; i >= 0; i--) if (cells[i].kind === "message") { replyAt = i; break; }
+  if (hasReply) for (let i = cells.length - 1; i >= 0; i--) if (cells[i].final || (last && cells[i].kind === "message")) { replyAt = i; break; }
   // A turn with no time on any step (the turn's own start and end are not a step's): its
   // cells are left empty and its heading says so.
   const timed = t0 != null && cells.some((c, i) => i > 0 && c.start != null);
@@ -313,8 +315,8 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
     if (c.start != null) lastEnd = Math.max(lastEnd ?? c.start, c.start);
     if (c.end != null) lastEnd = Math.max(lastEnd ?? c.end, c.end);
     if (c.kind === "user") {
-      // A task notification's turn has no message: its row says what the Chat's quiet line
-      // says ("Background task finished"), never the notice's text.
+      // A task notification's turn, or one that started by itself, has no message: its row says
+      // what the Chat's quiet line says ("Background task finished", "Goal"), never the text.
       const notice = noticeTurn(turn);
       r.lk = turn.agent ? "agent" : "you";
       r.text = notice ? kindWords(turn.sender) : outlineText(c.text) || " ";
@@ -323,7 +325,7 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
       r.start = t0 != null ? 0 : null;
     } else if (c.kind === "message") {
       const isReply = i === replyAt;
-      r.lk = isReply ? "reply" : "text";
+      r.lk = isReply || c.final ? "reply" : "text";
       r.text = firstLine(c.text) || " ";
       if (c.start != null && t0 != null) r.start = c.start - t0;
       else r.startQ = true;
@@ -599,7 +601,7 @@ export function detailOf(r) {
   const k = LEDGER_KINDS[r.lk] ?? LEDGER_KINDS.text;
   const F = [];
   if (r.lk === "you") F.push(["From", "the user"]);
-  else if (r.lk === "agent") F.push(["From", r.notice ? "the harness · a background task finished, nobody typed this" : `${r.sender ?? "an agent"} · another agent, not the user`]);
+  else if (r.lk === "agent") F.push(["From", r.notice ? `the harness · ${r.turn?.self ? "work that started by itself" : "a background task finished"}, nobody typed this` : `${r.sender ?? "an agent"} · another agent, not the user`]);
   else if (r.lk === "context") F.push(["From", "the harness · nobody typed this"]);
   if (r.turn?.n != null) F.push(["Turn", `${r.turn.n}`]);
   F.push(["Started", r.start != null ? `${startText(r.start)} into the turn` : r.startQ ? "not recorded" : "no times in this turn"]);
