@@ -457,9 +457,9 @@ function cutOf(S) {
 // alone. The places, the numbers and the breaks stay P's. The tracks are P's (a copy) less
 // the old last heading's (was), and the new one's worked out: one track pass an event. G: the
 // places, P's or P's with only the last turn's length changed (tlLastLength), whose number
-// then gets that turn's width and length text again, as it does when that turn starts or stops
-// running with its places kept (one with no start time has no room). With no cut (the last turn
-// out of view), P itself on G.
+// then gets that turn's width and length text again, as it does when its words change with its
+// places kept (one with no start time has no room, so it may start or stop running there; one of
+// 0 ms may end there). With no cut (the last turn out of view), P itself on G.
 function tlTail(P, heads, was, G = P.geo) {
   TL_MADE.tail++;
   const c = P.cut;
@@ -476,8 +476,8 @@ function tlTail(P, heads, was, G = P.geo) {
   const n = heads.length;
   runGen(layTurn(S, n - 1));
   const j = P.labels.length - 1;
-  const flip = Boolean(was.going) !== Boolean(heads[n - 1].going);
-  if ((on || flip) && j >= 0 && P.labels[j].ti === n - 1 && S.nti[0] === n - 1) {
+  const said = lengthWords(was, G.walls[n - 1]) !== lengthWords(heads[n - 1], G.walls[n - 1]);
+  if ((on || said) && j >= 0 && P.labels[j].ti === n - 1 && S.nti[0] === n - 1) {
     out.labels = P.labels.slice();
     out.labels[j] = { ...P.labels[j], tw: S.nw[0] };
     roomOfNumbers([out.labels[j]], heads, out);
@@ -731,15 +731,21 @@ function* numbersGen(out, heads, nti, nx, nw) {
   }
   out.labels = roomOfNumbers(list, heads, out);
 }
-// Each number's w, the room to the next number (or the strip's end), and its turn's length
-// where there is room; a turn with none recorded (0 ms) has no words for it.
+// A turn's length on the strip in words, beside its number: wall, or "running". A length of 0 ms
+// has words only where it is the turn's recorded one, as in its heading (ledger.js headParts:
+// ended, and with a step that has a time); no length is recorded for the other turns of 0 ms.
+function lengthWords(h, wall) {
+  if (h.going) return "running";
+  return wall > 0 || (h.timed && h.total === 0) ? durText(wall) : null;
+}
+// Each number's w, the room to the next number (or the strip's end), and its turn's length in
+// words where there is room.
 function roomOfNumbers(list, heads, L) {
   for (let j = 0; j < list.length; j++) {
     const l = list[j];
     const room = (j + 1 < list.length ? list[j + 1].x : L.cw) - l.x;
     l.w = Math.max(tlNumW(l.text), room - (j + 1 < list.length ? TL_NUM_GAP / 2 : 0));
-    const h = heads[l.ti];
-    l.total = l.tw >= TL_NUM_LEN && room >= TL_NUM_LEN ? (h.going ? "running" : (L.geo.walls[l.ti] > 0 && durText(L.geo.walls[l.ti])) || null) : null;
+    l.total = l.tw >= TL_NUM_LEN && room >= TL_NUM_LEN ? lengthWords(heads[l.ti], L.geo.walls[l.ti]) : null;
   }
   return list;
 }
