@@ -336,7 +336,12 @@ export function afterPress(cx) {
 export function makeCx() {
   const cx = {
     focus_handle: () => ({ focus() { focusCalls++; }, is_focused: () => true }),
-    // Timers are kept; flush() runs the ones due within ms (the quote's focus retries).
+    // Timers are kept; flush() runs the ones due within ms (the quote's focus retries), in the
+    // order they were asked for. By a reading of its scheduler at v0.1.17, Herdr runs them by due
+    // time, but a late frame finds several due at once, so code must not depend on the order of
+    // timers that come due together. A stop is an error thrown from one call inside a render,
+    // caught out of the draw with renderOpen set again: Herdr's stop runs no catch and no finally
+    // (stopped() in test/stop-calls.test.js).
     timer: { after(ms, fn) { cx.timers.push({ ms, fn }); }, every(ms, fn) { cx.everies.push({ ms, fn }); } },
     timers: [], everies: [],
     // cx.sleep: a macrotask by default; a test can swap in its own (a dead task, timing marks).
