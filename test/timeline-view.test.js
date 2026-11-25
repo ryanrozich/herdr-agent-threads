@@ -146,6 +146,53 @@ test("timeline view: it starts hidden when fewer than 4 rows would be left under
   expect(sheet({}).some((x) => x.startsWith("b:"))).toBe(false);
 });
 
+test("timeline view: a change under 1 px in the list's height that takes or gives the fourth row under the strip hides or shows it; b's choice holds through it", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "3"), "bottom", 1440);
+  let asked = 0;
+  cb.notifyHook = () => { asked++; };
+  // The list measured h px tall after a frame: whether it asks for a draw, and the strip's state then.
+  const tall = (h) => {
+    const c = frame(b, cb);
+    const n = asked;
+    handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 1440, height: h }, cb);
+    const draws = asked - n;
+    const on = ids(frame(b, cb)).includes("th-timeline");
+    return [draws, on, b.trajReport().timeline.rowsLeft];
+  };
+  const four = 98 + 4 * 24;
+  // Hidden or shown, what is measured is the list's own height: 98 px less with the strip over it.
+  expect([tall(four), tall(four - 98), tall(four - 98 - 0.5)]).toEqual([[1, true, 4], [0, true, 4], [1, false, 3]]);
+  expect([tall(four - 0.5), tall(four - 0.75), tall(four)]).toEqual([[0, false, 3], [0, false, 3], [1, true, 4]]);
+  // One that moves no row is not taken.
+  expect([tall(four - 98), tall(four - 98 + 0.4), tall(four - 98 + 0.9)]).toEqual([[0, true, 4], [0, true, 4], [0, true, 4]]);
+  // Shown by b, and then hidden by b, it stays so.
+  for (const on of [false, true]) {
+    b.key(keyEv("b"), cb);
+    const top = on ? 98 : 0;
+    expect([four - top, four - top - 0.5, four - top, four - top - 60, four - top].map((h) => tall(h)[1])).toEqual([on, on, on, on, on]);
+  }
+});
+
+test("timeline view: a list whose height with the strip is under 1 px off what it is without it, over or under four rows, does not show and hide the strip by turns", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "3"), "bottom", 1440);
+  const four = 98 + 4 * 24;
+  // The pane's height as Herdr lays it out: off px less for the list while the strip is drawn.
+  const lay = (h, off) => {
+    const c = frame(b, cb);
+    const on = ids(c).includes("th-timeline");
+    handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 1440, height: on ? h - 98 - off : h }, cb);
+    return on;
+  };
+  for (const off of [0.2, -0.2]) {
+    // 0.1 px over four rows, then 0.1 px under.
+    for (const h of [four + 0.1, four - 0.1, four + 0.1]) {
+      const seen = Array.from({ length: 12 }, () => lay(h, off));
+      const ends = seen.slice(4);
+      expect(new Set(ends).size).toBe(1);
+    }
+  }
+});
+
 // Every way into the timeline works here and is not a move of the Chat's list: the key, its
 // command, its button, and a press on its lanes, which picks a row of the Trajectory's own list.
 // Each must do its work (the strip shown or hidden, the row picked) for its zero to mean something.

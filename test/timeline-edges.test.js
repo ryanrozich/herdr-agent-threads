@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as TL from "../mods/agent-threads/timeline.js";
-import { newSession, apply } from "../mods/agent-threads/core/turns.js";
+import { newSession, apply, STEP_MAX } from "../mods/agent-threads/core/turns.js";
 import { LEDGER_KINDS, headParts, ledgerTurn, trajInks } from "../mods/agent-threads/ledger.js";
 import { fixture, frame, H, handlerAfterId, makeCx, pane, settle, setup, theme, Threads, unsliced, until } from "./render-harness.js";
 
@@ -798,20 +798,21 @@ test("timeline view: the debug report counts no turns while the strip waits, for
 }, 30000);
 
 // ---- a press between the pane's change and its next frame ----
-// A call on the strip of frame c (the last drawn) whose bar a press gets, the first there is: its
-// row's key, and that press through the frame's own handler.
-function callOn(b, c) {
+// A call on the strip of frame c (the last drawn) whose bar a press gets, the first there is from
+// turn from on: its row's key, and that press through the frame's own handler. With lane
+// "model" a reply instead of a call.
+function callOn(b, c, from = 0, lane = "tools") {
   const M = b.tlModel;
   const down = handlerAfterId(c, "th-tl-lanes", "on_mouse_down");
-  for (let ti = 0; ti < M.heads.length; ti++) {
+  for (let ti = from; ti < M.heads.length; ti++) {
     for (const [i, r] of M.heads[ti].steps.entries()) {
-      if (LEDGER_KINDS[r.lk]?.lane !== "tools") continue;
+      if (LEDGER_KINDS[r.lk]?.lane !== lane || (lane === "model" && r.lk !== "reply")) continue;
       const box = TL.tlBar(M.L, M.heads, ti, i, M.nowMs);
       if (!box) continue;
       const x = (box.x0 + box.x1) / 2;
       // 11 px down the lane a full bar and a half-height one are both drawn.
-      if (TL.timelineHit(M.L, M.heads, x, "tools", M.nowMs, 11)?.key !== r.key) continue;
-      const y = 2 * TL.TL_LANE + 11;
+      if (TL.timelineHit(M.L, M.heads, x, lane, M.nowMs, 11)?.key !== r.key) continue;
+      const y = ["input", "model", "tools"].indexOf(lane) * TL.TL_LANE + 11;
       return { key: r.key, press: (cb) => down({ local_position: { x, y }, position: { x, y } }, cb) };
     }
   }
@@ -884,6 +885,109 @@ for (const [how, ms] of [["in the press", 1e9], ["over draws", -1]]) {
     expect([b.current().turns === was, was.length > n]).toEqual([true, true]);
     b.buildMax = () => ms;
     expect(pressed(b, cb, on)).toEqual([on.key, on.key]);
+  }, 30000);
+}
+
+// ---- a press between a change to the turns read and the next frame ----
+// A pane on a transcript whose reader gives the events first at its first read. read(events, rewind):
+// a read after it that gives events, with rewind as OpenCode's reader gives every one, so that the
+// turns after the last settled one are cut back first (turns.js rewindTail).
+async function cutPane(first) {
+  const file = fixture("--extra", "3");
+  let next = { events: [], rewind: true };
+  const hook = async (args) => {
+    if (args[1] !== file) return null;
+    const top = Number(args[2]) === 0;
+    const lines = [{ k: "file", size: 10 }, ...(top ? first : next.events), { k: "chunk", used: top ? 10 : 0, ...(top || !next.rewind ? {} : { rewind: true }) }];
+    return { code: 0, stdout: lines.map((e) => JSON.stringify(e)).join("\n"), stderr: "" };
+  };
+  const { b, cb } = await dockPane(file, 1440, { hook, mid: (v) => settle(v) });
+  const read = async (events, rewind = true) => {
+    next = { events, rewind };
+    b.read(cb);
+    await until(() => !b.reading, "the read to end");
+  };
+  return { b, cb, read };
+}
+// Turn n's events, its words w: a prompt, a call and a reply, and, settled, its end.
+function eventsOf(n, w, settled) {
+  const at = (sec) => new Date(T0 + n * 100000 + sec * 1000).toISOString();
+  return [
+    { k: "p", o: "human", t: `${w} ${n}`, ts: at(0) },
+    { k: "u", n: "Bash", id: `${w}-${n}`, in: w, ts: at(1) },
+    { k: "x", id: `${w}-${n}`, f: false, ts: at(40) },
+    { k: "t", t: `${w} done`, ts: at(41) },
+    { k: "m", id: `m-${n}`, u: {}, ts: at(60) },
+    ...(settled ? [{ k: "d", ms: 60000, ts: at(60) }, { k: "settle", id: `p-${n}` }] : []),
+  ];
+}
+const eventsTo = (n, settled) => Array.from({ length: n }, (_, i) => eventsOf(i + 1, "first", settled || i + 1 < n)).flat();
+for (const [what, events, left] of [
+  ["cut back in place and another one read at its number", eventsOf(6, "other", false), 6],
+  ["cut back in place, nothing read after it yet", [], 5],
+]) {
+  for (const [how, ms] of [["in the press", 1e9], ["over draws", -1]]) {
+    test(`timeline view: the last turn ${what}, its rows built ${how}: a press on the strip of the frame before it selects nothing; on the next strip drawn a press selects its call`, async () => {
+      const { b, cb, read } = await cutPane(eventsTo(6, false));
+      const c = shownFrame(b, cb);
+      const on = callOn(b, c, 5);
+      const early = callOn(b, c);
+      expect([on.key, early.key]).toEqual(["tr:0:6:1", "tr:0:1:1"]);
+      expect([pressed(b, cb, on), pressed(b, cb, early)]).toEqual([[on.key, on.key], [early.key, early.key]]);
+      const was = b.current().turns;
+      const last = was[5];
+      await read(events);
+      expect([b.current().turns === was, was.length, was[5] === last]).toEqual([true, left, false]);
+      b.buildMax = () => ms;
+      // Nor does one on a turn before the cut.
+      expect([pressed(b, cb, on), pressed(b, cb, early)]).toEqual([[null, null], [null, null]]);
+      b.buildMax = () => 1e9;
+      const next = callOn(b, shownFrame(b, cb), left - 1);
+      expect(next.key).toBe(`tr:0:${left}:1`);
+      expect(pressed(b, cb, next)).toEqual([next.key, next.key]);
+    }, 30000);
+  }
+}
+
+for (const [how, ms] of [["in the press", 1e9], ["over draws", -1]]) {
+  test(`timeline view: a read that cuts no turn back and adds one, its rows built ${how}: a press on the strip of the frame before selects the call it did`, async () => {
+    const { b, cb, read } = await cutPane(eventsTo(6, true));
+    const on = callOn(b, shownFrame(b, cb), 5);
+    expect(pressed(b, cb, on)).toEqual([on.key, on.key]);
+    const was = b.current().turns;
+    const last = was[5];
+    await read(eventsOf(7, "first", false));
+    expect([b.current().turns === was, was.length, was[5] === last]).toEqual([true, 7, true]);
+    b.buildMax = () => ms;
+    expect(pressed(b, cb, on)).toEqual([on.key, on.key]);
+  }, 30000);
+}
+
+// A turn of pairs of words and a call, then words for half of the turn's time, the last event.
+function pairs(n) {
+  const at = (sec) => new Date(T0 + sec * 1000).toISOString();
+  const out = [{ k: "p", o: "human", t: "Do it", ts: at(0) }];
+  for (let i = 0; i < n; i++) out.push({ k: "t", t: `Words ${i}`, ts: at(2 * i + 1) }, { k: "u", n: "Bash", id: `c-${i}`, in: "ls", ts: at(2 * i + 2) }, { k: "x", id: `c-${i}`, f: false, ts: at(2 * i + 3) });
+  return [...out, { k: "t", t: "The last words", ts: at(2 * n + 1) }, { k: "m", id: "m-1", u: {}, ts: at(4 * n + 2) }];
+}
+for (const [n, what, kept] of [
+  [STEP_MAX / 2 - 1, "keeps its words, under the most steps a turn keeps, when a call follows them: a press on them on the strip of the frame before selects them", true],
+  [STEP_MAX / 2, "keeps no more words, so that a call takes their place: a press on them on the strip of the frame before selects nothing", false],
+]) {
+  test(`timeline view: a turn that ${what}`, async () => {
+    const { b, cb, read } = await cutPane(pairs(n));
+    const on = callOn(b, shownFrame(b, cb), 0, "model");
+    expect(on.key).toBe(`tr:0:1:${2 * n + 1}`);
+    expect(pressed(b, cb, on)).toEqual([on.key, on.key]);
+    const was = b.current().turns;
+    const turn = was[0];
+    const at = (sec) => new Date(T0 + sec * 1000).toISOString();
+    await read([{ k: "u", n: "Bash", id: "c-next", in: "ls", ts: at(4 * n + 3) }, { k: "x", id: "c-next", f: false, ts: at(4 * n + 9) }], false);
+    expect([b.current().turns === was, was[0] === turn, was.length]).toEqual([true, true, 1]);
+    expect(pressed(b, cb, on)).toEqual(kept ? [on.key, on.key] : [null, null]);
+    expect(b.ledger().rows.find((r) => r.key === on.key).lk).toBe(kept ? "text" : "tool");
+    const next = callOn(b, shownFrame(b, cb));
+    expect(pressed(b, cb, next)).toEqual([next.key, next.key]);
   }, 30000);
 }
 
@@ -981,6 +1085,60 @@ test("timeline number: a turn with no length recorded has no length beside its n
   // A short one that is recorded: 50 ms, alone on the strip.
   const short = { ...doneTurn(0), total: 50, span: 50 };
   expect(said(whole([short]))).toEqual([["1", "<0.1s"]]);
+});
+
+// A turn read from its events, sinceT0(ms) being ms after its prompt: its heading by the ledger.
+const sinceT0 = (ms) => new Date(T0 + ms).toISOString();
+function headOf(events, live = false, opts = {}) {
+  const s = newSession("made-up", "made-up");
+  for (const e of events) apply(s, e);
+  return ledgerTurn(s, s.turns[0], 0, live, { ends: true, ...opts }).head;
+}
+const asked = { k: "p", o: "human", t: "one", ts: sinceT0(0) };
+// Every event in the prompt's own ms: a call with its result, the reply, the model's count.
+const inNone = [asked, { k: "u", n: "Bash", id: "c", ts: sinceT0(0) }, { k: "x", id: "c", f: false, ts: sinceT0(0) }, { k: "t", t: "Done.", ts: sinceT0(0) }, { k: "m", id: "m", u: {}, ts: sinceT0(0) }];
+const inMinute = [...inNone, { k: "m", id: "m", u: {}, ts: sinceT0(60000) }];
+const noStep = [asked, { k: "u", n: "Bash" }, { k: "t", t: "Done." }];
+for (const [what, h, heading, number] of [
+  ["ended in the ms it began, its steps with times", () => headOf([...inNone, { k: "d", ts: sinceT0(0) }]), "<0.1s", "<0.1s"],
+  ["ended in the ms it began, no step with a time", () => headOf([...noStep, { k: "d", ts: sinceT0(0) }]), "no times", null],
+  ["with no time but its prompt's", () => headOf([...noStep, { k: "d" }]), "no times", null],
+  ["with no time at all", () => headOf([{ ...asked, ts: undefined }, ...noStep.slice(1), { k: "d" }]), "no times", null],
+  ["ended before it began, by its times", () => headOf([...inNone, { k: "d", ts: sinceT0(-5000) }]), null, null],
+  ["running, in the ms it began", () => headOf(inNone, true), "running", "running"],
+  ["stale, its last event in the ms it began", () => headOf(inNone), "no result", null],
+  ["stale, its last event a minute on", () => headOf(inMinute), "no result", "1m 00s"],
+  ["being read, its last event so far in the ms it began", () => headOf(inNone, false, { reading: true }), null, null],
+  ["being read, its last event so far a minute on", () => headOf(inMinute, false, { reading: true }), null, "1m 00s"],
+  ["interrupted in the ms it began", () => headOf([...inNone, { k: "i" }]), "interrupted", "<0.1s"],
+  ["interrupted a minute on", () => headOf([...inMinute, { k: "i" }]), "interrupted", "1m 00s"],
+]) {
+  test(`timeline number: a turn ${what}: what its heading says and what its number on the strip says`, () => {
+    const head = h();
+    const M = whole([head]);
+    expect(M.L.labels[0].tw).toBeGreaterThan(TL.TL_NUM_LEN);
+    expect([headParts(head).total, said(M)]).toEqual([heading, [["1", number]]]);
+    expect(TL.tlNumbers({ ...M.L, labels: [] }, [head], 0).map((l) => l.total)).toEqual([number]);
+  });
+}
+
+test("timeline tail: a last turn of 0 ms, its places kept, that ends, or is taken up again: its number says <0.1s once it has ended and nothing while it has not", () => {
+  const s = newSession("made-up", "made-up");
+  for (const e of [...inNone, { k: "d", ts: sinceT0(0) }, ...inNone.map((e) => ({ ...e, ...(e.id ? { id: `${e.id}2` } : {}) }))]) apply(s, e);
+  const head = (i) => ledgerTurn(s, s.turns[i], 0, false, { ends: true }).head;
+  const first = head(0);
+  const open = [first, head(1)];
+  apply(s, { k: "d", ts: sinceT0(0) });
+  const ended = [first, head(1)];
+  expect([open[1].steps.length, ended[1].steps.length, open[1].total, ended[1].total]).toEqual([3, 3, null, 0]);
+  let M = whole(open);
+  expect(said(M)).toEqual([["1", "<0.1s"], ["2", null]]);
+  for (const [heads, words] of [[ended, "<0.1s"], [open, null], [ended, "<0.1s"]]) {
+    const a = after(M, heads);
+    expect([a.made, said(a.M)]).toEqual([[0, 0, 1], [["1", "<0.1s"], ["2", words]]]);
+    expect(a.M.L.labels).toEqual(whole(heads).L.labels);
+    M = a.M;
+  }
 });
 
 test("timeline tail: only the last turn laid out again gives the spans a whole layout gives, where its bars reach back over the spans before it: an unfinished call that comes, ends or stays, in a turn 2 to 6 px wide", () => {
