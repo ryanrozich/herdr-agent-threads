@@ -2370,7 +2370,20 @@ test("a new turn and live events while the reader sits in an older window: no ro
 test("a card opened and closed above the window, and one inside it, keep the counts and the window's day right, each read only the card's rows", async () => {
   // Three days of 50 turns each, the window starting partway through the second.
   const { v, cx } = await capSession(150, SMALL, -1, 25, (i) => Math.floor(i / 50));
+  // No clock: every row is reshaped in the draw that needs it (shapeMax), so no reshape left
+  // over falls back to a build of every row between a change and the look after it.
+  v.shapeBudget = Infinity;
   const n = memoReads(v);
+  // The look carries the band over the rows' changes since the last one found (bandAbove,
+  // rowsSince): counted when the rows changed since and the changes were known. Without it
+  // the look walks, and this test would not test the carried place at all.
+  const bandAbove = v.bandAbove;
+  let carried = 0;
+  v.bandAbove = function (base, at) {
+    const m = this.dayAbove;
+    if (m && (m.base !== this.baseRows || m.ver !== (this.baseVer ?? 0)) && this.rowsSince(m.base, m.ver)) carried++;
+    return bandAbove.call(this, base, at);
+  };
   v.jumpLatest(true);
   frames(v, cx);
   for (let k = 0; k < 14 && bandNow(v).band && v.rows().some((r) => r.kind === "day" && v.rows().indexOf(r) < v.rows().indexOf(bandNow(v).head)); k++) { v.showMore(false); frames(v, cx); }
@@ -2383,6 +2396,7 @@ test("a card opened and closed above the window, and one inside it, keep the cou
     n.looks = 0;
     n.outside = 0;
     n.day = 0;
+    carried = 0;
     const at = v.win.at.a;
     fn();
     frames(v, cx);
@@ -2390,7 +2404,7 @@ test("a card opened and closed above the window, and one inside it, keep the cou
     expect(drawnPill(v, cx, now.head.key)).toBe(now.band);
     expect(now.band.key).toBe(first.band.key);
     expect(expectOutsideRight(v)).toEqual(was);
-    return { moved: v.win.at.a - at, outside: n.outside, day: n.day, looks: n.looks };
+    return { moved: v.win.at.a - at, outside: n.outside, day: n.day, looks: n.looks, carried };
   };
   // Above the window, on the first day: every row of the window, and its day band, moves on.
   const above = step(() => v.open.add("0:5"));
@@ -2402,6 +2416,7 @@ test("a card opened and closed above the window, and one inside it, keep the cou
   expect(inside.moved).toBe(0);
   for (const x of [above, back, inside]) {
     expect(x.looks).toBeGreaterThan(0);
+    expect(x.carried).toBeGreaterThan(0);
     expect(x.outside).toBe(0);
     // The band's own row, once a look: no walk.
     expect(x.day).toBeLessThanOrEqual(x.looks);
