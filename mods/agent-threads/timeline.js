@@ -1027,9 +1027,10 @@ export function tlDraw(M, J, heads, cw, nowMs, until, clock) {
   if (!M) {
     const j = J && J.cw === cw ? J : start();
     const done = tlBuildGo(j, until, clock);
-    return done ? { M: done, J: null, wait: false } : { M: null, J: j, wait: true };
-  }
-  if (J) {
+    if (!done) return { M: null, J: j, wait: true };
+    // Its heads are those it began with: taken up below for the heads of this draw.
+    M = done;
+  } else if (J) {
     // The strip shown while the build runs: the last draw's, at its own width, kept to heads.
     const keep = () => timelineModel(M, heads, M.cw, "clock", nowMs, null);
     if (J.cw !== cw) return { M: keep(), J: start(), wait: false };

@@ -12320,7 +12320,12 @@ export default class Threads extends View {
     const waiting = (text) => box(h_flex()).items_center().pl(12)
       .child(div().id("th-tl-wait").text_size(12).text_color(t.dim).child(text));
     this.tlWait = this.ledgerHeld(L);
-    if (this.tlWait) return waiting("The timeline shows once the whole session is read");
+    if (this.tlWait) {
+      // A build left from before is of the turns before the read, and would ask for a draw in
+      // every frame of it (trajFrame) while nothing takes its steps. It is begun again after.
+      this.tlJob = null;
+      return waiting("The timeline shows once the whole session is read");
+    }
     const cw = tlStrip(this.pw());
     const prev = this.tlModel;
     const t0 = now();
