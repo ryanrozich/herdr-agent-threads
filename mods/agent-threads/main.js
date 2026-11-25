@@ -3129,15 +3129,15 @@ export default class Threads extends View {
     this.rowBuild = { rest, sessions: this.sessions.slice(), lens: this.sessions.map((x) => x.turns.length), vers: this.sessions.map((x) => x.version), multi: this.buildInfo.multi, marks: this.buildInfo.marks,
       other: job.other ?? null, sets: this.turnSets().map((x) => new Set(x)), callVer: this.callVer ?? 0 };
     this.rowsKey = key;
-    // The change is noted once the record is made: a draw Herdr stopped in the note leaves the
-    // rows recorded, and the window's memos, finding no note, count afresh. Noted before the
-    // record, a stop there left the rows under no key, and the next build was of every row.
-    if (noted) this.noteRows(was.rows, was.ver, K, out.length, out.length - was.rows.length, turnsIn(out, K, out.length) - turnsIn(was.rows, K, was.rows.length));
     this.fitKey = null;
     // The selection is on a turn the list no longer shows: agent turns were hidden, or a
     // hidden agent turn that showed while it was live has finished.
     if (this.reselect || this.selHidden()) this.reselectVisible();
     this.latestAfterBuild();
+    // The change is noted last: a draw Herdr stopped in the note leaves the rows recorded and
+    // the steps above done, and the window's memos, finding no note, count afresh. Noted before
+    // the record, a stop there left the rows under no key, and the next build was of every row.
+    if (noted) this.noteRows(was.rows, was.ver, K, out.length, out.length - was.rows.length, turnsIn(out, K, out.length) - turnsIn(was.rows, K, was.rows.length));
   }
 
   // Whether a build stopped between slices can go on: the same sessions, earlier ones as they
