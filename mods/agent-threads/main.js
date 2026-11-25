@@ -2969,16 +2969,29 @@ export default class Threads extends View {
     if (job.from.si !== L) return false;
     const turns = S[L].turns;
     if (turns.length < job.lens[L]) return false;
-    let safe = job.lens[L] - 1;
-    while (safe > 0 && !(turns[safe - 1].done && hasReply(turns[safe - 1]))) safe--;
-    return job.from.ti <= safe;
+    return job.from.ti <= this.firstChanged(turns, job.lens[L], job.vers[L]);
+  }
+
+  // The first turn that can have changed since a build that had n turns, at session version ver:
+  // what is above a turn that is done and has its reply stays as it was. A row that started by
+  // itself answers no other (linkAnswer), so it says nothing of the prompt above it: that one
+  // stays too unless it was answered since (turn.v). Such rows are stepped over, not built
+  // again: a loop's ticks after a prompt a limit cut off can be thousands.
+  firstChanged(turns, n, ver) {
+    for (let safe = n - 1; ; ) {
+      while (safe > 0 && !(turns[safe - 1].done && hasReply(turns[safe - 1]))) safe--;
+      let i = safe - 1;
+      while (i >= 0 && turns[i].self) i--;
+      if (i < 0 || i === safe - 1 || !(turns[i].v > ver)) return safe;
+      safe = i;
+    }
   }
 
   // Where the kept rows end, or null for a full rebuild: only when nothing but the newest
   // session changed, and in it only turns at or after a turn with its reply. A turn with no
   // reply yet can still change (it is open, a later turn answers it, or it is the newest), so
   // the rebuild starts at the last mark (a day band, or every BAND_MARK turns in one) before
-  // the first such turn.
+  // the first such turn (firstChanged).
   keptFrom(rest) {
     const b = this.rowBuild;
     if (!b || b.rest !== rest || !b.multi || this.view === "pinned" || this.outlined() || this.filterText()) return null;
@@ -2992,8 +3005,7 @@ export default class Threads extends View {
     const turns = S[L].turns;
     const was = b.lens[L];
     if (turns.length < was || was < 2) return null;
-    let safe = was - 1;
-    while (safe > 0 && !(turns[safe - 1].done && hasReply(turns[safe - 1]))) safe--;
+    const safe = this.firstChanged(turns, was, b.vers[L]);
     for (let k = b.marks.length - 1; k >= 0; k--) {
       const m = b.marks[k];
       if (m.ti <= safe) return { ...m, marks: b.marks.slice(0, k) };
