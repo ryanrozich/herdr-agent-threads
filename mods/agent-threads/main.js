@@ -3510,6 +3510,13 @@ export default class Threads extends View {
     return { c, a, time, pill, text: cap.text, rows: cap.rows };
   }
   lineIsOpen(key, live) { return this.lineTouched.has(key) ? this.lineOpen.has(key) : live; }
+  // Whether the turn itself still runs, whatever rows are on screen: those of a build not all
+  // done yet are not among them (isLiveKey).
+  runs(key) {
+    const [si, n] = key.split(":").map(Number);
+    const s = this.sessions[si];
+    return Boolean(s?.turns[n - 1]) && this.isLive(s, si, n - 1);
+  }
   isLiveKey(key) { const i = this.baseIndex?.get(key); return i != null && Boolean(this.baseRows?.[i]?.live); }
   // A step group is open by the person's choice, else when it is a running turn's subagents.
   groupIsOpen(g, auto) { return this.groupTouched.has(g) ? this.groupOpen.has(g) : auto; }
@@ -5737,7 +5744,7 @@ export default class Threads extends View {
 
   flushCode(cx) {
     // The editors of a running turn's answer go once it runs no more, unless the turn is open.
-    for (const k of this.liveCode ?? []) if (!this.isLiveKey(k)) (this.codeDue ??= new Set()).add(k);
+    for (const k of this.liveCode ?? []) if (!this.runs(k)) (this.codeDue ??= new Set()).add(k);
     if (!this.codeDue?.size || this.codeTick) return;
     // The timer is asked for before it is marked as asked for, as in flushCalls: a render Herdr
     // stopped between the two left the mark with no timer to clear it.
@@ -5746,7 +5753,7 @@ export default class Threads extends View {
       const keys = [...this.codeDue];
       this.codeDue.clear();
       for (const k of keys) {
-        const live = this.isLiveKey(k);
+        const live = this.runs(k);
         if (this.open.has(k) || (live && this.liveCode?.has(k))) this.makeCode(k);
         else if (this.liveCode?.has(k)) this.dropCode(`${k}:`);
         if (!live) this.liveCode?.delete(k);
