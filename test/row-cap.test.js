@@ -2665,6 +2665,83 @@ test("a rail landing's lift 48 ms on, and its end 120 ms on, are dropped by a ne
   H.listWindow = null;
 });
 
+// A rail landing Herdr stops as it asks for its lift's end, 120 ms on: its 48 ms timer still sets
+// the lift, before the watch draw (CUT_WATCH_MS) takes the jump on again and lands a second time,
+// asking for both timers. A wheel, a jump with no lift of its own or a rail jump with one comes
+// before the second landing's 48 ms. The second landing's end takes the first one's lift off, and
+// leaves a newer landing's own. A round's timers run in the order they were asked for, or the
+// order they fall due. Returns what the lift was after each of the lift's timers.
+async function stoppedLift(move, order) {
+  const STOP = new Error("stopped by Herdr");
+  const { v, cx, sim } = await cutScene();
+  v.probeDue = () => [];
+  cx.timers = [];
+  const isLift = (x) => String(x.fn).includes("landLift");
+  const lifts = () => cx.timers.filter(isLift).map((x) => x.ms);
+  const name = new Map();
+  const said = [];
+  const round = (who) => {
+    for (const x of cx.timers) if (isLift(x) && !name.has(x)) name.set(x, `${who} ${x.ms}`);
+    const due = cx.timers.filter((x) => x.ms <= 120);
+    cx.timers = cx.timers.filter((x) => x.ms > 120);
+    for (const x of order === "asked" ? due : [...due].sort((p, q) => p.ms - q.ms)) { x.fn(cx); if (name.has(x)) said.push([name.get(x), v.landLift ?? 0]); }
+  };
+  let stops = 0;
+  const step = () => { try { draw(v, cx); } catch (e) { if (e !== STOP) throw e; stops++; v.renderOpen = true; } };
+  const drawTill = (fn) => { for (let k = 0; k < 8 && !fn(); k++) step(); expect(fn()).toBe(true); };
+  let armed = true;
+  const bodyNow = v.bodyNow;
+  v.bodyNow = function (...a) {
+    const after = cx.timer.after;
+    cx.timer.after = function (ms, fn) {
+      if (armed && this === cx.timer && ms === 120 && isLift({ fn })) { armed = false; throw STOP; }
+      return after.call(this, ms, fn);
+    };
+    try { return bodyNow.apply(this, a); } finally { cx.timer.after = after; }
+  };
+  v.railJump("0:65", cx);
+  drawTill(() => stops > 0);
+  const one = v.landed.lift;
+  expect([one > 0, lifts()]).toEqual([true, [48]]);
+  round("first");
+  expect(v.landLift).toBe(one);
+  // The watch draw.
+  drawTill(() => lifts().length === 2);
+  expect([v.landed.lift, lifts()]).toEqual([one, [48, 120]]);
+  for (const x of cx.timers) if (isLift(x)) name.set(x, `second ${x.ms}`);
+  const landN = v.landN;
+  let own = null;
+  if (move === "wheel") sim.wheel(-60);
+  else if (move) {
+    if (move === "jump") v.action("prev", cx);
+    else v.railJump("0:66", cx);
+    expect(v.scrollTo).not.toBe(null);
+    drawTill(() => v.scrollTo == null);
+    expect(v.landN).toBe(landN + 1);
+    if (move === "lifted") { own = v.landed.lift; expect(own).toBeGreaterThan(0); }
+    expect(lifts()).toEqual(move === "lifted" ? [48, 120, 48, 120] : [48, 120]);
+  }
+  round("newer");
+  for (let k = 0; k < 3; k++) { step(); round("late"); }
+  delete v.bodyNow;
+  const end = { stops, lift: v.landLift ?? 0, tall: v.slotsMemo[0] - Math.ceil(v.sizesMemo[0]) };
+  H.listWindow = null;
+  return { one, own, said, end };
+}
+for (const order of ["asked", "due"]) {
+  test(`a landing with a lift that Herdr stops as it asks for the lift's end, and a wheel or a newer jump before the next landing sets its own: the lift comes off, a newer landing keeps its own, the timers run in the order ${order === "asked" ? "they were asked for" : "they fall due"}`, async () => {
+    const off = { stops: 1, lift: 0, tall: 0 };
+    for (const move of [null, "wheel", "jump"]) {
+      const { one, said, end } = await stoppedLift(move, order);
+      expect([move, said, end]).toEqual([move, [["first 48", one], ["second 48", one], ["second 120", 0]], off]);
+    }
+    const { one, own, said, end } = await stoppedLift("lifted", order);
+    expect([said, end]).toEqual([[["first 48", one], ["second 48", one], ...(order === "asked"
+      ? [["second 120", 0], ["newer 48", own], ["newer 120", 0]]
+      : [["newer 48", own], ["second 120", own], ["newer 120", 0]])], off]);
+  }, 60000);
+}
+
 test("a press's open 300 ms on is dropped by a jump from outside the list made in the wait: a pin's return to #30, or #30 picked in the Trajectory, stays on #30", async () => {
   noPins();
   const routes = {
