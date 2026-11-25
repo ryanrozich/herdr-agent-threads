@@ -929,14 +929,20 @@ export function timelineModel(prev, heads, cw, scale = "clock", nowMs = Date.now
   // A step kept unmarked moves the end TL_SLACK px or less from the places kept, not from a
   // whole placing, and the room grows TL_ROOM_GROW (1.5) times a step, so the steps kept since
   // the last whole placing add up to under three times the last (1 + 2/3 + 4/9 + ...): while a
-  // turn runs its end may be under 3 TL_SLACK px off a whole placing.
+  // turn runs its end may be under 3 TL_SLACK px off a whole placing. A session of
+  // TL_BUILD_BARS steps or fewer is placed again whole here instead of marked: its whole
+  // placing and layout read that many step rows at most, a few steps' work of the bounded
+  // build, and on the places kept the running turn would show past the strip's end (or short
+  // of it) for a frame, with a growing bar that started in the old room's last 6 px drawn
+  // wholly past the end.
   const vk = view ? `${view.z}|${view.x0}` : "";
   const was = only ? prev.heads[n - 1] : null;
   let regeo = null;
   if (only && !tail && prev.geo.room !== room && prev.vk === vk) {
     const z = prev.L.z ?? 1;
     regeo = room > 0 ? tlLastLength(prev.geo, heads, wall, room, z, was) : null;
-    if (!regeo) {
+    const steps = prev.geo.steps - Math.max(1, stepN(was)) + Math.max(1, stepN(heads[n - 1]));
+    if (!regeo && steps > TL_BUILD_BARS) {
       regeo = tlLastLength(prev.geo, heads, wall, room, z, was, true);
       if (regeo) regeo.stale = true;
     }
