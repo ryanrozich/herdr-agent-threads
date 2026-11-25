@@ -11299,7 +11299,7 @@ export default class Threads extends View {
     const status = this.status();
     if (status === "blocked") return { color: t.blocked, label: "Needs you", icon: "alert", spin: false };
     if (status === "working") return { color: t.working, label: "Working", icon: "spinner", spin: true };
-    return { color: t.dim, label: turn && answered(turn) ? "Not finished" : "No reply yet", icon: "clock", spin: false };
+    return { color: t.dim, label: turn && answered(turn) ? "Answered" : "No reply yet", icon: "clock", spin: false };
   }
 
   liveIcon(st, size) {
