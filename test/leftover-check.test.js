@@ -191,6 +191,14 @@ for (const [how, row, before, after] of [
   }, TIME);
 }
 
+test("the check finds a left process whose pid an older process had when the run began", () => {
+  // The older process is gone, and its pid is a new one's, with a later start time.
+  const w = withRun(world(), `echo "${OLDER}|1|${OTHER}|S|${NEW}|sleep|sleep 20 $TMPDIR/x|" > "$d/procs"`);
+  const r = check(w);
+  expect(r.status).toBe(1);
+  expect(r.stderr).toContain(`${OLDER} sleep 20`);
+}, TIME);
+
 test("a listing cut off by its time limit fails the check", () => {
   const whole = withRun(world());
   expect(check(whole).status).toBe(0);
@@ -258,6 +266,16 @@ test("a run's own cleanup leaves alone a process with the folder in its command 
   const pid = run(w, `  leave("1|${OTHER}|S|${NEW}|editor|editor " + run + "/x");`);
   try {
     expect(pid).toBeGreaterThan(1);
+    expect(alive(pid)).toBe(true);
+  } finally { end(pid); }
+}, TIME);
+
+test("a run's own cleanup leaves alone a process started since the run began, under a name the tests start, that does not have the folder in its command line", () => {
+  const w = world();
+  const pid = run(w, `  leave("1|${OTHER}|S|${NEW}|sleep|sleep 20");`);
+  try {
+    expect(pid).toBeGreaterThan(1);
+    expect(pidsOf(commandCalls(w))).toEqual([pid]);
     expect(alive(pid)).toBe(true);
   } finally { end(pid); }
 }, TIME);
