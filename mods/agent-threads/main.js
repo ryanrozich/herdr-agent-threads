@@ -12180,7 +12180,7 @@ export default class Threads extends View {
     return true;
   }
   // The Trajectory in the Chat's own pane, on the Chat's selected turn; and back, on the
-  // turn the Trajectory had selected.
+  // turn the Trajectory had selected, or at the Chat's end (leaveTraj).
   enterTraj() {
     this.traj = true;
     this.keysOpen = false;
@@ -12195,14 +12195,19 @@ export default class Threads extends View {
     this.tsel = this.sel && this.findTurn(this.sel) ? this.sel : null;
     this.tscrolled = false;
     this.tscrollTo = this.tsel;
+    // What the way back goes by (leaveTraj).
+    this.trajFrom = { follow: this.follow, turn: this.tsel };
   }
   // Every way back to the Chat counts here once (y, Esc, its Chat button, a command): the Chat
-  // scrolls to the Trajectory's turn.
+  // scrolls to the Trajectory's turn. A reader who followed on the way in, follows still and is on
+  // the turn it opened on only looked: the Chat is back at its end, following.
   leaveTraj() {
     this.readerMoved();
     this.traj = false;
     this.keysOpen = false;
     const k = this.turnOfRow(this.tsel);
+    const from = this.trajFrom;
+    if (from?.follow && this.follow && k === from.turn) { this.jumpLatest(true); return; }
     if (k && this.findTurn(k)) { this.sel = k; this.follow = false; this.toBottom = false; this.scrollTo = { key: k, how: "center" }; }
   }
   // The turn a ledger row belongs to: a heading's key is its turn's, a step's starts with it.
