@@ -4,7 +4,7 @@ Newest first. Each release's full list of pull requests is in [CHANGELOG.md](../
 
 ## 1.3.0
 
-Herdr stops a mod's draw when it runs past its time, and a draw stopped at the wrong point could leave the Chat wrong until you resized it or closed it. This release fixes the stops that were found. It needs the same Herdr and tools as 1.2.0.
+Herdr stops a mod's draw when it runs past its time, and a draw stopped at the wrong point could leave the Chat wrong until you resized it or closed it. This release fixes most of the stops that were found. It needs the same Herdr and tools as 1.2.0.
 
 ### The chat view
 
@@ -19,7 +19,7 @@ Herdr stops a mod's draw when it runs past its time, and a draw stopped at the w
 ### Sender rules and panes
 
 - An open sender rule's count of the prompts it matches shows after a stopped draw, where it never did.
-- After you drag the pane's edge, the column takes its new width at once, where a stopped draw left it centred in a wider pane or cut off in a narrower one.
+- After you drag the pane's edge, the column takes its new width, where a stopped draw left it centred in a wider pane or cut off in a narrower one.
 
 ### Known limits
 
