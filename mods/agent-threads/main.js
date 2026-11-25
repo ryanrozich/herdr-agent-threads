@@ -5635,9 +5635,10 @@ export default class Threads extends View {
     // A read that came in before this frame may have asked for the bottom: dropped too.
     if (step === "unstick") { this.follow = false; this.toBottom = false; this.pinningUntil = 0; }
     else if (step === "repin" && this.follow) this.toBottom = true;
-    else if (step === "restick" && !this.follow) {
+    else if (step === "restick" && !this.follow && !this.scrollTo) {
       // Back at the bottom by scrolling: follow again, with the newest turn selected; the view
-      // is already there.
+      // is already there. Not with a scroll to a place to come: the frame that left the step had
+      // none (stickCheck, busy), so a jump made since asked for it, and is the newer word.
       this.follow = true;
       this.unseen = false;
       const keys = this.turnKeys(this.allRows());
