@@ -259,3 +259,64 @@ test("timeline view: while the session is read again, a strip's build left from 
   expect(M.heads === b.ledger().totals.heads).toBe(true);
   sameStrip(M, TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null));
 });
+
+// ---- the last turn's bars over the turns before ----
+// A session of n turns drawn as one span a lane each, under 2 px, but the first, so long that
+// it takes the rest of the strip, and the last, px wide, its steps rows(key, ms long). Up to
+// 400 turns the spans before the last turn are apart (over half a pixel), and an unfinished call
+// in a turn 2 to 6 px wide has a bar that starts up to 4 px left of it, over them.
+function narrowLast(n, px, rows) {
+  const gap = Math.min(30, (0.15 * CW) / (n - 1));
+  const min = Math.min(48, (0.3 * CW) / n);
+  const unit = 60000;
+  const rest = CW - gap * (n - 1) - min * (n - 2);
+  const heads = [];
+  let t0 = T0;
+  for (let i = 0; i < n; i++) {
+    const key = `0:${i}`;
+    const total = Math.round(unit * (i === 0 ? rest - px : i === n - 1 ? px : 0.2));
+    const steps = i === n - 1 ? rows(key, total) : [row(key, 0, "you", 0, null), row(key, 1, i % 3 ? "tool" : "subagent", 100, 2000), row(key, 2, "reply", 2000, total)];
+    heads.push({ kind: "trh", key, n: i + 1, t0, total, span: total, going: false, cnt: { steps: steps.length, input: 1, model: 1, tools: 1, failed: 0, user: 1, agent: 0 }, steps });
+    t0 += total + 5000;
+  }
+  return heads;
+}
+const withLast = (heads, steps) => [...heads.slice(0, -1), { ...heads.at(-1), steps }];
+
+test("timeline tail: only the last turn laid out again gives the spans a whole layout gives, where its bars reach back over the spans before it: an unfinished call that comes, ends or stays, in a turn 2 to 6 px wide", () => {
+  let reached = 0;
+  // From 206 turns a turn held at its least width is under 2 px, and that least is under 2.02.
+  for (const n of [210, 300, 400, 500]) {
+    for (const px of [2.02, 2.4, 3, 4, 5.2, 5.98, 7]) {
+      const you = (key) => row(key, 0, "you", 0, null);
+      const open = (key, at) => [you(key), row(key, 1, "noresult", at, null, true)];
+      const done = (key, at, total) => [you(key), row(key, 1, "tool", at, Math.max(at, Math.min(total, at + 100)))];
+      const sub = (key, at) => [you(key), { ...row(key, 1, "subagent", at, null, true) }];
+      const note = (key, at) => [you(key), row(key, 1, "text", at, null)];
+      const shapes = { open: (k) => open(k, 1000), late: (k, t) => open(k, t - 10), done: (k, t) => done(k, 1000, t), sub: (k) => sub(k, 1000), note: (k) => note(k, 1000) };
+      for (const from of Object.keys(shapes)) {
+        const heads = narrowLast(n, px, shapes[from]);
+        const total = heads.at(-1).total;
+        let M = TL.timelineModel(null, heads, CW, "clock", T0, null);
+        const w = M.geo.turns.at(-1).w;
+        expect([n, px, Math.abs(w - px) < 0.05]).toEqual([n, px, true]);
+        const tx = M.geo.turns.at(-1).x;
+        const before = [...M.L.spans.values()].flat().filter((sp) => sp[0] < tx - 1 && sp[1] > tx);
+        if (before.length && px < 6) reached++;
+        // Event after event in the last turn, its length the same: each shape in turn.
+        for (const to of [...Object.keys(shapes), from]) {
+          const next = withLast(M.heads, shapes[to](heads.at(-1).key, total));
+          const m = { ...TL.TL_MADE };
+          const N = TL.timelineModel(M, next, CW, "clock", T0, null);
+          expect([n, px, from, to, TL.TL_MADE.geo - m.geo, TL.TL_MADE.layout - m.layout, TL.TL_MADE.tail - m.tail]).toEqual([n, px, from, to, 0, 0, 1]);
+          const W = TL.timelineLayout(next, CW, "clock", T0, null, N.geo);
+          expect([n, px, from, to, [...N.L.spans].sort()]).toEqual([n, px, from, to, [...W.spans].sort()]);
+          expect([N.L.fails, N.L.ticks, N.L.gaps, N.L.labels, N.L.grow]).toEqual([W.fails, W.ticks, W.gaps, W.labels, W.grow]);
+          M = N;
+        }
+      }
+    }
+  }
+  // Not for nothing: in many of these an unfinished call's bar was drawn over earlier spans.
+  expect(reached).toBeGreaterThan(20);
+});
