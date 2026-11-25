@@ -635,6 +635,13 @@ const capTurn = (i, long = false, parts = 25) => {
   const said = long ? Array.from({ length: parts }, (_, j) => `Part ${j}: ${"word ".repeat(600)}`).join("\n\n") : `Reply ${i}: the order is fine.`;
   return [{ k: "p", o: "human", t: `Prompt ${i}: check order ${i}.`, ts }, { k: "t", t: said }, { k: "d", ts }];
 };
+// The rows a simList frame shows, by key: those between its offset and the list's height on,
+// not every item the list holds.
+function shownIn(v, f) {
+  const pre = [0];
+  for (const x of f.sizes) pre.push(pre[pre.length - 1] + x);
+  return f.keys.filter((_k, i) => pre[i + 1] > f.off && pre[i] < f.off + v.listH);
+}
 async function heldThenDrag(go) {
   const ev = [];
   for (let i = 0; i < 80; i++) ev.push(...capTurn(i, i === 40, 170));
@@ -670,7 +677,7 @@ async function heldThenDrag(go) {
     const during = { asked: (v.askN ?? 0) > a0, moved: sim.last().off !== off0, drag: moves(v) - n0, waiting: v.scrollTo?.key ?? null };
     delete v.buildMax;
     settleList(v, cx, sim);
-    const landed = { scrollTo: v.scrollTo, shows: sim.last().keys.includes("0:65"), jump: moves(v) - n00 };
+    const landed = { scrollTo: v.scrollTo, shows: shownIn(v, sim.last()).includes("0:65"), jump: moves(v) - n00 };
     // The landing's settle (scrollBusyUntil, 500 ms on) is over by the reader's next drag.
     v.scrollBusyUntil = 0;
     const off1 = sim.last().off;
