@@ -350,6 +350,13 @@ const CARD_BUTTON = { h: 28, px: 10, gap: 6, icon: 14 };
 // image viewer's own switch (i), and quoteKey, links and senders are never reset.
 // The status line's height (statusRow).
 const STATUS_H = 24;
+// The actions by which the reader moves the list or leaves the view (readerMoved): the moving
+// keys (j, k, Home, End, the days, n and Shift n, Enter and the arrows into and out of a
+// turn), the outline, the Pinned view, the Trajectory, the select mode, the Turn card, the
+// search opened or closed, and Escape. Besides these, "go:" (a pin's jump), "pick:" (a session
+// switch) and "search:" (a search set by command).
+const READER_ACTIONS = new Set(["prev", "next", "first", "latest", "olderMatch", "newerMatch", "open", "jump", "prevDay", "nextDay",
+  "outline", "outline:on", "outline:off", "pinned", "trajectory", "select", "legend", "deeper", "shallower", "filter", "escape"]);
 const CARD_KEYS = ["textSize", "railSide", "keyHints", "statusLine", "bubbleColor", "agentBubbleColor", "agentTurns", "agentRail", "truncate", "promptLines", "replyLines", "alwaysShowTime"];
 // A link rule's type (settings.js LINK_TYPES) and its icon on the Link rules page.
 const LINK_ICON = { custom: "regex", ticket: "ticket", "pull-request": "git-pull-request" };
@@ -1000,7 +1007,7 @@ export default class Threads extends View {
     // them the scroll area's own bar shows while it scrolls.
     this.cardBar = Boolean(gpuiBase.Scrollbar?.vertical) && "mode" in div();
     this.input = InputState.new({ placeholder: "Filter turns, or #12 to jump" });
-    this.input.on("change", (_e, cx) => { this.setQuery(this.input.value(), cx); cx.notify(); });
+    this.input.on("change", (_e, cx) => { if (!this.searchSetting) this.readerMoved(); this.setQuery(this.input.value(), cx); cx.notify(); });
     this.quoteInput = InputState.new({ placeholder: "", value: "q" });
     this.quoteInput.on("change", (_e, cx) => { this.quoteTyped(cx); cx.notify(); });
     this.quoteInput.on("focus", (_e, cx) => { this.fieldFocused = "quote"; cx.notify(); });
@@ -1600,6 +1607,12 @@ export default class Threads extends View {
     this.railCardOn = false;
     this.railLeave = null;
     this.railQuiet = null;
+  }
+  // The pane's own value in the search field: its change event is not the reader's typing (the
+  // Escape, button or key that set it counted already).
+  setSearchField(v) {
+    this.searchSetting = true;
+    try { this.input.set_value(v); } finally { this.searchSetting = false; }
   }
   setQuoteField(v) {
     this.quoteSetting = true;
@@ -2774,6 +2787,9 @@ export default class Threads extends View {
     ].join("|");
     const rest = `${this.turnSets().map((x) => [...x].join(",")).join("|")}|${this.callVer ?? 0}|${other}`;
     const key = `${sess}|${rest}`;
+    // A splice Herdr stopped halfway (spliceRows) is followed by a build of every row, even when
+    // the key is back to the rows' own: a card closed again before the next draw.
+    if (this.splicing) this.rowsKey = null;
     // Rows left with an old shape (SHAPE_MS) are reshaped where they are; the rest stay.
     if (this.rowsKey === key && this.baseRows && this.reshapeDue) {
       this.reshapeDue = false;
@@ -2788,7 +2804,9 @@ export default class Threads extends View {
     const lr = this.baseRows[li];
     if (lr?.live && lr.kind !== "line") {
       const kind = this.sel === lr.key ? "working" : "wrow";
-      if (lr.kind !== kind) { lr.kind = kind; this.baseSizes[li] = this.height(lr); this.fitKey = null; }
+      // Its height is worked out on a copy with the new kind, then the kind and the size are
+      // stored together: a stop in the height leaves the old kind, to change again next draw.
+      if (lr.kind !== kind) { const h = this.height({ ...lr, kind }); lr.kind = kind; this.baseSizes[li] = h; this.fitKey = null; }
     }
     const z = this.zoom();
     const gap = this.floating() ? TOP_BAND : 0;
@@ -2993,6 +3011,9 @@ export default class Threads extends View {
   buildStep(status, key, rest, other = null) {
     let job = this.rowJob;
     if (job && job.key !== key) job = job.rest === rest && this.jobGoesOn(job) ? job : null;
+    // A splice of an opened turn's rows that Herdr stopped halfway (spliceRows) left the rows
+    // and their index apart: a splice from there found the turn in no row, and the card never drew.
+    if (this.splicing) { this.splicing = false; this.rowsKey = null; }
     if (!job && other != null && this.spliceRows(status, key, rest, other)) return;
     if (job) {
       job.key = key;
@@ -3039,6 +3060,16 @@ export default class Threads extends View {
       this.cachedH = left.cachedH;
       this.cacheNew = left.cacheNew;
     } else {
+      // A slice goes on from where the one before ended, adding to the build's own rows. One that
+      // Herdr stopped (in a turn's rows or a row's height) left its rows in them, to be added
+      // again: they go back to where it began, with their sizes and index entries.
+      const f = job.from;
+      if (f?.own) {
+        for (let i = f.row; i < f.rows.length; i++) job.index.delete(f.rows[i].key);
+        f.rows.length = f.row;
+        f.railRows.length = f.rail;
+        if (job.sizes.length > f.row) job.sizes.length = f.row;
+      }
       out = this.buildRows(status, job.from, until);
       if (job.from?.before && job.from.dayRow != null && !this.buildInfo.resume) job.sizes[job.from.dayRow] = this.height(out[job.from.dayRow]);
     }
@@ -3057,8 +3088,10 @@ export default class Threads extends View {
         this.buildsLeft = (this.buildsLeft ?? 0) + 1;
         return;
       }
-      job.sizes.push(this.cachedH.get(i) ?? this.height(out[i]));
+      // Indexed before it is sized: the build goes on from its first row with no size, and a
+      // draw Herdr stopped between the two (its stop falls at any call) left this row in no index.
       job.index.set(out[i].key, i);
+      job.sizes.push(this.cachedH.get(i) ?? this.height(out[i]));
       if (job.same === i && old && old[i] === out[i]) job.same = i + 1;
     }
     this.buildSpent = (this.buildSpent ?? 0) + Math.max(0, now() - b0 - ((this.shapeSpent ?? 0) - s0));
@@ -3075,14 +3108,18 @@ export default class Threads extends View {
     }
     this.rowJob = null;
     this.buildMs = job.ms;
-    // A new column width: the place on screen before these rows come in (holdPlace).
-    if (this.anchorDue) { this.anchorDue = false; this.anchor = this.takeAnchor(); }
+    // A new column width: the place on screen before these rows come in (holdPlace). Asked for
+    // until it is taken: a draw Herdr stopped in takeAnchor lost the place.
+    if (this.anchorDue) { this.anchor = this.takeAnchor(); this.anchorDue = false; }
     // The rows from the first that changed on are counted for noteRows, while that reads
     // fewer rows than it keeps (a live event, a new turn); a change from near the top is left
     // out, and the memos count afresh.
     const was = job.was;
     const K = job.same;
     const noted = was && was.rows === this.baseRows && was.ver === (this.baseVer ?? 0) && out.length + was.rows.length - 2 * K <= K;
+    // Until the record below is made, a draw Herdr stops (its stop falls at any call) would
+    // leave these rows under the old record and key: with no key, the next build is of every row.
+    this.rowsKey = null;
     this.baseRows = out;
     if (noted) this.noteRows(was.rows, was.ver, K, out.length, out.length - was.rows.length, turnsIn(out, K, out.length) - turnsIn(was.rows, K, was.rows.length));
     this.railTurns = this.buildRail;
@@ -3195,8 +3232,11 @@ export default class Threads extends View {
       if (sh === r.shape) continue;
       if (Boolean(sh.thumbs) !== Boolean(r.shape?.thumbs)) return false;
       const nr = { ...r, shape: sh };
+      // Its height first: a draw Herdr stopped in it left the new shape at the old height, and
+      // the next pass, finding the shape new, never sized it again.
+      const h = this.height(nr);
       this.baseRows[i] = nr;
-      this.baseSizes[i] = this.height(nr);
+      this.baseSizes[i] = h;
       // A closed turn of one row, shaped at last: kept for the next rebuild (closedCached), as
       // if the build had shaped it. Most rows of a long session are shaped this way.
       if (cg && !r.live && !r.last && !r.split && this.open.has(r.key) === false) {
@@ -3407,16 +3447,21 @@ export default class Threads extends View {
       let z = at;
       while (a > 0 && this.baseRows[a - 1].turn === r.turn) a--;
       while (z + 1 < this.baseRows.length && this.baseRows[z + 1].turn === r.turn) z++;
-      runs.push({ k, a, z, r });
+      // Its place in its session, found before any row changes: a turn the session no longer
+      // holds gives the splice up with every row as it was.
+      const ti = r.s.turns[r.turn.n - 1] === r.turn ? r.turn.n - 1 : r.s.turns.indexOf(r.turn);
+      if (ti < 0) return false;
+      runs.push({ k, a, z, r, ti });
     }
     runs.sort((x, y) => y.a - x.a);
     this.shapeStart();
+    // From here to its end the rows, their sizes and their index change together: a draw Herdr
+    // stops in between leaves them apart, and the next build is of every row (buildStep).
+    this.splicing = true;
     const stale = new Set(this.staleRows ?? []);
     let marks = b.marks;
-    for (const { k, a, z, r } of runs) {
+    for (const { k, a, z, r, ti } of runs) {
       const { turn, s, si } = r;
-      const ti = s.turns[turn.n - 1] === turn ? turn.n - 1 : s.turns.indexOf(turn);
-      if (ti < 0) return false;
       const out = [];
       this.buildStale = [];
       this.cachedH = new Map();
@@ -3449,6 +3494,7 @@ export default class Threads extends View {
     this.buildStale = this.staleRows;
     this.rowBuild = { ...b, rest, marks, sets: now.map((x) => new Set(x)), callVer: this.callVer ?? 0 };
     this.rowsKey = key;
+    this.splicing = false;
     this.fitKey = null;
     this.probeList();
     if (this.reselect || this.selHidden()) this.reselectVisible();
@@ -5376,6 +5422,10 @@ export default class Threads extends View {
     for (const k of [st.key, ...(st.or ?? [])]) { const i = rows.findIndex((x) => x.key === k); if (i >= 0) return { i, how: st.how }; }
     return st.head ? { i: rows.findIndex((x) => x.key === st.head), how: "card" } : { i: -1, how: st.how };
   }
+  // A scroll the pane asks for itself, by its own count (askN): the frame that takes it does
+  // not count it as the reader's (stickCheck), wherever it lands. A scrollTo's landing and a
+  // held place let go (letGo) ask this way; nothing but stickCheck reads the count.
+  ownAsk(i, how) { this.askN = (this.askN ?? 0) + 1; this.askScroll(i, how); }
   askEnd() { this.scrollAsk = { end: true }; this.scroll.scroll_to_bottom(); }
 
   // The place on screen just before a re-wrap's rows come in (buildStep): the row at the top
@@ -5472,7 +5522,7 @@ export default class Threads extends View {
     if (!p) return;
     if (p.end) { this.askEnd(); return; }
     if (p.lift || p.slot) { this.anchorLift = p.lift; this.anchorSlot = p.slot ?? null; this.fitKey = null; cx.timer.after(0, (cx) => cx.notify()); }
-    this.askScroll(p.j, p.how);
+    this.ownAsk(p.j, p.how);
   }
 
   // Stick to the bottom, from what each frame draws (listItems; it may not change the view,
@@ -5490,16 +5540,32 @@ export default class Threads extends View {
   stickCheck(rows, prevShown, start) {
     const same = rows === this.stickRows;
     const prevStart = this.stickStart;
-    this.stickRows = rows;
-    this.stickStart = start;
-    if (this.view === "pinned" || this.outlined() || !rows.length) return;
+    // The frame's rows, start and wheel count are kept once the count is done (seen): a draw
+    // stopped before it leaves them as they were, so the next frame counts the scroll.
+    const seen = () => { this.stickRows = rows; this.stickStart = start; this.stickWheelN = this.wheelN ?? 0; this.stickAskN = this.askN ?? 0; };
+    if (!rows.length) { seen(); return; }
     const now = Date.now();
-    if (this.toBottom || now < (this.pinningUntil ?? 0)) {
-      if (this.bottomShown && !this.toBottom) this.pinningUntil = 0;
+    const busy = Boolean(this.scrollTo) || now < (this.scrollBusyUntil ?? 0);
+    const moved = same && prevStart != null && start !== prevStart;
+    const wheeled = (this.wheelN ?? 0) !== (this.stickWheelN ?? 0);
+    // A scroll the pane asked for itself since the last frame (ownAsk) moved the list.
+    const asked = (this.askN ?? 0) !== (this.stickAskN ?? 0);
+    const pinning = this.toBottom || now < (this.pinningUntil ?? 0);
+    const view = this.view === "pinned" || this.outlined();
+    // On the way down to the end or a pin's landing, the top row moving is the pane's own.
+    if (pinning) {
+      seen();
+      if (!view && this.bottomShown && !this.toBottom) this.pinningUntil = 0;
       return;
     }
-    const busy = Boolean(this.scrollTo) || now < (this.scrollBusyUntil ?? 0);
-    if (same && prevStart != null && start !== prevStart && !busy) this.scrolledBy(start < prevStart ? 1 : -1, now);
+    // A scroll of theirs with no wheel since the last frame (the list's own bar) moved the list
+    // too, in every view, the outline and the Pinned view as well: the wheel counted its own
+    // (listWheel). A scroll asked for or settling (busy), or one the pane asked for itself since
+    // the last frame (asked), is the pane's own, and does not count.
+    if (moved && !busy && !wheeled && !asked) this.readerMoved();
+    seen();
+    if (view) return;
+    if (moved && !busy) this.scrolledBy(start < prevStart ? 1 : -1, now);
     const up = now - (this.upAt ?? 0) < 1000;
     const down = now - (this.downAt ?? 0) < 1000;
     let step = null;
@@ -5510,11 +5576,16 @@ export default class Threads extends View {
   // A wheel or trackpad scroll up stops following at once, so a reply that comes in during the
   // scroll does not pull the view back down. The frames catch it too (stickCheck), in case the
   // list keeps the event to itself.
+  // The reader moved the list or left the view (a wheel, the rail, a pin, the outline, a search
+  // step, a session switch): what a kept step or a card's scroll waits on is off.
+  readerMoved() { this.readerMoves = (this.readerMoves ?? 0) + 1; }
+
   listWheel(e) {
     const dy = Number(e?.delta?.y) || 0;
     if (!dy || this.openActive()) return;
     // A list that fits the pane (the spacer above it) does not scroll at all.
     if (this.rowsMemo?.[0]?.kind === "spacer") return;
+    this.readerMoved();
     // The list has moved by it (trackOff): delta is in the window's px, the offset in the
     // list's, which Herdr scales by zoom.
     this.listOff = (this.listOff ?? 0) - dy / this.zoom();
@@ -6345,6 +6416,7 @@ export default class Threads extends View {
   click(key, cx) {
     // The list drawn hidden under the loading state takes no press.
     if (this.openActive()) return;
+    this.readerMoved();
     const [kind, ...rest] = key.split(":");
     const id = rest.join(":");
     // While the Turn card is open, a press anywhere closes it and does nothing else: the card
@@ -6686,6 +6758,8 @@ export default class Threads extends View {
   // Returns false when the action did nothing (so Escape can reach Herdr).
   action(name, cx) {
     this.stickStep = null; // a key decides, not a frame drawn before it
+    // The trajectory action while the Trajectory shows leaves it, and leaveTraj counts that.
+    if ((READER_ACTIONS.has(name) && !(name === "trajectory" && this.traj)) || /^(go|pick|search):/.test(name)) this.readerMoved();
     if (this.textSel && !["copy", "quote", "keys"].includes(name)) this.textSel = null;
     const keys = this.turnKeys(this.allRows());
     // A selection the list's window left out (it moved on while following, or a block came in
@@ -6743,7 +6817,7 @@ export default class Threads extends View {
       }
       case "open":
         // Enter in a "#12" jump: keep the turn selected and leave the field.
-        if (jumpTarget(this.query) != null) { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); return true; }
+        if (jumpTarget(this.query) != null) { this.setSearchField(""); this.query = ""; this.filtering = false; this.h.focus(); return true; }
         // A search: Enter also hands the keys to the list, so p and the digits work on a result.
         if (this.filtering && this.query) this.toList();
         // Show earlier or Show later, selected by up or down at the window's edge.
@@ -6757,7 +6831,7 @@ export default class Threads extends View {
         }
         if (this.sel && keys.includes(this.sel)) this.toggle(this.sel, cx);
         return true;
-      case "jump": this.filtering = true; this.input.set_value("#"); this.query = "#"; this.input.focus(); return true;
+      case "jump": this.filtering = true; this.setSearchField("#"); this.query = "#"; this.input.focus(); return true;
       case "prevDay": case "nextDay": {
         const k = this.dayStep(name === "nextDay" ? 1 : -1);
         if (!k) return false;
@@ -6843,7 +6917,7 @@ export default class Threads extends View {
         if (this.settingsOpen) { this.closeSettings(); return true; }
         if (this.choosing) { this.choosing = false; return true; }
         if (this.selecting) { this.endSelect(); return true; }
-        if (this.filtering || this.query) { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); return true; }
+        if (this.filtering || this.query) { this.setSearchField(""); this.query = ""; this.filtering = false; this.h.focus(); return true; }
         if (this.outlined()) return this.leaveOutline(null);
         if (this.sel && this.open.has(this.sel)) { this.toggle(this.sel, cx); return true; }
         if (this.view === "pinned" && !this.pinnedPane) { this.setView("all"); return true; }
@@ -6915,7 +6989,7 @@ export default class Threads extends View {
       return true;
     }
     // Tests only: "debugScroll:md:0:7:4" puts that list item at the top, as a person's scroll would.
-    if (this.debug && name.startsWith("debugScroll:")) { this.scrollTo = { key: name.slice(12), how: "land", person: true }; this.scrollSeenAt = Date.now(); return true; }
+    if (this.debug && name.startsWith("debugScroll:")) { this.readerMoved(); this.scrollTo = { key: name.slice(12), how: "land", person: true }; this.scrollSeenAt = Date.now(); return true; }
     // The pointer in the pane or out of it (debugHover:1, debugHover:0): the test window has no pointer.
     if (this.debug && name.startsWith("debugHover:")) { this.paneHover = name.slice(11) === "1"; return true; }
     // The day pill held for 6.5 s, long enough for the test window's screenshot after a step.
@@ -6936,7 +7010,7 @@ export default class Threads extends View {
     if (name.startsWith("search:")) {
       this.filtering = true;
       this.setQuery(name.slice(7), cx);
-      this.input.set_value(this.query);
+      this.setSearchField(this.query);
       return true;
     }
     return false;
@@ -7486,6 +7560,11 @@ export default class Threads extends View {
       this.renderOpen = false;
       this.cutUntil = now() + CUT_MS;
       this.renderCuts = (this.renderCuts ?? 0) + 1;
+      // The marks for the next draw are cleared by the timers they asked for, which a stopped
+      // render may have lost: left set, they never asked again, and a rows build never went on.
+      this.buildNext = false;
+      this.shapeNext = false;
+      this.probeNext = false;
       // A scroll the stopped render took on (the jump to the newest turn, a return to a pin)
       // is asked for again: it was taken before the list was drawn. Not after the reader's
       // wheel since that render, which dropped it (listWheel) and is the newer word, as for
@@ -8222,10 +8301,11 @@ export default class Threads extends View {
   headerClick(act) {
     return (_e, cx) => {
       if (act === "filterToggle") {
+        this.readerMoved();
         this.filtering = !this.filtering;
         this.settingsOpen = false;
         if (this.filtering) this.input.focus();
-        else { this.input.set_value(""); this.query = ""; this.h.focus(); }
+        else { this.setSearchField(""); this.query = ""; this.h.focus(); }
       } else this.action(act, cx);
       cx.notify();
     };
@@ -8237,14 +8317,14 @@ export default class Threads extends View {
     return h_flex().id("th-search-field").mx(10).mb(8).h(30).px(8).gap(6).items_center().rounded(7)
         .border_1().border_color(this.filtering ? t.accent : t.border).bg(t.chrome)
         // A click back into a kept search: the typing is the field's again.
-        .on_mouse_down("left", (_e, cx) => { this.filtering = true; cx.notify(); })
+        .on_mouse_down("left", (_e, cx) => { if (!this.filtering) this.readerMoved(); this.filtering = true; cx.notify(); })
         .child(svg(ICON("search")).size(13).flex_none().text_color(t.dim))
         .child(Input.new(this.input).flex_1().min_w(0).h_full().text_size(12.5).text_color(t.foreground))
         .when(!q, (el) => el.child(this.kbd(t, "/")))
         .when(Boolean(q), (el) => el.child(div().id("th-search-count").flex_none().text_size(11.5).font_family(this.mono()).text_color(t.dim)
           .child(this.filterCount())))
         .when(Boolean(this.filterText()) && this.matchPlace().n > 0, (el) => el.children(this.stepButtons(t)))
-        .child(this.iconButton(t, "th-clear", "x", "Clear (Esc)", (_e, cx) => { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); cx.notify(); }));
+        .child(this.iconButton(t, "th-clear", "x", "Clear (Esc)", (_e, cx) => { this.readerMoved(); this.setSearchField(""); this.query = ""; this.filtering = false; this.h.focus(); cx.notify(); }));
   }
 
   // The search field's two steps: older (up, the way back through the list) and newer. The
@@ -9482,7 +9562,7 @@ export default class Threads extends View {
     const st0 = this.scrollTo;
     if (st0 && (st0.held || (this.capSpan ?? "") !== (this.capLaid ?? ""))) {
       const { i, how } = this.scrollRow(st0, rows);
-      if (i >= 0) { this.askScroll(this.landTop(rows, i, how), how === "center" ? "center" : "top"); st0.held = true; }
+      if (i >= 0) { this.ownAsk(this.landTop(rows, i, how), how === "center" ? "center" : "top"); st0.held = true; }
     }
     // So is the end, for latest over other items (from the oldest window, say): asked for at
     // once, for this frame's layout, and again 16 ms on as below.
@@ -9536,7 +9616,8 @@ export default class Threads extends View {
     } else if (this.scrollTo) {
       // A pin's place can be gone (the reply changed): the next best item, then the card.
       const st = this.scrollTo;
-      // The pane's own scrolls never count as the person's (stickCheck); debugScroll does.
+      // The pane's own scrolls never count as the person's (stickCheck). debugScroll counts at
+      // its command, once: its landing asks (ownAsk), like every landing's, do not count again.
       if (st.person) { this.upAt = Date.now() + 600; this.downAt = this.upAt; }
       else { this.scrollBusyUntil = Date.now() + 500; this.upAt = 0; this.downAt = 0; }
       let { i, how } = this.scrollRow(st, rows);
@@ -9550,7 +9631,7 @@ export default class Threads extends View {
       const ask = (k, h) => {
         if (!still()) return;
         const now = rows[k] ? this.rowIndex(rows[k].key) : -1;
-        if (now >= 0) this.askScroll(now, h);
+        if (now >= 0) this.ownAsk(now, h);
       };
       // A jump held while it waited (the held ask above) has its turn on screen already, at
       // the top or the centre: the first ask, which only brings an item below the view into
@@ -9954,7 +10035,7 @@ export default class Threads extends View {
       .child(div().text_size(12).text_color(t.muted).child(["opencode", "pi", "cursor"].includes(this.res?.harness) ? `Newest first. ${this.agent().name} doesn't record which terminal runs a session. Threads stays on the one you pick.` : "Newest first. Transcripts another running claude writes are left out. Threads stays on the one you pick."))
       .children(list.map((c, i) => h_flex().id(`th-choice-${i}`).px(10).py(8).gap(9).items_center().rounded(7).cursor_pointer()
         .bg(t.raised).border_1().border_color(t.border).hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => { cx.stop_propagation(); this.pick(c, cx); })
+        .on_click((_e, cx) => { cx.stop_propagation(); this.readerMoved(); this.pick(c, cx); })
         .child(svg(ICON("messages")).size(14).flex_none().text_color(t.muted))
         .child(v_flex().flex_1().min_w(0).gap(1)
           .child(c.label ? div().text_size(12.5).text_color(t.foreground).truncate().child(c.label) : div().text_size(12.5).font_family(this.mono()).text_color(t.foreground).child(idOf(c.path).slice(0, 8)))
@@ -12076,7 +12157,10 @@ export default class Threads extends View {
     this.tscrolled = false;
     this.tscrollTo = this.tsel;
   }
+  // Every way back to the Chat counts here once (y, Esc, its Chat button, a command): the Chat
+  // scrolls to the Trajectory's turn.
   leaveTraj() {
+    this.readerMoved();
     this.traj = false;
     this.keysOpen = false;
     const k = this.turnOfRow(this.tsel);
@@ -12112,7 +12196,7 @@ export default class Threads extends View {
         this.selSent = e.key;
         if (this.trajPane) {
           if (this.turnOfRow(this.tsel) !== e.key) { this.tsel = e.key; this.tscrollTo = e.key; return true; }
-        } else if (this.sel !== e.key && this.chatShows(e.key)) { this.openWait = null; this.sel = e.key; this.follow = false; this.scrollTo = { key: e.key, how: "center" }; return true; }
+        } else if (this.sel !== e.key && this.chatShows(e.key)) { this.readerMoved(); this.openWait = null; this.sel = e.key; this.follow = false; this.scrollTo = { key: e.key, how: "center" }; return true; }
         return false;
       }
     }
@@ -12939,6 +13023,7 @@ export default class Threads extends View {
     }
     if (e?.touch_phase === "ended" || e?.touch_phase === "cancelled") this.railAcc = 0;
     if (!steps) return;
+    this.readerMoved();
     // Up (a positive delta, as for the list) shows earlier turns.
     this.railTop = Math.max(0, (this.railTop ?? 0) - steps);
     this.railOn = true;
@@ -12948,6 +13033,7 @@ export default class Threads extends View {
   railReveal(i, cx) {
     const base = this.railMemo;
     if (!base) return;
+    this.readerMoved();
     const W = railWindow(base.all.length, (k) => base.all[k].dayStart, Math.max(0, this.listH), this.railTop ?? 0, [i, i], false);
     this.railTop = W.top;
     const [a, b] = this.viewRange ?? [0, 0];
@@ -13096,7 +13182,7 @@ export default class Threads extends View {
         .child(div().id("th-rail-card-pin").flex_none().size(15).flex().items_center().justify_center().rounded(3).cursor_pointer()
           .text_color(c.pinned ? t.accent : t.dim).hover((s) => s.bg(t.hover).text_color(c.pinned ? t.accent : t.foreground))
           .tooltip(`${c.pinned ? "Unpin" : "Pin"} #${k.turns[0].turn.n} (p)`)
-          .on_click((_e, cx) => { cx.stop_propagation(); this.togglePin(k.key, cx); cx.notify(); })
+          .on_click((_e, cx) => { cx.stop_propagation(); this.readerMoved(); this.togglePin(k.key, cx); cx.notify(); })
           .child(svg(ICON("pin")).size(11))))
       // An agent message, sent or matched by a sender rule: its icon and label, as in the list.
       .when(Boolean(c.who), (el) => el.child(h_flex().h(15).gap(5).items_center().min_w(0).text_size(11).line_height("15px")
@@ -13134,6 +13220,7 @@ export default class Threads extends View {
   }
   // A click on a tick: its card closes, the tick grows, and the turn comes up level with it.
   railClick(key, cx) {
+    this.readerMoved();
     this.railCardClose(key);
     this.railGrowStart(key, cx);
     this.railJump(key, cx);
