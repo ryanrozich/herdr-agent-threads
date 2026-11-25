@@ -3,7 +3,10 @@
 #   ctx    the model and effort of the turn about to start  {m, e}
 #   p      a prompt   {o: "human", ts, t}, with pasted images {img: [media types], u: "<turn id>_<ordinal>"}
 #                     a subagent's message  {o: "peer", ts, t, n: its name}
-#   t      assistant text (commentary and the final answer)  {t, ts}
+#   t      assistant text (commentary and the final answer)  {t, ts}, and a: 1 when Codex marks it
+#          as the answer (the message's phase is final_answer)
+#   w      a task Codex starts by itself, with no prompt  {o: "goal", ts}: only a goal's. The
+#          context it writes for it is never read
 #   u      tool call  {n: tool name, id: call id, ts, in: its input in up to 120 characters}
 #   x      a call's output  {id, ts, f: whether it failed}: extract.sh turns each output line
 #          into a short "_x" line before jq, so the output is never parsed here
@@ -80,6 +83,7 @@ def event_msg($l; $p):
     # Each count states the window of the model that answered, so a model changed mid-session
     # (or the same model with another window) shows from its first count on.
     + (if ($p.info.model_context_window | type) == "number" and $p.info.model_context_window > 0 then {w: $p.info.model_context_window} else {} end)
+  elif $p.type == "task_started" and ($p.turn_attribution.turn_trigger? // null) == "goal" then {k: "w", o: "goal", ts: $l.timestamp}
   elif $p.type == "task_complete" then {k: "d", ms: ($p.duration_ms // 0), ts: $l.timestamp}
   elif $p.type == "turn_aborted" then {k: "i", ts: $l.timestamp}
   elif $p.type == "error" then {k: "e", t: (($p.message // "") | tostring | cap)}
@@ -89,7 +93,7 @@ def event_msg($l; $p):
 def response_item($l; $p):
   if $p.type == "message" and $p.role == "assistant" then
     ($p.content | blocks_text) as $t
-    | if ($t | length) > 0 then {k: "t", t: ($t | cap), ts: $l.timestamp} else empty end
+    | if ($t | length) > 0 then {k: "t", t: ($t | cap), ts: $l.timestamp} + (if $p.phase == "final_answer" then {a: 1} else {} end) else empty end
   elif $p.type == "reasoning" and ($ARGS.named.reasoning // "") == "1" then
     # The ATIF export only (extract.sh's "reasoning" argument): the summary's text, else the
     # item's own reasoning text (content), else a mark that the reasoning was withheld

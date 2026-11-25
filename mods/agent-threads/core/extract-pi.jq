@@ -2,7 +2,7 @@
 # compact events as extract.jq out, one JSON object per line, in file order:
 #   ctx    the model chosen for the turns after it  {m, e}
 #   p      a prompt  {o: "human", ts, t}, with pasted images {img: [media types], ids, src, u: "<entry id>"}
-#   t      assistant text  {t}
+#   t      assistant text  {t}, and a: 1 on a message Pi marks as finished (stopReason stop)
 #   u      tool call  {n: tool name}
 #   m      token use of one model response  {id, m, e, u: {i,o,cr,cc}, ts}
 #   e      error message  {t}
@@ -60,7 +60,7 @@ def prompt($l; $m):
 
 def reply($l; $m):
   ( $m.content[]? | select(type == "object")
-    | if .type == "text" and ((.text // "") | length) > 0 then {k: "t", t: (.text | cap)}
+    | if .type == "text" and ((.text // "") | length) > 0 then {k: "t", t: (.text | cap)} + (if $m.stopReason == "stop" then {a: 1} else {} end)
       elif .type == "toolCall" then {k: "u", n: (.name // "tool"), id: .id}
       else empty end ),
   # input leaves out the cached tokens already, and output counts reasoning.

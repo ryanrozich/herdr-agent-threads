@@ -182,14 +182,17 @@ function oc() {
   const o = {
     prompt: (id, text, t) => { msg(id, t, { role: "user" }); part(`${id}_p`, id, { type: "text", text }); },
     // finish null: still streaming.
-    reply: (id, parent, t, finish) => msg(id, t, { role: "assistant", parentID: parent, agent: "build", modelID: "m", ...(finish ? { finish } : {}), tokens: { input: 5, output: 5, reasoning: 0, total: 10, cache: { read: 0, write: 0 } }, time: { created: T0 + t, ...(finish ? { completed: T0 + t + 500 } : {}) } }),
+    reply: (id, parent, t, finish, fields = {}) => msg(id, t, { role: "assistant", parentID: parent, agent: "build", modelID: "m", ...fields, ...(finish ? { finish } : {}), tokens: { input: 5, output: 5, reasoning: 0, total: 10, cache: { read: 0, write: 0 } }, time: { created: T0 + t, ...(finish ? { completed: T0 + t + 500 } : {}) } }),
     say: (id, text) => part(`${id}_t`, id, { type: "text", text }),
     tool: (id, call) => part(`${id}_u`, id, { type: "tool", tool: "bash", callID: call, state: { status: "completed", input: { command: "ls cart" }, output: "ok" } }),
     read: (s) => readOpenCode(path, sid, s),
+    events: () => readEvents(path, sid),
   };
   return o;
 }
 
+// The events of one read of an OpenCode session from its start.
+const readEvents = (path, sid) => parseChunk(execFileSync("sh", [opencode, "read", path, sid, "0", "40"], { encoding: "utf8" })).events;
 // One read of an OpenCode session, on from where s stopped.
 function readOpenCode(path, sid, s = newSession(sid, `${path}#${sid}`)) {
   for (let guard = 0; guard < 20; guard++) {
@@ -229,6 +232,89 @@ const view = (s) => s.turns.map((t) => [t.prompt, t.sender, reply(t), worked(t),
 // The messages of a row's steps in the export, and its user step's sender.
 const said = (x, n) => x.steps.filter((st) => st.extra?.turn === n && st.source === "agent").map((st) => st.message).filter(Boolean);
 const asked = (x, n) => x.steps.find((st) => st.extra?.turn === n && st.source === "user");
+
+// ---- the filters ----
+
+describe("the filters: what is marked, and what started by itself", () => {
+  const events = (file, harness) => parseChunk(execFileSync("sh", [extractor, file, "0", String(1 << 20), harness], { encoding: "utf8" })).events;
+  // Each text with its mark, or null.
+  const texts = (ev) => ev.filter((e) => e.k === "t").map((e) => [e.t, e.a ?? null]);
+  const starts = (ev) => ev.filter((e) => e.k === "w");
+
+  test("Codex marks a final answer, and says when a goal starts a task", () => {
+    const c = codex();
+    c.started("user");
+    c.prompt("One");
+    c.note("Looking.");
+    c.say("No phase.");
+    c.final("The answer.");
+    c.done(1000);
+    c.line("event_msg", { type: "task_started", turn_id: "turn-0003" });
+    c.line("event_msg", { type: "task_started", turn_id: "turn-0004", turn_attribution: "goal" });
+    c.goal();
+    const ev = events(c.file(), "codex");
+    expect(texts(ev)).toEqual([["Looking.", null], ["No phase.", null], ["The answer.", 1]]);
+    const at = JSON.parse(c.lines.find((l) => l.includes('"turn_trigger":"goal"'))).timestamp;
+    expect(starts(ev)).toEqual([{ k: "w", o: "goal", ts: at }]);
+    expect(JSON.stringify(ev)).not.toContain(PLANTED);
+  });
+
+  test("Claude Code marks a text that ends the reply, and says when a schedule starts work", () => {
+    const t = claude();
+    t.prompt("One");
+    t.say("m1", "Looking.", "tool_use");
+    t.say("m2", "Cut.", "max_tokens");
+    t.say("m3", "Old.", null);
+    t.say("m4", "The answer.");
+    t.say("m5", "Declined.", "refusal");
+    t.say("m6", "Stopped.", "stop_sequence");
+    t.meta();
+    t.tick(1, "auto_continuation");
+    t.queued(PLANTED, "human", { isMeta: true });
+    t.queued(PLANTED, "scheduled", { isMeta: true, commandMode: "bash" });
+    t.tick(1);
+    t.queued(PLANTED, "scheduled", { isMeta: true });
+    const ev = events(t.file(), "claude");
+    expect(texts(ev)).toEqual([["Looking.", null], ["Cut.", null], ["Old.", null], ["The answer.", 1], ["Declined.", 1], ["Stopped.", 1]]);
+    const at = t.lines.slice(-2).map((l) => JSON.parse(l).timestamp);
+    expect(starts(ev)).toEqual(at.map((ts) => ({ k: "w", o: "scheduled", ts })));
+    expect(JSON.stringify(ev)).not.toContain(PLANTED);
+  });
+
+  test("Pi marks a finished reply, and not one cut at the length limit", () => {
+    const p = pi();
+    p.prompt("One");
+    p.said("Looking.", "toolUse", "call_1");
+    p.said("Cut.", "length");
+    p.said("The answer.", "stop");
+    expect(texts(events(p.file(), "pi"))).toEqual([["Looking.", null], ["Cut.", null], ["The answer.", 1]]);
+  });
+
+  test("OpenCode marks a finished reply, and not one running, cut, failed or with calls to make", () => {
+    const o = oc();
+    o.prompt("msg_u1", "One", 0);
+    const reply = (id, t, finish, text, fields) => { o.reply(id, "msg_u1", t, finish, fields); o.say(id, text); };
+    reply("msg_a1", 100, "tool-calls", "Looking.");
+    reply("msg_a2", 200, "length", "Cut.");
+    reply("msg_a3", 300, "unknown", "Unknown.");
+    reply("msg_a4", 400, "stop", "Failed.", { error: { name: "UnknownError" } });
+    reply("msg_a5", 500, "stop", "The answer.");
+    reply("msg_a6", 600, null, "Running.");
+    expect(texts(o.events())).toEqual([["Looking.", null], ["Cut.", null], ["Unknown.", null], ["Failed.", null], ["The answer.", 1], ["Running.", null]]);
+  });
+
+  test("OpenCode 2.x marks a finished reply, and not one cut, failed or with calls to make", () => {
+    const o = oc2();
+    o.row("msg_u1", "user", 0, { text: "One", files: [], agents: [] });
+    const said = (id, t, finish, text, fields) => o.said(id, t, finish, [{ type: "text", text }], fields);
+    said("msg_a1", 100, "tool-calls", "Looking.");
+    said("msg_a2", 200, "length", "Cut.");
+    said("msg_a3", 300, "stop", "Failed.", { error: { type: "unknown" } });
+    said("msg_a4", 400, "stop", "The answer.");
+    said("msg_a5", 500, undefined, "Running.");
+    expect(texts(readEvents(o.path, o.sid))).toEqual([["Looking.", null], ["Cut.", null], ["Failed.", null], ["The answer.", 1], ["Running.", null]]);
+  });
+});
 
 // ---- case 1: the finished reply stays on its row ----
 
@@ -862,7 +948,7 @@ function oc2() {
     create table session_part (message_id text, session_id text, ordinal integer, type text, data text);
     insert into session_v2 values ('${sid}', 'prj', null, '/home/dev/shop', 'Cart rounding', ${T0}, ${T0 + 9000}, null, ${T0 + 100}, null);`);
   const row = (id, type, t, data) => run(`insert into session_message values ('${id}', '${sid}', '${type}', ${(seq += 3)}, ${T0 + t}, ${T0 + t}, '${JSON.stringify({ time: { created: T0 + t }, ...data }).replace(/'/g, "''")}');`);
-  const said = (id, t, finish, content) => row(id, "assistant", t, { time: { created: T0 + t, completed: T0 + t + 500 }, agent: "build", model: { id: "m", providerID: "opencode" }, content, finish, tokens: { input: 5, output: 5, reasoning: 0, cache: { read: 0, write: 0 } } });
+  const said = (id, t, finish, content, fields = {}) => row(id, "assistant", t, { ...fields, time: { created: T0 + t, completed: T0 + t + 500 }, agent: "build", model: { id: "m", providerID: "opencode" }, content, finish, tokens: { input: 5, output: 5, reasoning: 0, cache: { read: 0, write: 0 } } });
   return { path, sid, row, said };
 }
 

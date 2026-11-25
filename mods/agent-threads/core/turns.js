@@ -417,7 +417,7 @@ function closeOpen(s, cur, end, e) {
 
 // The events that change no turn: a turn's version (v) moves for every other one. Subagent
 // launches and notices (r, n) change what an open turn's subagent group shows: s.agentVer.
-const NO_TURN = new Set(["title", "an", "ctx", "settle", "b", "r", "n"]);
+const NO_TURN = new Set(["title", "an", "ctx", "settle", "b", "r", "n", "w"]);
 
 // Applies one extractor event to a session, in file order. Every turn the event may have
 // changed (the newest, every open one, any linkAnswer marks) takes the session's version as
@@ -442,6 +442,8 @@ function applyOne(s, e) {
     if (s.pendingCmd?.u && s.pendingCmd.u === e.pu) promote(s);
     return;
   }
+  // Work that starts by itself: nothing yet, and it leaves a waiting command line waiting.
+  if (e.k === "w") return;
   // Only between turns: a command line logged during a turn (a local /usage), with no text
   // of its own for the model, is not what the model is working on, so it never takes a row.
   if (s.pendingCmd && !s.open.length && !s.followActive && (e.k === "t" || e.k === "h" || e.k === "u" || e.k === "m" || e.k === "e")) promote(s);
