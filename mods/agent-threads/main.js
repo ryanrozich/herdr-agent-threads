@@ -3479,8 +3479,10 @@ export default class Threads extends View {
       for (let i = a; i <= z; i++) this.baseIndex.delete(this.baseRows[i].key);
       const v0 = this.baseVer ?? 0;
       const dT = turnsIn(out, 0, out.length) - turnsIn(this.baseRows, a, z + 1);
-      this.baseRows.splice(a, gone, ...out);
+      // Raised before the rows change: a version with no note is counted afresh, changed rows
+      // under the version a memo holds would be taken as unchanged (rowsSince).
       this.baseVer = v0 + 1;
+      this.baseRows.splice(a, gone, ...out);
       this.noteRows(this.baseRows, v0, a, a + out.length, d, dT);
       this.baseSizes.splice(a, gone, ...sizes);
       // The new rows, and every row after them when the count changed.
