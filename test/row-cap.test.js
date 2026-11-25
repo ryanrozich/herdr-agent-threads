@@ -4365,3 +4365,164 @@ test("followed into the Trajectory with a new session with no turns after a clea
   v.leaveTraj();
   expect(asksBack(v)).toEqual(toEnd());
 }, 30000);
+
+// Not followed, the way back asks for its turn, and a press's pending open would take that scroll.
+test("a press's open in its 300 ms, into the Trajectory by its button, another turn picked there, and back by the Chat button within them: the Chat is at the picked turn, and the pressed one is not opened", async () => {
+  const { v, cx, sim } = await narrowChat(false);
+  sim.wheel(1000);
+  settleList(v, cx, sim);
+  expect(v.follow).toBe(false);
+  dropTimers(v, cx);
+  const key = shownIn(v, sim.last()).find((k) => /^0:\d+$/.test(k) && k !== NEWEST && k !== "0:120");
+  v.click(key, cx);
+  const wait = cx.timers.filter((x) => x.ms === 300);
+  cx.timers = cx.timers.filter((x) => x.ms !== 300);
+  expect([wait.length, v.openWait?.key]).toEqual([1, key]);
+  INTO["the button"](v, cx);
+  trajFrames(v, cx);
+  v.ledgerClick("0:120");
+  expect([v.traj, v.tsel, v.openWait?.key]).toEqual([true, "0:120", key]);
+  OUT["the Chat button"](v, cx);
+  const back = asksBack(v);
+  for (const x of wait) x.fn(cx);
+  jumpFrames(v, cx, sim);
+  expect({ back, ...shownTurn(v, sim, "0:120"), open: v.open.has(key) }).toEqual({ back: toTurn("0:120"), sel: "0:120", follow: false, shows: true, open: false });
+}, 30000);
+
+// Latest asked for while a turn that came in is still being built into the rows: the list's rows are
+// the ones before it, so the newest of them is selected at once, and the build's end selects the
+// newest turn (latestAfterBuild). In a session of one day every build is of every row (keptFrom), and
+// a slice ends at every sixteenth turn here, so each build takes several draws.
+const IN_BUILD = {
+  "latest by its command": async ({ v, cx, s }) => {
+    await addCapTurns(s, 150, 1);
+    v.command("latest", cx);
+  },
+  "a turn read while following": async ({ came }) => { await came(capTurn(150)); },
+  "the way back from the Trajectory": async ({ v, cx, came }) => {
+    v.openTraj();
+    trajFrames(v, cx);
+    await came(capTurn(150));
+    trajFrames(v, cx);
+    v.leaveTraj();
+  },
+  "a wheel back to the end": async ({ v, cx, s, sim }) => {
+    sim.wheel(1500);
+    settleList(v, cx, sim);
+    dropTimers(v, cx);
+    v.scrollBusyUntil = 0;
+    sim.wheel(-1e6);
+    draw(v, cx);
+    expect([v.stickStep, v.follow]).toEqual(["restick", false]);
+    await addCapTurns(s, 150, 1);
+    v.buildMax = () => -1;
+    draw(v, cx);
+  },
+};
+for (const [how, go] of Object.entries(IN_BUILD)) {
+  test(`${how}, the newest turn still being built into the rows over several draws: that turn is selected once it is built, and the Chat is at its end and follows`, async () => {
+    const r = await narrowChat(false);
+    const { v, cx, sim } = r;
+    const whole = v.buildMax;
+    if (how !== "a wheel back to the end") v.buildMax = () => -1;
+    await go(r);
+    expect([Boolean(v.rowJob), v.sel, v.follow]).toEqual([true, NEWEST, true]);
+    jumpFrames(v, cx, sim);
+    v.buildMax = whole;
+    expect([v.rowJob, v.current().turns.length]).toEqual([null, 151]);
+    expect(endsAt(v, sim)).toEqual(atEnd("0:151"));
+  }, 30000);
+}
+test("control: latest pressed and then a step up, while the newest turn is still being built into the rows: the turn stepped to stays selected, and the Chat does not follow", async () => {
+  const { v, cx, s, sim } = await narrowChat(false);
+  const whole = v.buildMax;
+  v.buildMax = () => -1;
+  await addCapTurns(s, 150, 1);
+  v.command("latest", cx);
+  v.key(keyEv("up"), cx);
+  expect([Boolean(v.rowJob), v.sel, v.follow]).toEqual([true, "0:149", false]);
+  jumpFrames(v, cx, sim);
+  v.buildMax = whole;
+  expect([v.rowJob, v.sel, v.follow]).toEqual([null, "0:149", false]);
+}, 30000);
+test("control: latest in a search with its rows all built, and the search closed: its match stays selected", async () => {
+  const { v, cx, sim } = await narrowChat(false);
+  search(v, cx, sim, "order 120");
+  v.command("latest", cx);
+  settleList(v, cx, sim);
+  expect([v.rowJob, v.sel, v.follow]).toEqual([null, "0:121", true]);
+  v.command("escape", cx);
+  settleList(v, cx, sim);
+  expect([v.rowJob, v.query, v.sel]).toEqual([null, "", "0:121"]);
+}, 30000);
+
+// The notes of the rows' changes hold the rows they tell of, and those hold their sessions' turns. A
+// build that is not noted (here another session's) ends what the notes before it can say (rowsSince).
+test("the notes of the rows' changes are kept over live events, and hold none of a session's rows once another is picked and built", async () => {
+  const { v, cx, s } = await runningSession(300, SMALL);
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  v.jumpLatest(true);
+  frames(v, cx);
+  const was = { rows: v.baseRows, ver: v.baseVer ?? 0 };
+  for (const t of ["More: the order is still fine.", "And more: it is."]) {
+    apply(s, { k: "t", t });
+    frames(v, cx);
+  }
+  const holding = () => (v.rowsLog ?? []).filter((e) => [e.r0, e.r1].some((rows) => rows.some((r) => r.s === s))).length;
+  expect([v.baseRows === was.rows, v.rowsSince(was.rows, was.ver) !== null, holding() > 1]).toEqual([false, true, true]);
+  v.pick({ path: fixture("--only", "200") }, cx);
+  await settle(v);
+  frames(v, cx);
+  expect([v.current().turns.length, v.baseRows.some((r) => r.s === s), holding()]).toEqual([200, false, 0]);
+}, 30000);
+
+// A jump that waits asks again in each frame it waits (held).
+test("a jump that waits for the rows to reshape finds its row in each frame it waits without a walk of the list", async () => {
+  const { v, cx } = await capSession(150, SMALL);
+  const sim = simList(v);
+  openAt(v, cx, sim, 562);
+  let looks = 0;
+  let walks = 0;
+  const scrollRow = v.scrollRow;
+  v.scrollRow = function (...a) {
+    looks++;
+    const rows = this.rowsMemo;
+    rows.findIndex = function (...b) { walks++; return Array.prototype.findIndex.apply(this, b); };
+    const at = scrollRow.apply(this, a);
+    delete rows.findIndex;
+    return at;
+  };
+  // Rows left to reshape in every frame drawn here.
+  Object.defineProperty(v, "shapeLeft", { get: () => 5, set() {}, configurable: true });
+  v.command("search:#10", cx);
+  for (let k = 0; k < 5; k++) draw(v, cx);
+  expect([v.scrollTo?.key, v.scrollTo?.held, shownIn(v, sim.last()).includes("0:10")]).toEqual(["0:10", true, true]);
+  expect({ looks, walks }).toEqual({ looks: 5, walks: 0 });
+  H.listWindow = null;
+});
+
+test("the row a jump goes to is the list's own place of its key, else of the next best, else of the head as a card, in a window, with Show earlier and Show later, and in a cut", async () => {
+  const { v, cx } = await capSession(150, SMALL);
+  v.jumpLatest(true);
+  frames(v, cx);
+  v.command("search:#60", cx);
+  frames(v, cx);
+  const seen = [];
+  const check = (what) => {
+    const rows = v.rows();
+    const keys = [...rows.map((r) => r.key), ...v.baseRows.map((r) => r.key), "none"];
+    const wrong = keys.filter((key) => v.scrollRow({ key, how: "top" }, rows).i !== rows.findIndex((r) => r.key === key));
+    const k = rows[5].key;
+    const next = v.scrollRow({ key: "none", or: ["none too", k], head: rows[7].key, how: "land" }, rows);
+    const head = v.scrollRow({ key: "none", or: ["none too"], head: k, how: "land" }, rows);
+    const none = v.scrollRow({ key: "none", how: "land" }, rows);
+    seen.push([what, wrong, next, head, none, v.capCut > 0, inList(v, "older"), inList(v, "newer")]);
+  };
+  const right = (what, cut, more) => [what, [], { i: 5, how: "land" }, { i: 5, how: "card" }, { i: -1, how: "land" }, cut, more, more];
+  check("a window");
+  v.win.cap = { ...v.win.cap, slide: 1e9, stop: 1e9, max: 60 };
+  v.command("search:#60", cx);
+  frames(v, cx);
+  check("a cut");
+  expect(seen).toEqual([right("a window", false, true), right("a cut", true, false)]);
+});
