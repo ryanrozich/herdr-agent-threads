@@ -638,6 +638,115 @@ test("timeline view: a read that stalls twice after the whole session was read, 
   wholeStrip(b, cb);
 }, 30000);
 
+// ---- what the wait is for, and how it ends ----
+test("timeline view: a session read again from the top to the same number of turns, no frame drawn meanwhile, its rows built a slice a draw: the strip waits until they are built, not drawn of the turns before the read", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "30"));
+  shownFrame(b, cb);
+  const was = b.current().turns;
+  oneTurnASlice(b);
+  b.retryRead(cb);
+  await settle(b);
+  // Another array, as long.
+  expect([b.current().turns === was, b.current().turns.length]).toEqual([false, was.length]);
+  onlyThePick(b, cb, stripFrames(b, cb));
+}, 30000);
+
+test("timeline view: a pane with no session waits for nothing: an empty strip in every frame, and no draw asked", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "30"));
+  shownFrame(b, cb);
+  expect(b.tlModel.heads.length).toBeGreaterThan(5);
+  b.sessions = [];
+  b.res = { kind: "none" };
+  oneTurnASlice(b);
+  expect(stripFrames(b, cb)).toEqual([[]]);
+  expect([b.current(), b.unread()]).toEqual([null, false]);
+  wholeStrip(b, cb);
+}, 30000);
+
+test("timeline view: a pick still being looked for, with no session yet: the strip waits for it alone and asks for no draw; found and read, it is the pick's", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "30"));
+  shownFrame(b, cb);
+  // The pane's own lookup is out, so the pick's waits for it.
+  b.resolving = true;
+  b.pick({ path: fixture("--extra", "12") }, cb);
+  expect([b.current(), b.res.kind]).toEqual([null, "resolving"]);
+  oneTurnASlice(b);
+  expect(stripFrames(b, cb)).toEqual([READ_WAIT]);
+  for (let k = 0; k < 5; k++) {
+    expect(oneFrame(b, cb)).toBe(READ_WAIT);
+    // Its rows (none) are built: what it waits for is the lookup.
+    expect([b.ledgerMemo.sessions === b.sessions, b.ledgerMemo.rows.length, b.ledgerMemo.partial]).toEqual([true, 0, false]);
+    expect([b.ledgerJob ?? null, b.tlJob ?? null, rowAsks(cb) + buildAsks(cb)]).toEqual([null, null, 0]);
+  }
+  b.resolving = false;
+  b.resolve(cb);
+  await settle(b);
+  onlyThePick(b, cb, stripFrames(b, cb));
+}, 30000);
+
+// Every frame until no build of the rows or of the strip is left, the clock 3 ms on at each look:
+// what it drew (the strip's headings, or the words it waits with), the placings and the whole
+// layouts begun in it, and whether it left a build of the strip.
+const LAYING = "Laying out the timeline…";
+function countedFrames(b, cb) {
+  rowAsks(cb);
+  buildAsks(cb);
+  // About 20 turns a slice of the rows.
+  b.buildMax = () => 60;
+  const seen = [];
+  for (let k = 0; k < 600; k++) {
+    const m = { ...TL.TL_MADE };
+    const c = slowNow(() => frame(b, cb));
+    const what = own(c, "th-tl-lanes") ? b.tlModel.heads : words(own(c, "th-tl-wait")).join(" ");
+    seen.push([what, TL.TL_MADE.geo - m.geo, TL.TL_MADE.layout - m.layout, Boolean(b.tlJob)]);
+    const asks = rowAsks(cb) + buildAsks(cb);
+    if (!b.ledgerJob && !b.tlJob) return seen;
+    expect([k, asks > 0]).toEqual([k, true]);
+  }
+  throw new Error("the builds did not end in 600 frames");
+}
+// The strip waited for its rows, was built from nothing over draws (the first of them begins the
+// one placing and the one layout, and leaves them for the next), and came in a draw with neither.
+function builtOverDraws(b, cb, seen) {
+  const heads = b.ledgerMemo.totals.heads;
+  const draws = seen.map(([x, ...n]) => [told(x, [[heads, "its strip"]]), ...n]);
+  const reads = draws.filter(([x]) => x === READ_WAIT).length;
+  expect(reads).toBeGreaterThan(10);
+  expect(draws.slice(0, reads)).toEqual(new Array(reads).fill([READ_WAIT, 0, 0, false]));
+  expect(draws.at(-1)).toEqual(["its strip", 0, 0, false]);
+  const laid = draws.slice(reads, -1);
+  expect(laid.length).toBeGreaterThan(1);
+  expect(laid).toEqual(laid.map((_, i) => (i ? [LAYING, 0, 0, true] : [LAYING, 1, 1, true])));
+  sameStrip(b.tlModel, TL.timelineModel(null, heads, b.tlModel.cw, "clock", Date.now(), null));
+  wholeStrip(b, cb);
+}
+
+for (const [what, change] of [
+  ["another transcript picked", (b, cb) => b.pick({ path: fixture("--extra", "320") }, cb)],
+  ["a new session after a clear", (b, cb) => b.adopt({ kind: "found", id: "made-up-second", file: fixture("--extra", "320"), live: true }, cb)],
+  ["a session read again from the top", (b, cb) => b.retryRead(cb)],
+]) {
+  test(`timeline view: ${what}, its rows built over draws: the draw that ends the wait places and lays out no turns whole, and the strip is built from nothing over draws, as at a first read`, async () => {
+    const { b, cb } = await dockPane(fixture("--extra", "300"));
+    shownFrame(b, cb);
+    expect(b.tlModel.heads.length).toBe(b.current().turns.length);
+    change(b, cb);
+    await settle(b);
+    builtOverDraws(b, cb, countedFrames(b, cb));
+  }, 60000);
+}
+
+test("timeline view: a first read with the Trajectory open, its last rows built over draws: the strip is built from nothing over draws, and comes in a draw that places and lays out no turns whole", async () => {
+  const file = fixture("--extra", "300");
+  const hold = heldRead(file);
+  const { b, cb } = await dockPane(file, 1440, hold);
+  shownFrame(b, cb);
+  expect([oneFrame(b, cb), b.tlModel ?? null]).toEqual([READ_WAIT, null]);
+  hold.open();
+  await settle(b);
+  builtOverDraws(b, cb, countedFrames(b, cb));
+}, 60000);
+
 // ---- the last turn's bars over the turns before ----
 // A session of n turns drawn as one span a lane each, under 2 px, but the first, so long that
 // it takes the rest of the strip, and the last, px wide, its steps rows(key, ms long). Up to
