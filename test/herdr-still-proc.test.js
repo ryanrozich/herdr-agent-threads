@@ -29,12 +29,14 @@ function alive(pid) {
 // One run of the copy, with a fake Herdr that starts the processes and then refuses the
 // script's first command, so the script fails there and cleans up. Each name in the result is a
 // process: was it still up after the script ended.
-//   core   the run's folder in its command line
+//   core   as the real one: the rig's herdr-core, found on the app's PATH, with "serve", working
+//          where the app works (its folder here is the fake app's own, as the script started it)
+//   holder the run's folder in its command line
 //   shell  works in the run's folder
 //   other  has the folder in its environment only
 //   before the folder in its command line and works in it, but ran before the script began
 // Every one has the folder in its environ, as anything the app starts does.
-const NAMES = ["core", "shell", "other", "before"];
+const NAMES = ["core", "holder", "shell", "other", "before"];
 let result = null;
 const pids = [];
 function cleanedUp() {
@@ -62,21 +64,27 @@ case "$1 $2" in
 esac
 [ $# -eq 0 ] || exit 0
 run=\${HERDR_APP_HOME%/a}
+# fill <pid> <working folder> <command line...>; start the same, with a name and a new process.
 fill() {
-  mkdir -p "$d/tree/$1"
-  printf '%s\\0' "$2" > "$d/tree/$1/cmdline"
-  ln -s "$3" "$d/tree/$1/cwd"
-  printf 'HOME=%s\\0' "$run" > "$d/tree/$1/environ"
+  t="$d/tree/$1"
+  mkdir -p "$t"
+  ln -s "$2" "$t/cwd"
+  printf 'HOME=%s\\0' "$run" > "$t/environ"
+  shift 2
+  printf '%s\\0' "$@" > "$t/cmdline"
 }
 start() {
   ${SLEEP}
   echo $! > "$d/$1"
-  fill "$!" "$2" "$3"
+  shift
+  fill "$!" "$@"
 }
-start core "$run/.local/bin/herdr-core" /
-start shell /bin/sh "$run/code"
-start other other-app /
-fill "$(cat "$d/before")" "$run/x" "$run/code"
+core=$(command -v herdr-core)
+start core "$(pwd -P)" "$core" serve
+start holder / "$core" hold --socket "$run/run/t1.sock"
+start shell "$run/code" /bin/sh
+start other / other-app
+fill "$(cat "$d/before")" "$run/code" "$run/x"
 echo > "$d/ready"
 exec /bin/sleep 30`);
   stub(bin, "uname", "echo Linux");
@@ -104,8 +112,12 @@ test("the script's copy ran: its cleanup looks through /proc, and every process 
   for (const n of NAMES) expect(pid[n]).toBeGreaterThan(1);
 }, TIME);
 
-test("the cleanup stops a left process that has the run's folder in its command line", () => {
+test("the cleanup stops the core, whose command line names the rig only: it works where the app was started", () => {
   expect(cleanedUp().up.core).toBe(false);
+}, TIME);
+
+test("the cleanup stops a left process that has the run's folder in its command line", () => {
+  expect(cleanedUp().up.holder).toBe(false);
 }, TIME);
 
 test("the cleanup stops a left process that works in the run's folder", () => {
