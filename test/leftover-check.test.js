@@ -191,6 +191,33 @@ for (const [how, row, before, after] of [
   }, TIME);
 }
 
+test("the check leaves alone a new process that works in a folder beside the run's whose name begins the same", () => {
+  const beside = 'mkdir "$TMPDIR-sibling" && cd "$TMPDIR-sibling"';
+  const w = withRun(world(), `${beside}\n${leave(`1|${OTHER}|S|${NEW}|sleep|sleep 20`, 'echo "$!|$TMPDIR-sibling" >> "$d/cwds"')}`);
+  const r = check(w);
+  const pid = Number(read(w, "left"));
+  try {
+    expect(pid).toBeGreaterThan(1);
+    expect(r.stderr).not.toContain("left these processes running");
+    expect(r.status).toBe(0);
+    expect(alive(pid)).toBe(true);
+  } finally { end(pid); }
+}, TIME);
+
+test("the check finds and ends a left process whose working folder was the run's folder, now gone", async () => {
+  // Linux gives a folder that is gone as "<folder> (deleted)"; on a Mac the lsof here says so.
+  const gone = 'rmdir "$TMPDIR"\necho "$!|$TMPDIR (deleted)" >> "$d/cwds"';
+  const w = withRun(world(), `cd "$TMPDIR"\n${leave(`1|${OTHER}|S|${NEW}|sleep|sleep 20`, gone)}`);
+  const r = check(w);
+  const pid = Number(read(w, "left"));
+  try {
+    expect(pid).toBeGreaterThan(1);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(`${pid} sleep 20`);
+    expect(await ends(pid)).toBe(true);
+  } finally { end(pid); }
+}, TIME);
+
 test("the check finds a left process whose pid an older process had when the run began", () => {
   // The older process is gone, and its pid is a new one's, with a later start time.
   const w = withRun(world(), `echo "${OLDER}|1|${OTHER}|S|${NEW}|sleep|sleep 20 $TMPDIR/x|" > "$d/procs"`);
