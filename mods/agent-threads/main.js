@@ -68,7 +68,7 @@ import {
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
-  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, readCap, replaced, reply, updatesText, stats, segments, threadMatches, remarkSenders, ruleSender, typedTurn, RULE_TEXT,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, readCap, replaced, reply, hasReply, updatesText, stats, segments, threadMatches, remarkSenders, ruleSender, typedTurn, RULE_TEXT,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount, turnSums, sumsStats,
   noteSkip, skipNote,
 } from "./core/turns.js";
@@ -2966,7 +2966,7 @@ export default class Threads extends View {
     const turns = S[L].turns;
     if (turns.length < job.lens[L]) return false;
     let safe = job.lens[L] - 1;
-    while (safe > 0 && !(turns[safe - 1].done && turns[safe - 1].after?.length)) safe--;
+    while (safe > 0 && !(turns[safe - 1].done && hasReply(turns[safe - 1]))) safe--;
     return job.from.ti <= safe;
   }
 
@@ -2989,7 +2989,7 @@ export default class Threads extends View {
     const was = b.lens[L];
     if (turns.length < was || was < 2) return null;
     let safe = was - 1;
-    while (safe > 0 && !(turns[safe - 1].done && turns[safe - 1].after?.length)) safe--;
+    while (safe > 0 && !(turns[safe - 1].done && hasReply(turns[safe - 1]))) safe--;
     for (let k = b.marks.length - 1; k >= 0; k--) {
       const m = b.marks[k];
       if (m.ti <= safe) return { ...m, marks: b.marks.slice(0, k) };
@@ -3446,7 +3446,8 @@ export default class Threads extends View {
 
   // Level 1's steps, in order: each interim text, and each group's line; an open group
   // (level 2) adds one row per call. A running turn's last group, with nothing said since,
-  // is the one still running.
+  // is the one still running. A marked answer in its place among them (a "final") is the
+  // reply's, not a step.
   stepRows(item, out, live = false) {
     const { key, turn } = item;
     const steps = turn.steps ?? [];
@@ -3455,6 +3456,7 @@ export default class Threads extends View {
         out.push({ ...item, live: false, kind: "itext", key: `it:${key}:${i}`, src: st.t, ...this.stepLinks(st) });
         return;
       }
+      if (st.k === "final") return;
       const now = live && i === steps.length - 1 && !turn.after?.length;
       const read = this.readsCalls(item.si, st);
       // The running group's newest call is read from the transcript's tail, so its line can
@@ -5127,7 +5129,7 @@ export default class Threads extends View {
   // person's row borrows that reply, so it still shows one and "c" copies it.
   borrowedFrom(turn) {
     const n = turn?.answeredBy ?? turn?.answeredIn;
-    if (!n || turn.after.length || this.prefs.agentTurns) return null;
+    if (!n || hasReply(turn) || this.prefs.agentTurns) return null;
     const s = this.sessions.find((x) => x.turns[turn.n - 1] === turn);
     const by = s?.turns[n - 1];
     return by?.agent && reply(by) ? by : null;

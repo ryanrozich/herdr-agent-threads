@@ -14,6 +14,11 @@
 // comes when the model starts working between turns. A command line logged during a turn
 // with no such meta line never becomes a row: the model events after it belong to that turn.
 //
+// The reply: the text a harness marks as the answer ("t" with a: 1) is the row's reply, and
+// nothing after it folds it into the work, cuts it or replaces it. Several in one row are each
+// whole, in order (reply). In a row with no mark (Antigravity, Cursor, transcripts written
+// without marks) the reply is the text after the row's last call.
+//
 // A row closes when the model finishes a reply (an "s" event). Claude Code writes the
 // turn_duration line ("d") for most turns but not all: it can stop for days in one session,
 // so that line alone would leave a row open and pile every later turn onto it. When it does
@@ -248,6 +253,8 @@ function newTurn(s, e) {
     sender,
     agent: sender.kind !== "you",
     cmd: Boolean(e.cmd),
+    // The texts said since the last call. after.marked: how many of them, from the first, the
+    // last one marked as the answer ends (say). It sits on the list, so it goes with it.
     after: [],
     tools: 0,
     // Tool calls in background wake-ups after the reply (not in tools), and in the latest one.
@@ -256,7 +263,9 @@ function newTurn(s, e) {
     toolNames: {},
     // The work before the reply, in order (addStep): the agent's interim text, and groups of
     // the tool calls in a row between texts, each call by its tool name and its id (ids). The
-    // reply is the text after the last group, so it is not a step.
+    // text after the last group is not a step. A marked answer that a call came after is one of
+    // its own kind ("final"): it stays part of the reply (turn.finals, made with the first one,
+    // holds the same objects) and is never shown as work.
     steps: [],
     // When the text after the last call began (the reply's or the next text step's start).
     afterAt: null,
@@ -295,7 +304,8 @@ function newTurn(s, e) {
 // over 4,096 characters, so a text step keeps STEP_TEXT; a group keeps its first STEP_CALLS
 // names and counts the rest. Past STEP_MAX steps, later text is dropped (counted) and
 // calls join the last group, so a turn of thousands of calls stays small. STEP_TEXT is under
-// ui.js MD_MAX, the size the reply's Markdown blocks are cut to.
+// ui.js MD_MAX, the size the reply's Markdown blocks are cut to. A "final" step (takeFinal) is
+// a marked answer in its place: whole, and kept past STEP_MAX.
 //
 // Times: a text step's at is when its first text was written. A group with a call that has an
 // input summary or a time keeps a record per call (info, beside ids): in, the input in up to
@@ -306,24 +316,69 @@ export const STEP_CALLS = 200;
 export const STEP_MAX = 300;
 // A subagent call's name, as ui.js toolKind sees it (kept here: turns.js imports nothing).
 const AGENT_CALL = /^(task|agent|subagent|spawn(_\w+)?|delegate(_\w+)?)$/i;
+
+// A text since the last call, marked as the answer (e.a) or not. restAt: when the text after the
+// last marked one began; thought and held: how much reasoning came before it (the export only).
+function say(w, e) {
+  const after = w.after;
+  if (!after.length) w.afterAt = ms(e.ts);
+  else if (after.length === after.marked) after.restAt = ms(e.ts);
+  after.push(e.t);
+  if (!e.a) return;
+  after.marked = after.length;
+  after.thought = w.reasoning?.length ?? 0;
+  after.held = w.held ?? 0;
+}
+
+// Before a call: the texts up to the last marked one leave `after` as one final, whole. What was
+// said after it stays, as the text before the call.
+function takeFinal(w) {
+  const { marked, restAt, thought, held } = w.after;
+  if (!marked) return;
+  const t = w.after.slice(0, marked).join("\n\n").trim();
+  if (t) {
+    const reason = w.reasoning?.slice(0, thought).join("\n\n") || "";
+    const step = { k: "final", t, ...(reason ? { r: reason } : {}), ...(held ? { h: held } : {}), ...(w.afterAt != null ? { at: w.afterAt } : {}) };
+    w.steps.push(step);
+    (w.finals ??= []).push(step);
+    if (w.reasoning) w.reasoning = w.reasoning.slice(thought);
+    if (w.held) w.held -= held;
+  }
+  w.after = w.after.slice(marked);
+  w.afterAt = w.after.length ? restAt ?? null : null;
+}
+
+// The text since the last call as a step of the work. Returns what reasoning the step does not
+// carry (the ATIF export only): blocks with no text, and a text step's reasoning dropped with it
+// past STEP_MAX. The step that is kept counts it.
+function textStep(turn, text, reason) {
+  const held = turn.held ?? 0;
+  if (!text) return held;
+  if (turn.steps.length >= STEP_MAX) {
+    turn.stepsDropped = (turn.stepsDropped ?? 0) + 1;
+    return held + (reason ? turn.reasoning.length : 0);
+  }
+  turn.steps.push({ k: "text", t: text.length > STEP_TEXT ? `${text.slice(0, STEP_TEXT - 1)}…` : text, cut: text.length > STEP_TEXT, ...(reason ? { r: reason } : {}), ...(held ? { h: held } : {}), ...(turn.afterAt != null ? { at: turn.afterAt } : {}) });
+  return 0;
+}
+
+// At a row's end: a note it ends on after a marked answer is work, not the reply.
+function foldNote(turn) {
+  if (!turn.finals || !turn.after.length || turn.after.marked) return;
+  const held = textStep(turn, turn.after.join("\n\n").trim(), turn.reasoning?.join("\n\n") || "");
+  if (held || turn.held) turn.held = held;
+  turn.after = [];
+  turn.afterAt = null;
+  if (turn.reasoning) turn.reasoning = [];
+}
+
 // owner: the turn a call's result belongs to, when the steps are a wake-up's (keepWakes).
 function addStep(s, turn, name, id = null, e = null, owner = turn) {
+  takeFinal(turn);
   const steps = turn.steps;
   const text = turn.after.join("\n\n").trim();
   const reason = turn.reasoning?.join("\n\n") || "";
-  // Reasoning the step it precedes does not carry (the ATIF export only): blocks with no text,
-  // and a text step's reasoning dropped with it past STEP_MAX. The step that is kept counts it.
-  let held = turn.held ?? 0;
-  let heldOnText = false;
-  if (text) {
-    if (steps.length < STEP_MAX) {
-      steps.push({ k: "text", t: text.length > STEP_TEXT ? `${text.slice(0, STEP_TEXT - 1)}…` : text, cut: text.length > STEP_TEXT, ...(reason ? { r: reason } : {}), ...(held ? { h: held } : {}), ...(turn.afterAt != null ? { at: turn.afterAt } : {}) });
-      heldOnText = true;
-    } else {
-      turn.stepsDropped = (turn.stepsDropped ?? 0) + 1;
-      if (reason) held += turn.reasoning.length;
-    }
-  }
+  const held = textStep(turn, text, reason);
   // A text step ends the group before it; past STEP_MAX no text is added, so calls join it.
   // Subagent calls make a group of their own, apart from the commands and reads around them.
   const agent = AGENT_CALL.test(String(name ?? ""));
@@ -331,7 +386,7 @@ function addStep(s, turn, name, id = null, e = null, owner = turn) {
   if (g?.k === "group" && Boolean(g.agent) !== agent && steps.length < STEP_MAX) g = null;
   if (g?.k !== "group") { g = { k: "group", calls: [], count: 0 }; if (agent) g.agent = true; steps.push(g); }
   if (!text && reason) g.r = g.r ? `${g.r}\n\n${reason}` : reason;
-  if (!heldOnText && held) g.h = (g.h ?? 0) + held;
+  if (held) g.h = (g.h ?? 0) + held;
   if (g.calls.length < STEP_CALLS) {
     g.calls.push(String(name ?? "tool"));
     // The call's id in the transcript, for calls.sh to find its input and output on demand.
@@ -363,8 +418,10 @@ function startModelTurn(s, e) {
 
 function openRow(s, e) {
   // Later events go to the new row, so an open row with its reply has nothing more to come.
+  const above = s.turns[s.turns.length - 1];
+  if (above) foldNote(above);
   s.open = s.open.filter((t) => {
-    if (!t.after.length) return true;
+    if (!hasReply(t)) return true;
     t.done = true;
     if (!t.durationMs && t.endTs && t.ts) t.durationMs = Math.max(0, t.endTs - t.ts);
     return false;
@@ -391,10 +448,10 @@ const CUT_OFF = /^No response requested\b|\bhit your\b.*\blimit\b|\b(usage|rate)
 
 // The rows before a turn with a reply that had no reply of their own and were only cut off.
 function linkAnswer(s, cur) {
-  if (!cur.after.length) return;
+  if (!hasReply(cur)) return;
   for (let i = cur.n - 2; i >= 0; i--) {
     const t = s.turns[i];
-    if (t.after.length || t.interrupted || t.answeredBy || !t.errors.length || !t.errors.every((x) => CUT_OFF.test(x))) return;
+    if (hasReply(t) || t.interrupted || t.answeredBy || !t.errors.length || !t.errors.every((x) => CUT_OFF.test(x))) return;
     t.answeredIn = cur.n;
     t.v = s.version;
   }
@@ -402,12 +459,13 @@ function linkAnswer(s, cur) {
 
 // Every open row is done: the shared end of "d" and "s".
 function closeOpen(s, cur, end, e) {
+  foldNote(cur);
   for (const t of s.open) {
     t.done = true;
     if (end) t.endTs = end;
     // Answered together with a later prompt: its reply is on that row. Not a turn with a line
     // left out (noteSkip): its reply may be the line itself.
-    if (t !== cur && !t.after.length && !t.skipped) t.answeredBy = cur.n;
+    if (t !== cur && !hasReply(t) && !t.skipped) t.answeredBy = cur.n;
   }
   if (s.clock) for (const t of s.open) clockEnd(s, t, e);
   s.open = [];
@@ -500,12 +558,12 @@ function applyOne(s, e) {
     case "t":
       if (!cur || !e.t) return;
       if (s.seg === "own") {
-        if (!cur.after.length) cur.afterAt = ms(e.ts);
-        cur.after.push(e.t);
+        say(cur, e);
       } else {
         // A background update's text: kept apart, so the reply to the prompt stays the reply.
         if (!cur.latestParts.length) cur.latestAt = ms(e.ts);
         cur.latestParts.push(e.t);
+        if (e.a) cur.latestParts.marked = true;
         cur.latest = cur.latestParts.join("\n\n").trim();
         // This wake-up's place in turn.updates, taken by its first text: its text after its
         // last call replaces what it said before, as latest does.
@@ -513,7 +571,7 @@ function applyOne(s, e) {
         cur.updates[s.updateAt.i] = cur.latest;
         (cur.updatesAt ??= [])[s.updateAt.i] = cur.latestAt;
         const w = s.keepWakes ? cur.wakes?.at(-1) : null;
-        if (w) { if (!w.after.length) w.afterAt = ms(e.ts); w.after.push(e.t); }
+        if (w) say(w, e);
       }
       return;
     case "u":
@@ -523,6 +581,8 @@ function applyOne(s, e) {
       if (s.seg === "follow") { cur.followTools++; cur.wakeTools++; } else { cur.tools++; cur.toolNames[e.n] = (cur.toolNames[e.n] ?? 0) + 1; }
       if (s.seg === "own") { addStep(s, cur, e.n, e.id, e); cur.after = []; cur.afterAt = null; if (cur.reasoning) cur.reasoning = []; if (cur.held) cur.held = 0; }
       else {
+        // A marked text of this wake-up keeps its place: what it says next takes one of its own.
+        if (cur.latestParts.marked) s.updateAt = null;
         cur.latestParts = [];
         const w = s.keepWakes ? cur.wakes?.at(-1) : null;
         if (w) { addStep(s, w, e.n, e.id, e, cur); w.after = []; w.afterAt = null; if (w.reasoning) w.reasoning = []; if (w.held) w.held = 0; }
@@ -597,6 +657,7 @@ function applyOne(s, e) {
       return;
     }
     case "i": {
+      if (cur) foldNote(cur);
       if (!s.open.length) { s.followActive = false; return; }
       const last = s.open[s.open.length - 1];
       for (const t of s.open) t.done = true;
@@ -694,8 +755,16 @@ export function replaced(s, c) {
     || Boolean(s.anchor && "anchor" in c && c.anchor !== s.anchor);
 }
 
+// A row's reply: its marked answers, each whole and in order. With none of them before a call,
+// the text after the last call, whether marked or not. A note after the last answer is not part
+// of it: the work that is still running.
 export function reply(turn) {
-  return turn.after.join("\n\n").trim();
+  if (!turn.finals?.length) return turn.after.join("\n\n").trim();
+  return [...turn.finals.map((x) => x.t), ...(turn.after.marked ? turn.after : [])].join("\n\n").trim();
+}
+// Whether a row has a reply, without joining it.
+export function hasReply(turn) {
+  return Boolean(turn.finals?.length || turn.after?.length);
 }
 
 // What every background update after the reply said, in order, one paragraph each: the
