@@ -11991,7 +11991,10 @@ export default class Threads extends View {
     this.buildSpent = (this.buildSpent ?? 0) + (now() - b0);
     if (job.next >= 0) return m ?? this.ledgerPart(job);
     this.ledgerJob = null;
-    this.ledgerMemo = { key, sessions: this.sessions, rows: this.ledgerJoin(job, 0), going, partial: false };
+    // whole: the turns (their array) of the session the pane is on, when it was read whole; null
+    // while it is not. Made here with the rows, by the key they were built for, which says whether
+    // each session is read; a session started over (restart) has another array.
+    this.ledgerMemo = { key, sessions: this.sessions, rows: this.ledgerJoin(job, 0), going, partial: false, whole: s?.loaded ? s.turns : null };
     this.ledgerMemo.totals = ledgerTotals(this.ledgerMemo.rows);
     this.ledgerShown = null;
     return this.ledgerMemo;
@@ -12319,9 +12322,10 @@ export default class Threads extends View {
     // its own build runs over draws, that it is being laid out.
     const waiting = (text) => box(h_flex()).items_center().pl(12)
       .child(div().id("th-tl-wait").text_size(12).text_color(t.dim).child(text));
-    // After a pick the ledger gives the rows of the transcript before until the picked one's are
-    // built (ledger), over draws of their own: the strip waits for those too.
-    this.tlWait = this.ledgerHeld(L) || L.sessions !== this.sessions;
+    // Once a session is read, the ledger gives the rows it had (the transcript's before a pick, the
+    // session's before a clear, the turns read so far) until the whole one's are built, over draws
+    // of their own: the strip waits for those too. A session that grows keeps its turns' array.
+    this.tlWait = this.ledgerHeld(L) || L.whole !== (this.current()?.turns ?? null);
     if (this.tlWait) {
       // A build left from before is of the turns before the read, and would ask for a draw in
       // every frame of it (trajFrame) while nothing takes its steps. It is begun again after.
