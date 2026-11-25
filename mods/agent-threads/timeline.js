@@ -662,8 +662,11 @@ export function tlBuildGo(J, until, clock) {
 // The turns' numbers, 10.5 px: a number is TL_NUM_PAD px (its edge line and padding) and
 // TL_NUM_CH px a digit wide, and TL_NUM_GAP px clear of the next. A turn's length goes beside
 // its number where the turn and the room to the next number are both TL_NUM_LEN px or more.
+// TL_NUM_CH is measured from the test machine's UI font at 10.5 px, where a wide digit takes
+// about 7 px ("2000" needs 27 to 28 after its line and padding), with a little over. Another
+// font can be wider.
 export const TL_NUM_PAD = 6;
-export const TL_NUM_CH = 6.5;
+export const TL_NUM_CH = 7.2;
 export const TL_NUM_GAP = 8;
 export const TL_NUM_LEN = 120;
 export function tlNumW(text) { return TL_NUM_PAD + String(text).length * TL_NUM_CH; }
