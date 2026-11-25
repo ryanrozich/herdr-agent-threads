@@ -472,6 +472,42 @@ test("timeline tail: only the last turn laid out again gives the spans a whole l
   expect(reached).toBeGreaterThan(20);
 });
 
+test("timeline tail: a span that ends 4 to 4.5 px left of the last turn is one an unfinished call's bar there joins: when the call ends, the tail gives a whole layout's spans", () => {
+  // Every turn but the first held at the least width, 2 to 2.2 px, so the last turn's unfinished
+  // call starts 3.8 to 4 px left of it; the turn before it has no call, and the call of the one
+  // before that ends 4 to 4.4 px left of it: past 4 px, within the half pixel of the bar.
+  const held = (n, last) => {
+    const heads = [];
+    let t0 = T0;
+    for (let i = 0; i < n; i++) {
+      const key = `0:${i}`;
+      const total = i === 0 ? 3600000 : 1000;
+      const calls = i === n - 1 ? last(key) : i === n - 3 ? [row(key, 1, "tool", 100, total)] : [];
+      heads.push({ kind: "trh", key, n: i + 1, t0, total, span: total, going: false, cnt: { steps: 1 + calls.length, input: 1, model: 0, tools: calls.length, failed: 0, user: 1, agent: 0 }, steps: [row(key, 0, "you", 0, null), ...calls] });
+      t0 += total + 5000;
+    }
+    return heads;
+  };
+  const tools = (L) => L.spans.get("tools|tools|0");
+  for (let n = 191; n <= 205; n++) {
+    const open = held(n, (key) => [row(key, 1, "noresult", 0, null, true)]);
+    const M = TL.timelineModel(null, open, CW, "clock", T0, null);
+    const tx = M.geo.turns.at(-1).x;
+    const before = M.geo.turns.at(-3);
+    const off = tx - (before.x + before.w);
+    expect([n, off > 4 && off < 4.5]).toEqual([n, true]);
+    // The two bars are one span, from the call before to the last turn's torn end.
+    expect([n, tools(M.L).length, tools(M.L)[0][0] < tx - 4.5, tools(M.L)[0][2]]).toEqual([n, 1, true, 1]);
+    const done = withLast(open, held(n, (key) => [row(key, 1, "tool", 0, 100)]).at(-1).steps);
+    const m = { ...TL.TL_MADE };
+    const N = TL.timelineModel(M, done, CW, "clock", T0, null);
+    expect([n, TL.TL_MADE.geo - m.geo, TL.TL_MADE.layout - m.layout, TL.TL_MADE.tail - m.tail]).toEqual([n, 0, 0, 1]);
+    const W = TL.timelineLayout(done, CW, "clock", T0, null, N.geo);
+    expect([n, tools(W).length, tools(N.L)]).toEqual([n, 2, tools(W)]);
+    expect([n, [...N.L.spans].sort()]).toEqual([n, [...W.spans].sort()]);
+  }
+});
+
 // ---- what is drawn on top, and what a press there selects ----
 // Three made-up turns, 60 s long and the last one running 50 s in, whose bars overlap in every
 // way the rule has: an ordinary call and a subagent's on one track, each inside the other and
@@ -572,6 +608,30 @@ test("timeline press: an ordinary call and a subagent's on one track: the ordina
   // Running: the growing bars over all, half height over full, the ordinary call over a
   // subagent's that began before or after it; above the half track the full one.
   expect([at(2, 12000), at(2, 25000), at(2, 35000), at(2, 35000, 4)]).toEqual([4, 3, 3, 2]);
+});
+
+test("timeline press: on a turn under 2 px a subagent's call ranks as an ordinary one, as its span is drawn: of the two in one turn the one listed first, and over a neighbour's ordinary call the pressed turn's own", () => {
+  const turnOf = (i, kinds) => {
+    const key = `0:${i}`;
+    return {
+      kind: "trh", key, n: i + 1, t0: T0 + i * 100000, total: 60000, span: 60000, going: false,
+      cnt: { steps: 1 + kinds.length, input: 1, model: 0, tools: kinds.length, failed: 0, user: 1, agent: 0 },
+      steps: [row(key, 0, "you", 0, null), ...kinds.map((lk, j) => row(key, j + 1, lk, 1000 * (j + 1), 50000))],
+    };
+  };
+  const heads = Array.from({ length: 2000 }, (_, i) => turnOf(i, i === 1000 ? ["subagent"] : i === 400 ? ["subagent", "tool"] : i === 600 ? ["tool", "subagent"] : i % 100 === 0 ? [] : ["tool"]));
+  const L = TL.timelineLayout(heads, CW, "clock", T0, null);
+  expect(L.turns[1000].w).toBeLessThan(1);
+  // Under 2 px the lane has one layer, the ordinary call's, and the spans of all these join.
+  expect([...L.spans.keys()].filter((k) => k.startsWith("tools|"))).toEqual(["tools|tools|0"]);
+  const at = (ti, f) => TL.timelineHit(L, heads, TL.tlBox(L, ti).x + f * TL.tlBox(L, ti).w, "tools", T0, 8);
+  // The 1 px span of the turn before, an ordinary call's, is under each of these presses too.
+  expect(TL.tlBox(L, 999).x + 1).toBeGreaterThan(TL.tlBox(L, 1000).x + 0.5 * TL.tlBox(L, 1000).w);
+  for (const f of [0.1, 0.3, 0.5]) {
+    expect([f, at(1000, f)]).toEqual([f, { turn: "0:1000", key: "tr:0:1000:1" }]);
+    expect([f, at(400, f)]).toEqual([f, { turn: "0:400", key: "tr:0:400:1" }]);
+    expect([f, at(600, f)]).toEqual([f, { turn: "0:600", key: "tr:0:600:1" }]);
+  }
 });
 
 test("timeline view: a press acts on the strip as it was drawn: past a growing bar's drawn end it gets no call the clock has reached since; drawn again, it does", async () => {
