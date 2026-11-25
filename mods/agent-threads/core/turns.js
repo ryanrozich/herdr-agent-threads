@@ -7,6 +7,12 @@
 // is still open, are folded into the row above: their tokens and tool calls count, their
 // text does not replace the row's final reply.
 //
+// Work that starts by itself after a row ended (a "w" event: a Codex goal's task, a Claude Code
+// loop tick or scheduled line with no prompt of its own) is a row too (turn.self), with no
+// prompt and a sender that says what started it. It is made once the work does something
+// (s.pendingSelf until then), so one that does nothing leaves no row. A task notification that
+// lands while such a row works keeps its own row, as it has with no row open.
+//
 // A slash command line (/usage, /clear, a skill) waits as s.pendingCmd. Local commands
 // never start a model turn, so they never become rows; a skill or custom command does,
 // and becomes a row titled "/name args". Its text is a meta line naming the command line as
@@ -45,7 +51,7 @@ const OWN_ROW = new Set(["human", "peer", "scheduled", "sdk"]);
 export function newSession(id, file) {
   return {
     id, file, offset: 0, size: null, head: null, title: null, agentName: null, turns: [], seg: null, startedAt: null,
-    open: [], pendingCmd: null, clearAt: null, followActive: false, followSince: null, version: 0,
+    open: [], pendingCmd: null, pendingSelf: null, clearAt: null, followActive: false, followSince: null, version: 0,
     ctx: null, settled: 0, anchor: null, clock: null, since: null, guess: null,
     // Subagents (Claude Code): each one's state by its call's id and by its agent id, from its
     // launch result ("r") and its task notification ("n"): running, completed, failed,
@@ -296,6 +302,8 @@ function newTurn(s, e) {
         src: typeof e.src?.[i] === "string" && e.src[i].length <= 300 ? e.src[i] : null }))
       : [],
     imgLine: typeof e.u === "string" && /^[0-9A-Za-z_-]{8,80}$/.test(e.u) ? e.u : null,
+    // Work that started by itself (openSelf).
+    ...(e.self ? { self: true } : {}),
   };
 }
 
@@ -416,16 +424,22 @@ function startModelTurn(s, e) {
   s.guess = null;
 }
 
+// A row ended by what came after it, at its own last activity.
+function endRow(t) {
+  t.done = true;
+  if (!t.durationMs && t.endTs && t.ts) t.durationMs = Math.max(0, t.endTs - t.ts);
+}
+
 function openRow(s, e) {
   // Later events go to the new row, so an open row with its reply has nothing more to come.
   const above = s.turns[s.turns.length - 1];
   if (above) foldNote(above);
   s.open = s.open.filter((t) => {
     if (!hasReply(t)) return true;
-    t.done = true;
-    if (!t.durationMs && t.endTs && t.ts) t.durationMs = Math.max(0, t.endTs - t.ts);
+    endRow(t);
     return false;
   });
+  s.pendingSelf = null;
   startModelTurn(s, e);
   const turn = newTurn(s, e);
   s.turns.push(turn);
@@ -433,6 +447,20 @@ function openRow(s, e) {
   s.seg = "own";
   s.followActive = false;
   return turn;
+}
+
+// Work that starts by itself (s.pendingSelf) becomes a row once it does something.
+function openSelf(s) {
+  const { o, ts } = s.pendingSelf;
+  if (s.startedAt === null && ts) s.startedAt = Date.parse(ts);
+  openRow(s, { o, ts, t: "", self: true });
+}
+// Whether no row is open but such rows. A row that opens then ends them first (endSelf): what
+// comes next is the new row's.
+const onlySelf = (s) => s.open.every((t) => t.self);
+function endSelf(s) {
+  for (const t of s.open) endRow(t);
+  s.open = [];
 }
 
 // A pending skill or custom command becomes a row once the model works on it.
@@ -500,12 +528,27 @@ function applyOne(s, e) {
     if (s.pendingCmd?.u && s.pendingCmd.u === e.pu) promote(s);
     return;
   }
-  // Work that starts by itself: nothing yet, and it leaves a waiting command line waiting.
-  if (e.k === "w") return;
+  // Work that starts by itself: no row yet (openSelf), and it leaves a waiting command line
+  // waiting. While a row is open or a background update runs it is part of that.
+  if (e.k === "w") {
+    if (!s.open.length && !s.followActive && typeof e.o === "string") s.pendingSelf = { o: e.o, ts: e.ts ?? null };
+    return;
+  }
   // Only between turns: a command line logged during a turn (a local /usage), with no text
   // of its own for the model, is not what the model is working on, so it never takes a row.
-  if (s.pendingCmd && !s.open.length && !s.followActive && (e.k === "t" || e.k === "h" || e.k === "u" || e.k === "m" || e.k === "e")) promote(s);
+  if (s.pendingCmd && onlySelf(s) && !s.followActive && (e.k === "t" || e.k === "h" || e.k === "u" || e.k === "m" || e.k === "e")) { endSelf(s); promote(s); }
   if (s.pendingCmd && e.k !== "c" && e.k !== "title" && e.k !== "an" && e.k !== "r" && e.k !== "n" && e.k !== "x") s.pendingCmd = null;
+  if (s.pendingSelf) {
+    const above = s.turns[s.turns.length - 1];
+    // A count the row above already has is not work: Codex writes its last one again.
+    if ((e.k === "t" && e.t) || e.k === "h" || e.k === "u" || e.k === "e" || (e.k === "m" && !(above && e.id in above.usage))) openSelf(s);
+    // A prompt takes the work, and a stop ends it. An end with nothing done leaves no row, and
+    // its time is not the row above's.
+    else if (e.k === "p" || e.k === "i" || e.k === "d" || e.k === "s") {
+      s.pendingSelf = null;
+      if (e.k === "d" || e.k === "s") return;
+    }
+  }
   const cur = s.turns[s.turns.length - 1];
   switch (e.k) {
     case "p": {
@@ -522,7 +565,10 @@ function applyOne(s, e) {
       // A task notification that wakes the agent once the row above has ended starts a row of
       // its own: what the agent says then is a reply for the person, so it shows in the Chat
       // (the owner, 21 Nov). One that lands while a row is open still counts on that row.
-      if (OWN_ROW.has(e.o) || !cur || (e.o === "task-notification" && !s.open.length)) {
+      // One that lands while only work that started by itself is open keeps its own row too.
+      const note = e.o === "task-notification" && onlySelf(s);
+      if (OWN_ROW.has(e.o) || !cur || note) {
+        if (note) endSelf(s);
         clockStart(s, openRow(s, e), e);
       } else if (s.open.length) {
         // A notification while the row is open: Claude still owes this row its reply. One
@@ -725,6 +771,7 @@ export function rewindTail(s) {
   s.open = [];
   s.seg = null;
   s.pendingCmd = null;
+  s.pendingSelf = null;
   s.followActive = false;
   s.updateAt = null;
   s.version++;

@@ -502,6 +502,18 @@ describe("B: work that starts by itself after a row ended", () => {
     expect(view(s).map((r) => [r[0], r[2], r[6]])).toEqual([["Why does the cart test fail?", "One.", true]]);
   });
 
+  // Red on the base: 1700, the task's time on the row above.
+  test("Codex: the time of a goal's task that did nothing is not the row above's", () => {
+    const c = codex();
+    c.prompt("Why does the cart test fail?");
+    c.final("One.");
+    c.done(1000);
+    c.goal();
+    c.done(700);
+    const s = read(c.file(), "codex");
+    expect(s.turns.map((t) => [reply(t), t.durationMs, t.done])).toEqual([["One.", 1000, true]]);
+  });
+
   // Green on the base and after: a prompt that comes before the goal's task worked takes it.
   test("Codex: a prompt that comes before a goal's task did anything is the row", () => {
     const c = codex();
