@@ -965,8 +965,8 @@ test("timeline build: no step touches more than 1,024 bars and span entries toge
     // 256 turns and the turns beside it a turn reads (the next turn's start, for the break).
     // The count is looked at before each bar and each span, so a step can end over it by one
     // bar and its join: at most four times its key's spans (the walk back, the move right, the
-    // reach and the move left) and six more. And the cut before the last turn reads each key's
-    // last span once.
+    // reach and the move left) and six more. And one for each key. (The cut before the last turn
+    // reads each key's last few spans, five at most, off the map's own lists, not counted here.)
     const most = Math.max(...per.map((b, k) => b + perJ[k]));
     const over = 4 * longest + 6 + M.L.spans.size;
     expect([name, most <= 1024 + over, Math.max(...perT) <= 260]).toEqual([name, true, true]);

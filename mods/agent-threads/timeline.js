@@ -430,12 +430,26 @@ function spanAdder(out) {
     return 1 + tlJoin(list, a, b, torn);
   };
 }
-// A layout's state before its last turn: each span list's length and a copy of its last span
-// (the last turn may join onto it), and the lengths of the other lists.
+// How far left of the last turn's start, tx, its bars can change a span laid before it: 4.5 px.
+// A bar is laid from itemBox's box, in a turn 2 px wide or more (a narrower one is a span from
+// tx itself), and starts at or right of tx, or at the turn's end less its least width where that
+// is left of tx. The least width is 6 px for an unfinished call and 3 px for any other, so a bar
+// starts 4 px left of tx at most, and 1 px. It joins a span that ends within 0.5 px left of its
+// start (tlJoin). TL_SLACK adds nothing: a last turn whose length alone changes keeps its tx
+// (tlLastLength). The rest is for the rounding of those sums.
+const TL_BACK = 4.5 + 1e-6;
+// A layout's state before its last turn: where in each span list the spans begin that the last
+// turn's bars can join (those that end at or right of tx less TL_BACK; the spans are apart and in
+// order, so they are the list's last few) and copies of them, and the lengths of the other lists.
 function cutOf(S) {
-  const { out } = S;
+  const { out, G, z, x0 } = S;
+  const from = G.turns[G.turns.length - 1].x * z - x0 - TL_BACK;
   const spans = new Map();
-  for (const [k, list] of out.spans) spans.set(k, [list.length, list[list.length - 1].slice()]);
+  for (const [k, list] of out.spans) {
+    let i = list.length;
+    while (i > 0 && list[i - 1][1] >= from) i--;
+    spans.set(k, [i, list.slice(i).map((s) => s.slice())]);
+  }
   return { spans, fails: out.fails.length, grow: out.grow.length, ticks: out.ticks.length, gaps: out.gaps.length, to: out.to, failEnd: S.failEnd };
 }
 // The layout P with its last turn laid out again from heads, whose other headings are P's
@@ -455,9 +469,7 @@ function tlTail(P, heads, was, G = P.geo) {
   for (const [k, list] of P.spans) {
     const s = c.spans.get(k);
     if (!s) continue;
-    const l = list.slice(0, s[0]);
-    l[s[0] - 1] = s[1].slice();
-    out.spans.set(k, l);
+    out.spans.set(k, [...list.slice(0, s[0]), ...s[1].map((sp) => sp.slice())]);
   }
   const S = { out, heads, G, z: P.z, x0: P.x0, cw: P.cw, scale: P.scale, range: null, walls: G.walls, add: spanAdder(out), M: TL_MARGIN, kept: null, failEnd: c.failEnd, nti: [], nx: [], nw: [], work: 0 };
   const n = heads.length;
