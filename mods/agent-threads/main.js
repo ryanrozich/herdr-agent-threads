@@ -9720,8 +9720,14 @@ export default class Threads extends View {
         first(16, (cx) => { ask(j, "top"); cx.notify(); });
         // The lift goes with the ask, and comes off with any lift left by an older landing, whose
         // own end Herdr stopped before it was asked for (liftN): a newer landing keeps its own.
+        // Herdr can stop this draw between the two asks, and after a wheel or a newer jump the next
+        // draw does not land this one again (renderWant). So the lift's own callback asks for an end
+        // too, before it puts the lift on: with no lift left to take off, that end does nothing.
         cx.timer.after(48, (cx) => {
-          if (lift > 0 && still()) { this.landLift = lift; this.liftN = landN; this.fitKey = null; }
+          if (lift > 0 && still()) {
+            cx.timer.after(72, (cx) => { if (!(this.landLift > 0) || this.liftN > landN) return; this.landLift = 0; this.fitKey = null; cx.notify(); });
+            this.landLift = lift; this.liftN = landN; this.fitKey = null;
+          }
           ask(p.j, p.how);
           cx.notify();
         });
