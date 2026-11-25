@@ -933,14 +933,14 @@ test("timeline tracks in the build: a turn of calls out of the clock's order, wi
 test("timeline failure marks in the build: a turn of 4,000 failed calls whose centres are out of order has the marks a sort by hand gives, its sort and spacing counted and spread over the build's steps, and nothing sorted whole", () => {
   // Calls that start in order, 100 ms apart, every other one 10 s long: their centres are out
   // of order, so the marks are sorted, and the tracks need no sort. "even": all 100 ms long, so
-  // the marks are in order.
+  // the marks are in order. "plain": as even, with no call failed, so it has no marks.
   const n = 4000;
-  const session = (long) => {
+  const session = (long, lk = "failed") => {
     const key = "0:0";
     const steps = [row(key, 0, "you", 0, null)];
-    for (let j = 0; j < n; j++) steps.push(row(key, j + 1, "failed", j * 100, j * 100 + (long && j % 2 ? 10000 : 100)));
+    for (let j = 0; j < n; j++) steps.push(row(key, j + 1, lk, j * 100, j * 100 + (long && j % 2 ? 10000 : 100)));
     const len = n * 100 + 20000;
-    return [{ kind: "trh", key, n: 1, t0: T0, total: len, span: len, going: false, cnt: { steps: steps.length, input: 1, model: 0, tools: n, failed: n, user: 1, agent: 0 }, steps }, doneTurn(1)];
+    return [{ kind: "trh", key, n: 1, t0: T0, total: len, span: len, going: false, cnt: { steps: steps.length, input: 1, model: 0, tools: n, failed: lk === "failed" ? n : 0, user: 1, agent: 0 }, steps }, doneTurn(1)];
   };
   const real = Array.prototype.sort;
   let whole = 0;
@@ -955,9 +955,11 @@ test("timeline failure marks in the build: a turn of 4,000 failed calls whose ce
     for (; k < 100000 && !M; k++) M = TL.tlBuildGo(J, 0, () => 1);
     return { M, k };
   };
+  let plain;
   let even;
   let odd;
   try {
+    plain = built(session(false, "tool"));
     even = built(session(false));
     odd = built(session(true));
   } finally {
@@ -982,4 +984,6 @@ test("timeline failure marks in the build: a turn of 4,000 failed calls whose ce
   // Each of the sort's 12 passes over the 4,000 marks is counted: at 1,024 a step, 46 steps more
   // than the same session with its marks in order, less two for where the steps' ends fall.
   expect(odd.k - even.k).toBeGreaterThanOrEqual(Math.floor((n * Math.ceil(Math.log2(n))) / TL.TL_BUILD_BARS) - 2);
+  // The spacing of the marks is counted too: 4,000 marks, at 1,024 a step.
+  expect(even.k - plain.k).toBeGreaterThanOrEqual(Math.floor(n / TL.TL_BUILD_BARS));
 });
