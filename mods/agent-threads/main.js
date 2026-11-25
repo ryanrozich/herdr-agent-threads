@@ -7292,6 +7292,9 @@ export default class Threads extends View {
       this.buildNext = false;
       this.shapeNext = false;
       this.probeNext = false;
+      // So are the sender count's next draw and a held column's draw once the pane is still.
+      this.countNext = false;
+      this.holdNext = false;
       // A scroll the stopped render took on (the jump to the newest turn, a return to a pin)
       // is asked for again: it was taken before the list was drawn.
       if (this.renderWant?.toBottom) this.toBottom = true;
