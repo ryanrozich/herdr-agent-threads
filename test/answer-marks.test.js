@@ -971,6 +971,24 @@ describe("C: more than one marked answer in a row", () => {
     expect([row.after, row.reasoning, row.held ?? 0, row.afterAt]).toEqual([["Second answer."], ["R3"], 0, Date.parse(ts(6))]);
   });
 
+  // Red before this test's commit: "Looking." was a note after the blank text. At c37c64f3 the
+  // blank text is part of the second answer.
+  test("a marked or unmarked text of spaces alone sets no answer apart and loses no reasoning", () => {
+    const s = newSession("s", "f");
+    const ts = (n) => new Date(Date.UTC(2026, 10, 1, 9, 0, n)).toISOString();
+    for (const e of [
+      { k: "p", o: "human", t: "One", ts: ts(0) }, { k: "t", t: " \n", a: 1, ts: ts(1) }, { k: "t", t: "Looking.", ts: ts(2) },
+    ]) apply(s, e);
+    const [row] = s.turns;
+    expect([row.steps, reply(row)]).toEqual([[], "Looking."]);
+    for (const e of [
+      { k: "t", t: "First answer.", a: 1, ts: ts(3) }, { k: "h", t: "R1", ts: ts(4) }, { k: "t", t: " ", ts: ts(5) },
+      { k: "h", t: "R2", ts: ts(6) }, { k: "t", t: "Second answer.", a: 1, ts: ts(7) },
+    ]) apply(s, e);
+    expect([reply(row), row.reasoning]).toEqual(["Looking.\n\nFirst answer.\n\nSecond answer.", ["R1", "R2"]]);
+    expect(row.steps.map((st) => [st.k, st.t])).toEqual([["final", "Looking.\n\nFirst answer."]]);
+  });
+
   // Red on the base and at c37c64f3: the note is in a message with the answer.
   test("the export keeps a background update's note apart from its answers", () => {
     const t = claudeReplied("One.");

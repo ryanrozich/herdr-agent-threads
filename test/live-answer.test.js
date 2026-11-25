@@ -105,6 +105,15 @@ test("a running turn with no marked answer shows its steps and no reply, as befo
   expect(words(v, own(v))).toContain("No reply yet");
 });
 
+// Green on the base and after.
+test("a marked text of spaces alone is no answer", async () => {
+  const { v, add } = await live([PROMPT, call(), answer(" \n")]);
+  expect(kinds(v)).toEqual(["wrow", "grp", "wspin"]);
+  expect(words(v, own(v))).toContain("no reply yet");
+  add({ k: "i", ts: at(5) });
+  expect(v.rows().find((r) => r.kind === "turn").shape.tone).toBe("why");
+});
+
 // Red at c37c64f3: "No final reply yet", "no reply yet" and "No reply yet".
 test("a running turn that has answered says so, selected or not, whatever its state", async () => {
   const { v, cx } = await live([PROMPT, call(), answer("The tax is rounded twice."), call()]);
