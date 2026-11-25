@@ -1666,6 +1666,10 @@ describe("the pane", () => {
     v.flushCode(cx);
     cx.flush(0);
     expect([v.cutKept.text, v.code.get("0:1:1")?.st === st]).toEqual([text, true]);
+    // A session read again from its start runs nothing until it is read.
+    s.loaded = false;
+    expect(v.runs("0:1")).toBe(false);
+    s.loaded = true;
     o.read(s);
     s.partial = false;
     expect([shown(), cuts]).toEqual([["First answer."], 0]);

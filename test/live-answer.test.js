@@ -386,6 +386,8 @@ test("a prompt a limit cut off says where it is answered, with a row that starte
   apply(s, { k: "w", o: "scheduled", ts: on(3, 20) });
   apply(s, { k: "u", n: "Bash", ts: on(3, 21) });
   expect(v.keptFrom(v.rowBuild.rest).ti).toBe(2);
+  // With no prompt above it, there is none to step back to.
+  expect(v.firstChanged(s.turns.slice(2, 4), 2, 0)).toBe(1);
 });
 
 // Red at c37c64f3: no row says what is left out.
