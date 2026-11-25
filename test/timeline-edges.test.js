@@ -774,7 +774,7 @@ test("timeline number room: drawn in the pane, every number's digits end inside 
       b.paneW = b.width = cw + TL.TL_GUT + 12;
       for (const ti of numPicks(n)) {
         H.rec = [];
-        b.timelineView(theme, { totals: { heads }, sessions: b.sessions, partial: false }, ti == null ? [] : [{ key: heads[ti].key }], ti == null ? -1 : 0, trajInks(theme, true));
+        b.timelineView(theme, { totals: { heads }, sessions: b.sessions, whole: b.current()?.turns ?? null, partial: false }, ti == null ? [] : [{ key: heads[ti].key }], ti == null ? -1 : 0, trajInks(theme, true));
         const c = H.rec;
         H.rec = null;
         expect([b.tlModel.heads === heads, b.tlModel.L.cw]).toEqual([true, cw]);
