@@ -2825,73 +2825,85 @@ test("a splice Herdr stops in noteRows is followed by one build of every row, an
 // and the next build, as the debug report does. Cards opened above the window, where a wrong
 // carry would move its counts and its day's band: one, and one with another in the window (two
 // runs in one splice, the later turn's first), over three days.
-test("a splice Herdr stops between its version and its note, in the note or just after it ends as an unstopped run does, its timers kept or lost, and a version with no note is not taken as known", async () => {
+async function stoppedSplice(two, stop) {
   const STOP = new Error("stopped by Herdr");
-  const run = async (two, stop) => {
-    const { v, cx } = await capSession(150, SMALL, -1, 25, (i) => Math.floor(i / 50));
-    v.shapeBudget = Infinity;
-    v.jumpLatest(true);
-    frames(v, cx);
-    for (let k = 0; k < 3; k++) { v.showMore(false); frames(v, cx); }
-    const opens = two ? ["0:5", v.turnKeys(v.rows())[3]] : ["0:5"];
-    expectOutsideRight(v);
-    const memo = { rows: v.win.outMemo.rows, ver: v.win.outMemo.ver };
-    const was = v.baseRows.length;
-    expect([memo.rows === v.baseRows, memo.ver === (v.baseVer ?? 0), v.baseIndex.get("0:5") < v.win.at.a, v.win.at.z < was]).toEqual([true, true, true, true]);
-    let built = 0;
-    const turnRows = v.turnRows;
-    v.turnRows = function (...a) { built++; return turnRows.apply(this, a); };
-    let armed = stop != null;
-    let notes = 0;
-    const note = v.noteRows;
-    v.noteRows = function (...a) {
-      const here = armed && ++notes === stop.run;
-      if (here) armed = false;
-      if (here && stop.at === "entry") throw STOP;
-      if (here && stop.at === "push") { const log = (this.rowsLog ??= []); log.push = () => { delete log.push; throw STOP; }; }
-      const r = note.apply(this, a);
-      if (here && stop.at === "noted") throw STOP;
+  const { v, cx } = await capSession(150, SMALL, -1, 25, (i) => Math.floor(i / 50));
+  v.shapeBudget = Infinity;
+  v.jumpLatest(true);
+  frames(v, cx);
+  for (let k = 0; k < 3; k++) { v.showMore(false); frames(v, cx); }
+  const opens = two ? ["0:5", v.turnKeys(v.rows())[3]] : ["0:5"];
+  expectOutsideRight(v);
+  const memo = { rows: v.win.outMemo.rows, ver: v.win.outMemo.ver };
+  const was = v.baseRows.length;
+  expect([memo.rows === v.baseRows, memo.ver === (v.baseVer ?? 0), v.baseIndex.get("0:5") < v.win.at.a, v.win.at.z < was]).toEqual([true, true, true, true]);
+  let built = 0;
+  const turnRows = v.turnRows;
+  v.turnRows = function (...a) { built++; return turnRows.apply(this, a); };
+  let armed = stop != null;
+  let notes = 0;
+  const note = v.noteRows;
+  v.noteRows = function (...a) {
+    const here = armed && stop.at !== "spliced" && ++notes === stop.run;
+    if (here) armed = false;
+    if (here && stop.at === "entry") throw STOP;
+    if (here && stop.at === "push") { const log = (this.rowsLog ??= []); log.push = () => { delete log.push; throw STOP; }; }
+    const r = note.apply(this, a);
+    if (here && stop.at === "noted") throw STOP;
+    return r;
+  };
+  let stops = 0;
+  const step = () => { try { draw(v, cx); } catch (e) { if (e !== STOP) throw e; stops++; v.renderOpen = true; } };
+  // The rows' own splice, done, then the stop (at "spliced").
+  if (stop?.at === "spliced") {
+    const arr = v.baseRows;
+    let n = 0;
+    arr.splice = function (...a) {
+      const here = armed && ++n === stop.run;
+      if (here) { armed = false; delete arr.splice; }
+      const r = Array.prototype.splice.apply(this, a);
+      if (here) throw STOP;
       return r;
     };
-    let stops = 0;
-    const step = () => { try { draw(v, cx); } catch (e) { if (e !== STOP) throw e; stops++; v.renderOpen = true; } };
-    for (const k of opens) v.open.add(k);
-    const had = cx.timers.slice();
-    step();
-    let gap = null;
-    if (stop) {
-      if (stop.timers === "lost") cx.timers = cx.timers.filter((x) => had.includes(x));
-      const c = v.rowsSince(memo.rows, memo.ver);
-      const rows = v.baseRows;
-      gap = { splicing: v.splicing, ver: (v.baseVer ?? 0) - memo.ver, known: c == null ? null : c.d === rows.length - was, now: v.rowsSince(rows, v.baseVer ?? 0).d };
-      if (stop.ask) {
-        const { a, z } = v.win.at;
-        const turns = (x) => x.filter((r) => TURN_ROW.has(r.kind)).length;
-        expect(v.win.outside(v.winList())).toEqual({ earlier: turns(rows.slice(0, a)), later: turns(rows.slice(z)) });
-        expect(v.bandAbove(rows, a)).toBe(rows.slice(0, a + 1).findLastIndex((r) => r.kind === "day"));
-      }
+  }
+  for (const k of opens) v.open.add(k);
+  const had = cx.timers.slice();
+  step();
+  let gap = null;
+  if (stop) {
+    if (stop.timers === "lost") cx.timers = cx.timers.filter((x) => had.includes(x));
+    const c = v.rowsSince(memo.rows, memo.ver);
+    const rows = v.baseRows;
+    gap = { splicing: v.splicing, ver: (v.baseVer ?? 0) - memo.ver, known: c == null ? null : c.d === rows.length - was, now: v.rowsSince(rows, v.baseVer ?? 0).d };
+    if (stop.ask) {
+      const { a, z } = v.win.at;
+      const turns = (x) => x.filter((r) => TURN_ROW.has(r.kind)).length;
+      expect(v.win.outside(v.winList())).toEqual({ earlier: turns(rows.slice(0, a)), later: turns(rows.slice(z)) });
+      expect(v.bandAbove(rows, a)).toBe(rows.slice(0, a + 1).findLastIndex((r) => r.kind === "day"));
     }
-    for (let k = 0; k < 12; k++) { step(); cx.flush(150); }
-    delete v.turnRows;
-    delete v.noteRows;
-    const now = bandNow(v);
-    const pill = drawnPill(v, cx, now.head.key);
-    expect(pill).toBe(now.band);
-    return {
-      stops, built, gap, splicing: Boolean(v.splicing), open: opens.every((k) => v.open.has(k)),
-      end: {
-        keyed: v.rowsKey != null, index: v.baseRows.every((r, i) => v.baseIndex.get(r.key) === i) && v.baseIndex.size === v.baseRows.length,
-        rows: v.baseRows.map((r) => r.key), sizes: v.baseSizes.slice(), list: v.rows().map((r) => r.key), slots: v.slotsMemo.slice(),
-        win: [v.win.at.a, v.win.at.z], outside: expectOutsideRight(v), band: pill?.key, sel: v.sel,
-      },
-    };
+  }
+  for (let k = 0; k < 12; k++) { step(); cx.flush(150); }
+  delete v.turnRows;
+  delete v.noteRows;
+  const now = bandNow(v);
+  const pill = drawnPill(v, cx, now.head.key);
+  expect(pill).toBe(now.band);
+  return {
+    stops, built, gap, splicing: Boolean(v.splicing), open: opens.every((k) => v.open.has(k)),
+    end: {
+      keyed: v.rowsKey != null, index: v.baseRows.every((r, i) => v.baseIndex.get(r.key) === i) && v.baseIndex.size === v.baseRows.length,
+      rows: v.baseRows.map((r) => r.key), sizes: v.baseSizes.slice(), list: v.rows().map((r) => r.key), slots: v.slotsMemo.slice(),
+      win: [v.win.at.a, v.win.at.z], outside: expectOutsideRight(v), band: pill?.key, sel: v.sel,
+    },
   };
+}
+async function stoppedSplicesEndRight(spots) {
   for (const [two, nth] of [[false, 1], [true, 1], [true, 2]]) {
-    const { end, ...none } = await run(two, null);
+    const { end, ...none } = await stoppedSplice(two, null);
     expect(none).toEqual({ stops: 0, built: two ? 2 : 1, gap: null, splicing: false, open: true });
     expect(end.rows.length).toBeGreaterThan(150);
-    for (const at of ["entry", "push", "noted"]) for (const timers of ["kept", "lost"]) for (const ask of [false, true]) {
-      const { end: e, ...one } = await run(two, { run: nth, at, timers, ask });
+    for (const at of spots) for (const timers of ["kept", "lost"]) for (const ask of [false, true]) {
+      const { end: e, ...one } = await stoppedSplice(two, { run: nth, at, timers, ask });
       // The stopped splice's turns, then every turn once. Not known until the note is made.
       expect([at, timers, ask, one]).toEqual([at, timers, ask, {
         stops: 1, built: nth + 150, gap: { splicing: true, ver: nth, known: at === "noted" ? true : null, now: 0 }, splicing: false, open: true,
@@ -2899,4 +2911,13 @@ test("a splice Herdr stops between its version and its note, in the note or just
       expect(e).toEqual(end);
     }
   }
-}, 120000);
+}
+
+test("a splice Herdr stops between its version and its note, in the note or just after it ends as an unstopped run does, its timers kept or lost, and a version with no note is not taken as known", () => stoppedSplicesEndRight(["entry", "push", "noted"]), 120000);
+
+// The splice of the rows and the store of their version have no call between them, so Herdr's
+// interpreter cannot stop there. Compiled code can be stopped at any point, so the rows here are
+// an array whose own splice does its work and then throws the stop. With the version raised after
+// the rows, they have changed under the version a memo holds, rowsSince answers "no change", and
+// the counts asked for before the next build ends are the old rows'.
+test("a splice Herdr stops just after the rows change, before anything else is stored, ends as an unstopped run does, and the changed rows are not taken as known", () => stoppedSplicesEndRight(["spliced"]), 120000);
