@@ -2752,6 +2752,9 @@ export default class Threads extends View {
     ].join("|");
     const rest = `${this.turnSets().map((x) => [...x].join(",")).join("|")}|${this.callVer ?? 0}|${other}`;
     const key = `${sess}|${rest}`;
+    // A splice Herdr stopped halfway (spliceRows) is followed by a build of every row, even when
+    // the key is back to the rows' own: a card closed again before the next draw.
+    if (this.splicing) this.rowsKey = null;
     // Rows left with an old shape (SHAPE_MS) are reshaped where they are; the rest stay.
     if (this.rowsKey === key && this.baseRows && this.reshapeDue) {
       this.reshapeDue = false;
@@ -2766,7 +2769,9 @@ export default class Threads extends View {
     const lr = this.baseRows[li];
     if (lr?.live && lr.kind !== "line") {
       const kind = this.sel === lr.key ? "working" : "wrow";
-      if (lr.kind !== kind) { lr.kind = kind; this.baseSizes[li] = this.height(lr); this.fitKey = null; }
+      // Its height is worked out on a copy with the new kind, then the kind and the size are
+      // stored together: a stop in the height leaves the old kind, to change again next draw.
+      if (lr.kind !== kind) { const h = this.height({ ...lr, kind }); lr.kind = kind; this.baseSizes[li] = h; this.fitKey = null; }
     }
     const z = this.zoom();
     const gap = this.floating() ? TOP_BAND : 0;
@@ -2821,6 +2826,9 @@ export default class Threads extends View {
   buildStep(status, key, rest, other = null) {
     let job = this.rowJob;
     if (job && job.key !== key) job = job.rest === rest && this.jobGoesOn(job) ? job : null;
+    // A splice of an opened turn's rows that Herdr stopped halfway (spliceRows) left the rows
+    // and their index apart: a splice from there found the turn in no row, and the card never drew.
+    if (this.splicing) { this.splicing = false; this.rowsKey = null; }
     if (!job && other != null && this.spliceRows(status, key, rest, other)) return;
     if (job) {
       job.key = key;
@@ -2862,6 +2870,16 @@ export default class Threads extends View {
       this.cachedH = left.cachedH;
       this.cacheNew = left.cacheNew;
     } else {
+      // A slice goes on from where the one before ended, adding to the build's own rows. One that
+      // Herdr stopped (in a turn's rows or a row's height) left its rows in them, to be added
+      // again: they go back to where it began, with their sizes and index entries.
+      const f = job.from;
+      if (f?.own) {
+        for (let i = f.row; i < f.rows.length; i++) job.index.delete(f.rows[i].key);
+        f.rows.length = f.row;
+        f.railRows.length = f.rail;
+        if (job.sizes.length > f.row) job.sizes.length = f.row;
+      }
       out = this.buildRows(status, job.from, until);
       if (job.from?.before && job.from.dayRow != null && !this.buildInfo.resume) job.sizes[job.from.dayRow] = this.height(out[job.from.dayRow]);
     }
@@ -2879,8 +2897,10 @@ export default class Threads extends View {
         this.buildsLeft = (this.buildsLeft ?? 0) + 1;
         return;
       }
-      job.sizes.push(this.cachedH.get(i) ?? this.height(out[i]));
+      // Indexed before it is sized: the build goes on from its first row with no size, and a
+      // draw Herdr stopped between the two (its stop falls at any call) left this row in no index.
       job.index.set(out[i].key, i);
+      job.sizes.push(this.cachedH.get(i) ?? this.height(out[i]));
     }
     this.buildSpent = (this.buildSpent ?? 0) + Math.max(0, now() - b0 - ((this.shapeSpent ?? 0) - s0));
     job.ms = (job.ms ?? 0) + (now() - b0);
@@ -2896,8 +2916,12 @@ export default class Threads extends View {
     }
     this.rowJob = null;
     this.buildMs = job.ms;
-    // A new column width: the place on screen before these rows come in (holdPlace).
-    if (this.anchorDue) { this.anchorDue = false; this.anchor = this.takeAnchor(); }
+    // A new column width: the place on screen before these rows come in (holdPlace). Asked for
+    // until it is taken: a draw Herdr stopped in takeAnchor lost the place.
+    if (this.anchorDue) { this.anchor = this.takeAnchor(); this.anchorDue = false; }
+    // Until the record below is made, a draw Herdr stops (its stop falls at any call) would
+    // leave these rows under the old record and key: with no key, the next build is of every row.
+    this.rowsKey = null;
     this.baseRows = out;
     this.railTurns = this.buildRail;
     this.baseSizes = job.sizes;
@@ -3009,8 +3033,11 @@ export default class Threads extends View {
       if (sh === r.shape) continue;
       if (Boolean(sh.thumbs) !== Boolean(r.shape?.thumbs)) return false;
       const nr = { ...r, shape: sh };
+      // Its height first: a draw Herdr stopped in it left the new shape at the old height, and
+      // the next pass, finding the shape new, never sized it again.
+      const h = this.height(nr);
       this.baseRows[i] = nr;
-      this.baseSizes[i] = this.height(nr);
+      this.baseSizes[i] = h;
       // A closed turn of one row, shaped at last: kept for the next rebuild (closedCached), as
       // if the build had shaped it. Most rows of a long session are shaped this way.
       if (cg && !r.live && !r.last && !r.split && this.open.has(r.key) === false) {
@@ -3221,16 +3248,21 @@ export default class Threads extends View {
       let z = at;
       while (a > 0 && this.baseRows[a - 1].turn === r.turn) a--;
       while (z + 1 < this.baseRows.length && this.baseRows[z + 1].turn === r.turn) z++;
-      runs.push({ k, a, z, r });
+      // Its place in its session, found before any row changes: a turn the session no longer
+      // holds gives the splice up with every row as it was.
+      const ti = r.s.turns[r.turn.n - 1] === r.turn ? r.turn.n - 1 : r.s.turns.indexOf(r.turn);
+      if (ti < 0) return false;
+      runs.push({ k, a, z, r, ti });
     }
     runs.sort((x, y) => y.a - x.a);
     this.shapeStart();
+    // From here to its end the rows, their sizes and their index change together: a draw Herdr
+    // stops in between leaves them apart, and the next build is of every row (buildStep).
+    this.splicing = true;
     const stale = new Set(this.staleRows ?? []);
     let marks = b.marks;
-    for (const { k, a, z, r } of runs) {
+    for (const { k, a, z, r, ti } of runs) {
       const { turn, s, si } = r;
-      const ti = s.turns[turn.n - 1] === turn ? turn.n - 1 : s.turns.indexOf(turn);
-      if (ti < 0) return false;
       const out = [];
       this.buildStale = [];
       this.cachedH = new Map();
@@ -3260,6 +3292,7 @@ export default class Threads extends View {
     this.rowBuild = { ...b, rest, marks, sets: now.map((x) => new Set(x)), callVer: this.callVer ?? 0 };
     this.againOpen = false;
     this.rowsKey = key;
+    this.splicing = false;
     this.fitKey = null;
     this.probeList();
     if (this.reselect || this.selHidden()) this.reselectVisible();
@@ -7248,6 +7281,11 @@ export default class Threads extends View {
       this.renderOpen = false;
       this.cutUntil = now() + CUT_MS;
       this.renderCuts = (this.renderCuts ?? 0) + 1;
+      // The marks for the next draw are cleared by the timers they asked for, which a stopped
+      // render may have lost: left set, they never asked again, and a rows build never went on.
+      this.buildNext = false;
+      this.shapeNext = false;
+      this.probeNext = false;
       // A scroll the stopped render took on (the jump to the newest turn, a return to a pin)
       // is asked for again: it was taken before the list was drawn.
       if (this.renderWant?.toBottom) this.toBottom = true;
