@@ -3515,3 +3515,38 @@ for (const [name, { n = 150, cap = SMALL, go, at = () => "0:5", sel = null }] of
     expect({ shows: shownIn(v, sim.last()).includes(key), end: sim.last().end, sel: v.sel, follow: v.follow, toBottom: Boolean(v.toBottom) }).toEqual({ shows: true, end: false, sel: sel ?? key, follow: false, toBottom: false });
   }, 30000);
 }
+
+// Latest asks for the end, and a jump made before the next frame is the newer word. Where the jump
+// did not drop the end asked for, the frame took the end (the draw takes it before a jump's scroll),
+// in the window the jump had moved: past the cap the list ended at that window's end, neither the
+// jump's turn nor the session's end, and under the cap at the session's end.
+const OVER_END = {
+  "#5 typed in the search field": PENDING["#5 typed in the search field"],
+  "a turn picked in the Trajectory": PENDING["a turn picked in the Trajectory"],
+  "Go to that reply": PENDING["Go to that reply"],
+  // The Trajectory in this pane: the Chat comes back at its turn. The end asked for waits while it
+  // shows, as the list is not drawn.
+  "the way back from the Trajectory": { go: (v) => { v.traj = true; v.tsel = "0:5"; v.leaveTraj(); } },
+  // The session's first five turns are a day before the others.
+  "the day before by key": { dayOf: (i) => (i < 5 ? 0 : 1), go: (v, cx) => { v.action("prevDay", cx); }, at: () => "0:1" },
+  "#5 typed in the search field, in a session under the cap": PENDING["#5 typed in the search field, in a session under the cap"],
+};
+for (const [name, { n = 150, cap = SMALL, dayOf, go, at = () => "0:5" }] of Object.entries(OVER_END)) {
+  test(`latest asked for and, before the next frame, ${name}: the list ends at the place it went to`, async () => {
+    noPins();
+    const { v, cx } = await capSession(n, cap, -1, 25, dayOf);
+    const sim = simList(v);
+    openAt(v, cx, sim, 562);
+    sim.wheel(3000);
+    settleList(v, cx, sim);
+    expect([v.follow, sim.last().end]).toEqual([false, false]);
+    dropTimers(v, cx);
+    v.jumpLatest(true);
+    expect([v.follow, v.toBottom]).toEqual([true, true]);
+    go(v, cx);
+    const key = at(v);
+    expect([v.sel, v.follow, Boolean(v.scrollTo), shownIn(v, sim.last()).includes(key)]).toEqual([key, false, true, false]);
+    jumpFrames(v, cx, sim);
+    expect({ shows: shownIn(v, sim.last()).includes(key), end: sim.last().end, sel: v.sel, follow: v.follow, toBottom: Boolean(v.toBottom) }).toEqual({ shows: true, end: false, sel: key, follow: false, toBottom: false });
+  }, 30000);
+}
