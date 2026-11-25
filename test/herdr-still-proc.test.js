@@ -5,7 +5,7 @@
 // Herdr fills in their cmdline, cwd and environ.
 import { afterAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -122,4 +122,15 @@ test("the cleanup leaves alone a process that ran before the script began", () =
 
 test("the script names no process's environ", () => {
   expect(script.split("\n").filter((l) => !/^\s*#/.test(l) && l.includes("environ"))).toEqual([]);
+}, TIME);
+
+// The Linux half of "a test run reads no process's environment". This file writes the made-up
+// tree's, so its own lines are left out; a comment line opens nothing.
+test("nothing under test/ opens a process's environ file", () => {
+  const files = readdirSync(join(root, "test"), { recursive: true }).map(String).filter((f) => /\.(sh|js|mjs|jq|py)$/.test(f) && f !== "herdr-still-proc.test.js");
+  expect(files).toContain("herdr-still.sh");
+  expect(files).toContain("preload.js");
+  const hits = files.flatMap((f) => readFileSync(join(root, "test", f), "utf8").split("\n").map((l, i) => [`${f}:${i + 1}`, l])
+    .filter(([, l]) => !/^\s*(#|\/\/)/.test(l) && /\/environ(?![a-z])/i.test(l)).map(([at]) => at));
+  expect(hits).toEqual([]);
 }, TIME);
