@@ -618,12 +618,44 @@ function denseTurn(i, t0, notes, calls, len) {
   const tools = steps.filter((r) => r.lk === "tool" || r.failed).length;
   return { kind: "trh", key, n: i + 1, t0, total: len, span: len, going: false, cnt: { steps: steps.length, input: 1, model: notes + 1, tools, failed, user: 1, agent: 0 }, steps };
 }
+// The span lists' entries a build reads, counted from outside: while fn runs, the global Map
+// is one whose get hands out each span list (a key with "|", an array of spans) behind a Proxy
+// that counts each entry read, onRead(the list's length). So the join's walk back, and each
+// entry its splices move or drop (a splice reads each one it moves), are counted, with the few
+// it compares. The first add of a key goes to a list not yet in the map, and is not counted.
+function countingSpanReads(onRead, fn) {
+  const Real = globalThis.Map;
+  const wrapped = new WeakMap();
+  const wrap = (v) => {
+    let p = wrapped.get(v);
+    if (!p) {
+      p = new Proxy(v, { get(a, k) { if (typeof k === "string" && /^\d+$/.test(k)) onRead(a.length); return a[k]; } });
+      wrapped.set(v, p);
+    }
+    return p;
+  };
+  function CountingMap(...args) {
+    const m = new Real(...args);
+    const get = m.get;
+    Object.defineProperty(m, "get", { value: (k) => { const v = get.call(m, k); return typeof k === "string" && k.includes("|") && Array.isArray(v) ? wrap(v) : v; } });
+    return m;
+  }
+  globalThis.Map = CountingMap;
+  try {
+    return fn();
+  } finally {
+    globalThis.Map = Real;
+  }
+}
 // The bars and turns of heads a build touches step by step: each heading's step rows behind a
 // Proxy that notes each row read (by turn and index) into the current step's set, and the
-// heads behind one that notes each heading read.
+// heads behind one that notes each heading read; and the span list entries each step reads
+// (countingSpanReads).
 function touchedSteps(heads, cw, now) {
   let cur = null;
   let curT = null;
+  let reads = 0;
+  let longest = 0;
   const wrapped0 = heads.map((h, ti) => ({
     ...h,
     steps: new Proxy(h.steps, { get(a, k) { if (cur && typeof k === "string" && /^\d+$/.test(k)) cur.add(ti * 100000 + Number(k)); return a[k]; } }),
@@ -632,33 +664,46 @@ function touchedSteps(heads, cw, now) {
   const J = TL.tlBuildStart(wrapped, cw, "clock", now, null);
   const per = [];
   const perT = [];
+  const perJ = [];
   let M = null;
   // A clock already past the bound: each call takes one step of the build.
   for (let k = 0; k < 100000 && !M; k++) {
     cur = new Set();
     curT = new Set();
-    M = TL.tlBuildGo(J, 0, () => 1);
+    reads = 0;
+    M = countingSpanReads((len) => { reads++; if (len > longest) longest = len; }, () => TL.tlBuildGo(J, 0, () => 1));
     per.push(cur.size);
     perT.push(curT.size);
+    perJ.push(reads);
   }
   cur = null;
   curT = null;
-  return { per, perT, M, W: TL.timelineModel(null, wrapped, cw, "clock", now, null) };
+  return { per, perT, perJ, longest, M, W: TL.timelineModel(null, wrapped, cw, "clock", now, null) };
 }
 
-test("timeline build: no step touches more than 1,024 bars or 260 turns, on 20 turns of 3,000 calls, one turn of 20,000 and 5,600 ordinary turns, and it ends as a whole build", () => {
+test("timeline build: no step touches more than 1,024 bars and span entries together, or 260 turns, on 20 turns of 3,000 calls, one turn of 20,000, 5,600 ordinary turns, 20,000 turns and one turn of 300 calls apart, and it ends as a whole build", () => {
   const cases = {
     dense: Array.from({ length: 20 }, (_, i) => denseTurn(i, T0 + i * 700000, 0, 3000, 600000)),
     one: [denseTurn(0, T0, 0, 20000, 3600000), denseTurn(1, T0 + 3700000, 2, 2, 60000)],
     ordinary: Array.from({ length: 5600 }, (_, i) => denseTurn(i, T0 + i * 100000, 12, 12, 60000)),
+    // At Fit every one of 20,000 turns is under 2 px, so the layout reads none of their rows:
+    // two notes and two calls a turn, listed newest first.
+    newest: Array.from({ length: 20000 }, (_, i) => denseTurn(i, T0 + i * 100000, 2, 2, 60000)),
+    // 300 calls a second apart in a turn some 1,300 px wide: bars 3 px wide and over 1 px apart,
+    // listed newest first, so each one's join walks back over every span of its key so far.
+    apart: [denseTurn(0, T0, 0, 300, 300000), denseTurn(1, T0 + 310000, 2, 2, 60000)],
   };
   for (const [name, heads] of Object.entries(cases)) {
-    const { per, perT, M, W } = touchedSteps(heads, 1440, T0 + 1e10);
+    const { per, perT, perJ, longest, M, W } = touchedSteps(heads, 1440, T0 + 1e10);
     expect(M).not.toBe(null);
-    const most = Math.max(...per);
-    // A step touches at most 1,024 bars and 260 turns: a chunk of 256 turns and the turns
-    // beside it a turn reads (the next turn's start, for the break).
-    expect([name, most <= 1024, Math.max(...perT) <= 260]).toEqual([name, true, true]);
+    // A step touches at most 1,024 bars and span entries together, and 260 turns: a chunk of
+    // 256 turns and the turns beside it a turn reads (the next turn's start, for the break).
+    // The count is looked at after each bar and its join, so a step can end over it by one
+    // join: at most three times its key's spans (the walk back, the move right, the move
+    // left) and four more. And the cut before the last turn reads each key's last span once.
+    const most = Math.max(...per.map((b, k) => b + perJ[k]));
+    const over = 3 * longest + 4 + M.L.spans.size;
+    expect([name, most <= 1024 + over, Math.max(...perT) <= 260]).toEqual([name, true, true]);
     // Not a build that skips its work: every bar is touched, and it ends as a whole build.
     sameStrip(M, W);
   }
