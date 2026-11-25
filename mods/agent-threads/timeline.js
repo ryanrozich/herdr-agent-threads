@@ -892,8 +892,8 @@ export function tlBar(L, heads, ti, si, nowMs = Date.now()) {
 // What is drawn over what in a lane, the higher number on top: the view draws its layers in this
 // order and a press takes the bar on top by it (nearStep), so both read this one place. The
 // running turn's growing bars over all; then failed calls over the rest; then half height over
-// full; then, on one track, an ordinary call over a subagent's and that over a "more calls" bar,
-// and in the Input lane the user's message over an agent's and that over a background update.
+// full; then, on one track, an ordinary call over a subagent's, and in the Input lane the user's
+// message over an agent's and that over a background update.
 const TL_OVER = Object.freeze({ context: 0, agent: 1, sub: 1, user: 2, model: 2, tools: 2 });
 export const tlOver = (ink, half, growing = false) => (growing ? 16 : 0) + (ink === "failed" ? 8 : 0) + (half ? 4 : 0) + (TL_OVER[ink] ?? 0);
 // Turn ti's step for a press at px x of the view in a lane, ly px down it (null: any):
