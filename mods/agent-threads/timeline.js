@@ -663,8 +663,8 @@ export function tlBuildGo(J, until, clock) {
 // TL_NUM_CH px a digit wide, and TL_NUM_GAP px clear of the next. A turn's length goes beside
 // its number where the turn and the room to the next number are both TL_NUM_LEN px or more.
 // TL_NUM_CH is measured from the test machine's UI font at 10.5 px, where a wide digit takes
-// about 7 px ("2000" needs 27 to 28 after its line and padding), with a little over. Another
-// font can be wider.
+// about 7 px ("2000" needs 27 to 28 after its line and padding); the 0.2 px over it is margin.
+// Another font can be wider.
 export const TL_NUM_PAD = 6;
 export const TL_NUM_CH = 7.2;
 export const TL_NUM_GAP = 8;
@@ -892,8 +892,10 @@ export function tlBar(L, heads, ti, si, nowMs = Date.now()) {
 // What is drawn over what in a lane, the higher number on top: the view draws its layers in this
 // order and a press takes the bar on top by it (nearStep), so both read this one place. The
 // running turn's growing bars over all; then failed calls over the rest; then half height over
-// full; then, on one track, an ordinary call over a subagent's, and in the Input lane the user's
-// message over an agent's and that over a background update.
+// full; then, on one track, an ordinary call over a subagent's and that over a row of further
+// calls (more: the Tools lane in the context ink, so the lowest there; it has no time, so on the
+// clock it has a bar only in a turn under 2 px, where nearStep ranks it as an ordinary call), and
+// in the Input lane the user's message over an agent's and that over a background update.
 const TL_OVER = Object.freeze({ context: 0, agent: 1, sub: 1, user: 2, model: 2, tools: 2 });
 export const tlOver = (ink, half, growing = false) => (growing ? 16 : 0) + (ink === "failed" ? 8 : 0) + (half ? 4 : 0) + (TL_OVER[ink] ?? 0);
 // Turn ti's step for a press at px x of the view in a lane, ly px down it (null: any):

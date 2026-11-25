@@ -12425,7 +12425,9 @@ export default class Threads extends View {
   // timeline.js tornPoints), top px down the lanes and h px tall: one painted path where Herdr
   // has one (its points in % of the layer), else at most 60 divs, and a torn end as its rows
   // of whole px (a 12 px bar is 7 divs) for up to 40 of them, the ones after them plain bars
-  // among the 60. The path is kept by the layer's
+  // among the 60. A growing layer's bars come in row order, not left to right, so where 40 torn
+  // ones and more than 60 plain ones are in view, some it joins are short (ledger.js coarse
+  // takes them in order). The path is kept by the layer's
   // id while its spans, width, height and colour stay the same (timeline.js tlPathOf, tlKeep):
   // building it was most of the strip's paint time.
   rectLayer(spans, color, id, cw, top, h) {
