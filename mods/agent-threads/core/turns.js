@@ -330,6 +330,8 @@ const AGENT_CALL = /^(task|agent|subagent|spawn(_\w+)?|delegate(_\w+)?)$/i;
 // list, and an answer after a note makes the note a step. marked: how many texts, when they are
 // an answer; thought and held: how much reasoning came before the last (the export only).
 function say(w, e) {
+  // A marked text of spaces alone marks nothing.
+  if (e.a && !/\S/.test(e.t)) e = { ...e, a: undefined };
   if (!e.a && w.after.marked) {
     takeFinal(w);
     if (w.finals) w.after.note = true;
