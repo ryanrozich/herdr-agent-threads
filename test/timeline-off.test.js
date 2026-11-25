@@ -206,13 +206,8 @@ test("timeline working off, the heads change while the build runs: an event in t
     for (const x of shown) expect(x.M.heads === ev).toBe(true);
     for (const x of shown) expect(x.M.L.turns === x.M.geo.turns).toBe(true);
     expect(s.M.heads.at(-1).steps).toHaveLength(4);
-    // Field for field but the step count and the zoom limit from it (geo.steps, L.zmax): the
-    // path that lays out only the last turn keeps the placing's count, one step short here.
-    // That is older than this build.
-    const W = TL.timelineModel(null, ev, CW, "clock", now, null);
-    expect([s.M.geo.steps, s.M.L.zmax]).toEqual([W.geo.steps - 1, (W.geo.steps - 1) / 4]);
-    const geo = { ...s.M.geo, steps: W.geo.steps };
-    sameStrip({ ...s.M, geo, L: { ...s.M.L, geo, zmax: W.L.zmax } }, W);
+    // Field for field, the step count and the zoom limit from it too (geo.steps, L.zmax).
+    sameStrip(s.M, TL.timelineModel(null, ev, CW, "clock", now, null));
   }
   // A new turn: the strip is placed again whole for it in that draw, so the build is dropped.
   {

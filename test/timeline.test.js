@@ -1111,7 +1111,8 @@ test("timeline model: with events arriving in the running turn, the finished tur
     for (let k = 2; k <= 31; k++) {
       // A new heads array at each event, as ledger() makes it, the finished headings the same.
       m = timelineModel(m, [...done, runningHead(n, k, t0)], cw, "clock", at(k), null);
-      expect(m.geo).toBe(geo);
+      // The places are the first placing's; only its step count is the event's.
+      expect([m.geo.turns === geo.turns, m.geo.walls === geo.walls, m.geo.steps]).toEqual([true, true, geo.steps + k - 1]);
       if (k === 16) {
         const c = TL.TL_MADE.tracks;
         expect(drawn(m.L)).toEqual(drawn(timelineLayout(m.heads, cw, "clock", at(k), null)));

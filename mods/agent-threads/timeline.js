@@ -1019,17 +1019,17 @@ export function timelineModel(prev, heads, cw, scale = "clock", nowMs = Date.now
   // wholly past the end.
   const vk = view ? `${view.z}|${view.x0}` : "";
   const was = only ? prev.heads[n - 1] : null;
+  const steps = only ? prev.geo.steps - Math.max(1, stepN(was)) + Math.max(1, stepN(heads[n - 1])) : 0;
   let regeo = null;
   if (only && !tail && prev.geo.room !== room && prev.vk === vk) {
     const z = prev.L.z ?? 1;
     regeo = room > 0 ? tlLastLength(prev.geo, heads, wall, room, z, was) : null;
-    const steps = prev.geo.steps - Math.max(1, stepN(was)) + Math.max(1, stepN(heads[n - 1]));
     if (!regeo && steps > TL_BUILD_BARS) {
       regeo = tlLastLength(prev.geo, heads, wall, room, z, was, true);
       if (regeo) regeo.stale = true;
     }
   }
-  const geo = same || tail ? prev.geo : (regeo ?? timelineGeo(heads, cw, scale, nowMs));
+  const geo = same || (tail && steps === prev.geo.steps) ? prev.geo : tail ? { ...prev.geo, steps } : (regeo ?? timelineGeo(heads, cw, scale, nowMs));
   const L = same && prev.vk === vk ? prev.L : (tail || regeo) && prev.vk === vk ? tlTail(prev.L, heads, was, geo) : timelineLayout(heads, cw, scale, nowMs, view, geo, null, prev?.L?.tracks ?? null);
   return { heads, cw, scale, geo, vk, L, nowMs, grow: tlGrow(L, nowMs) };
 }
