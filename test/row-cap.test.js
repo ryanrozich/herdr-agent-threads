@@ -3550,3 +3550,36 @@ for (const [name, { n = 150, cap = SMALL, dayOf, go, at = () => "0:5" }] of Obje
     expect({ shows: shownIn(v, sim.last()).includes(key), end: sim.last().end, sel: v.sel, follow: v.follow, toBottom: Boolean(v.toBottom) }).toEqual({ shows: true, end: false, sel: key, follow: false, toBottom: false });
   }, 30000);
 }
+
+// The controls for both: with no jump in between, latest and a wheel to the end do what they did, and
+// a rail jump with neither the step nor the end asked for lands.
+for (const [where, n, cap] of [["in a window", 150, SMALL], ["under the cap", 60, null]]) {
+  test(`control, ${where}: latest alone, from up in the session, ends at the newest turn and follows`, async () => {
+    noPins();
+    const { v, cx } = await capSession(n, cap);
+    const sim = simList(v);
+    openAt(v, cx, sim, 562);
+    sim.wheel(3000);
+    settleList(v, cx, sim);
+    expect([v.follow, sim.last().end]).toEqual([false, false]);
+    v.jumpLatest(true);
+    jumpFrames(v, cx, sim);
+    expect({ shows: shownIn(v, sim.last()).includes(`0:${n}`), end: sim.last().end, sel: v.sel, follow: v.follow }).toEqual({ shows: true, end: true, sel: `0:${n}`, follow: true });
+  }, 30000);
+  test(`control, ${where}: the end brought on screen by a wheel, with no jump after it, follows again on the newest turn`, async () => {
+    const { v, cx, sim } = await backAtEnd(n, cap);
+    v.sel = "0:5";
+    jumpFrames(v, cx, sim);
+    expect({ shows: shownIn(v, sim.last()).includes(`0:${n}`), end: sim.last().end, sel: v.sel, follow: v.follow }).toEqual({ shows: true, end: true, sel: `0:${n}`, follow: true });
+  }, 30000);
+  test(`control, ${where}: a rail jump from the chat's end, with no step left and no end asked for, lands on its turn`, async () => {
+    noPins();
+    const { v, cx } = await capSession(n, cap);
+    const sim = simList(v);
+    openAt(v, cx, sim, 562);
+    expect([v.stickStep ?? null, v.toBottom, sim.last().end]).toEqual([null, false, true]);
+    v.railJump("0:5", cx);
+    jumpFrames(v, cx, sim);
+    expect({ shows: shownIn(v, sim.last()).includes("0:5"), end: sim.last().end, sel: v.sel, follow: v.follow }).toEqual({ shows: true, end: false, sel: "0:5", follow: false });
+  }, 30000);
+}
