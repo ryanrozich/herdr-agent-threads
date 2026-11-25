@@ -12,12 +12,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newSession, apply, rewindTail, parseChunk, nextChunk, replaced, reply, updatesText, matches } from "../mods/agent-threads/core/turns.js";
 import { trajectories } from "../mods/agent-threads/core/trajectory.js";
-import { hash, turnIds } from "../mods/agent-threads/core/ids.js";
+import { hash, turnId, turnIds } from "../mods/agent-threads/core/ids.js";
 import { atif } from "../mods/agent-threads/core/atif.js";
 import { seenOf } from "../mods/agent-threads/pins.js";
 import { detailOf, ledgerTurn } from "../mods/agent-threads/ledger.js";
 import { agentReplied, noticeTurn, senderLabel } from "../mods/agent-threads/ui.js";
-import { pane, settleRows, setup } from "./render-harness.js";
+import { pane, settleRows, setup, state } from "./render-harness.js";
 
 setup();
 
@@ -1260,6 +1260,34 @@ describe("the pane", () => {
     settleRows(v, cx);
     const row = v.rows().find((r) => r.kind === "turn" && r.turn.n === 1);
     expect([row.shape.tone, row.shape.md]).toEqual(["reply", "First answer."]);
+  });
+
+  // Red on the base: the entry with no id is taken. One written before an update names a turn by
+  // its number only, and that number can be another turn after it.
+  test("a turn the other pane selected is taken by its id, never by its number alone", async () => {
+    const t = claudeReplied("One.");
+    t.prompt("Next question");
+    t.say("m5", "Two.");
+    t.hooks();
+    const { v, cx } = await pane(t.file());
+    settleRows(v, cx);
+    state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+    state.shared["threads.trajByTerminal"] = { [v.terminal]: { pane: "p3" } };
+    const [pick, before] = v.turnKeys(v.rows());
+    v.sel = before;
+    const id = (key) => turnId(v.current().turns, v.findTurn(key));
+    const at = Date.now();
+    const put = (n, fields) => {
+      state.shared["threads.turnSel"] = { [v.terminal]: { key: pick, by: "other", at: at + n, pane: "trajectory", ...fields } };
+      return [v.syncSel(), v.sel];
+    };
+    expect(put(1000, {})).toEqual([false, before]);
+    expect(put(2000, { id: id(before) })).toEqual([false, before]);
+    expect(put(3000, { id: id(pick) })).toEqual([true, pick]);
+    // What this pane writes carries the id.
+    v.sel = before;
+    v.syncSel();
+    expect(state.shared["threads.turnSel"][v.terminal]).toMatchObject({ key: before, id: id(before), pane: "chat" });
   });
 
   // Red on the base: one row, opened to "No final reply." with the answer in the Worked part.

@@ -83,7 +83,7 @@ import {
   REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear, pairEvent, pairAlone, pinFit, weightHerdr, rowEvent, closeWeights, rowSolve,
 } from "./ui.js";
 import { openLines, newestPrompt, figRuns } from "./ui.js";
-import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
+import { PIN_LIMIT, turnIds, turnId, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious, behindLook } from "./settings.js";
 import { MOD } from "./name.js";
 import {
@@ -226,9 +226,10 @@ const MAP_KEY = "threads.byTerminal";
 const PIN_MAP_KEY = "threads.pinnedByTerminal";
 // shared("threads.trajByTerminal"): terminal -> its Trajectory pane (y), kept apart the same way.
 const TRAJ_MAP_KEY = "threads.trajByTerminal";
-// shared("threads.turnSel"): terminal -> { key, by, at, pane }, the selected turn as the pane that
-// last moved it wrote it ("chat" or "trajectory"), so the Chat and its Trajectory pane select the
-// same turn (syncSel).
+// shared("threads.turnSel"): terminal -> { key, id, by, at, pane }, the selected turn as the pane
+// that last moved it wrote it ("chat" or "trajectory"), so the Chat and its Trajectory pane select
+// the same turn (syncSel). id: the turn's stable id (core/ids.js), since a number (key) can be
+// another turn after an update.
 const SEL_KEY = "threads.turnSel";
 // The Trajectory pane: split off the Chat from this width (narrower, y shows the Trajectory in
 // the Chat's own pane), and given this px width.
@@ -11875,9 +11876,11 @@ export default class Threads extends View {
     // Another pane's turn (an older copy's, or one no pane should write): seen, and left.
     if (e && e.by !== this.selId && e.at > (this.selSeenAt ?? 0) && e.pane !== from) this.selSeenAt = e.at;
     else if (e && e.by !== this.selId && e.at > (this.selSeenAt ?? 0)) {
-      const have = Boolean(this.findTurn(e.key));
+      // Only the turn the entry's id names. One kept by number alone (before an update) is seen
+      // and left, since its number can be another turn now.
+      const have = Boolean(e.id) && this.turnIdAt(e.key) === e.id;
       // A turn this pane has not read yet: wait for it a little, then let it go.
-      if (have || Date.now() - e.at > SEL_WAIT) this.selSeenAt = e.at;
+      if (have || !e.id || Date.now() - e.at > SEL_WAIT) this.selSeenAt = e.at;
       if (have) {
         this.selSent = e.key;
         if (this.trajPane) {
@@ -11890,8 +11893,14 @@ export default class Threads extends View {
     if (!mine || mine === this.selSent) return false;
     this.selSent = mine;
     const keep = Object.fromEntries(Object.entries(map).filter(([k, v]) => k !== this.terminal && Date.now() - (v?.at ?? 0) < DAY_MS));
-    setShared(SEL_KEY, { ...keep, [this.terminal]: { key: mine, by: this.selId, at: Date.now(), pane: this.trajPane ? "trajectory" : "chat" } });
+    setShared(SEL_KEY, { ...keep, [this.terminal]: { key: mine, id: this.turnIdAt(mine), by: this.selId, at: Date.now(), pane: this.trajPane ? "trajectory" : "chat" } });
     return false;
+  }
+
+  // The stable id of the turn a key names, or null.
+  turnIdAt(key) {
+    const turn = this.findTurn(key);
+    return turn ? turnId(this.sessions[Number(key.split(":")[0])].turns, turn) : null;
   }
 
   // Whether the Chat's list shows a turn: one it hides (an agent turn while those are hidden,
