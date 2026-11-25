@@ -2870,6 +2870,39 @@ test("a press's open 300 ms on is dropped by a jump from outside the list made i
   }
 });
 
+test("a press's open 300 ms on is dropped by a press on the cut's note made in the wait, though the cut that comes still holds the pressed turn", async () => {
+  // 100 closed turns past a cap of 60 items, the reader at #20: the list holds its start over
+  // the note. Under 118 items the cut a press on the note brings (the newest 59) overlaps it.
+  const { v, cx } = await capSession(100, { max: 60 });
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 562);
+    v.command("search:#20", cx);
+    v.command("escape", cx);
+    settleList(v, cx, sim);
+    const note = v.rows().at(-1);
+    expect(note.key).toBe("capped-later");
+    // The closed turn just above the note, then the note.
+    const pressed = v.rows().at(-2);
+    expect([pressed.kind, v.open.has(pressed.key)]).toEqual(["turn", false]);
+    v.click(pressed.key, cx);
+    const wait = cx.timers.filter((x) => x.ms === 300);
+    cx.timers = cx.timers.filter((x) => x.ms !== 300);
+    expect(wait.length).toBe(1);
+    v.click("capped-later", cx);
+    settleList(v, cx, sim);
+    expect(v.rows().some((r) => r.key === "capped")).toBe(true);
+    expect(shownIn(v, sim.last())).toContain(note.go);
+    // The pressed turn is still on the list, so only the press on the note keeps it closed.
+    expect(v.rows().some((r) => r.key === pressed.key)).toBe(true);
+    for (const x of wait) x.fn(cx);
+    settleList(v, cx, sim);
+    expect({ open: v.open.has(pressed.key), shows: shownIn(v, sim.last()).includes(note.go) }).toEqual({ open: false, shows: true });
+  } finally {
+    H.listWindow = null;
+  }
+});
+
 // ---- a jump while the scroll to the bottom is still asked for (toBottom) ----
 
 // The draw takes a pending scroll to the bottom before a jump's, and drops the jump's. So a key
