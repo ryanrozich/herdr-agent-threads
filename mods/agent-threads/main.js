@@ -5345,6 +5345,7 @@ export default class Threads extends View {
     const n = turn.answeredIn ?? turn.answeredBy;
     if (si < 0 || !n) return;
     const key = `${si}:${n}`;
+    this.toBottom = false;
     if (turn.answeredIn) {
       this.sel = key;
       this.follow = false;
@@ -6861,6 +6862,7 @@ export default class Threads extends View {
         if (!k) return false;
         this.sel = k;
         this.follow = k === keys[keys.length - 1];
+        if (!this.follow) this.toBottom = false;
         this.scrollTo = { key: k, how: "top" };
         return true;
       }
@@ -9417,7 +9419,8 @@ export default class Threads extends View {
     const key = n ? this.jumpKey(n) : null;
     if (!key) return;
     if (cx && this.findTurn(key)?.agent && !this.prefs.agentTurns && !this.turnKeys(this.allRows()).includes(key)) this.setAgents(true, cx);
-    this.sel = key; this.follow = false; this.scrollTo = { key, how: "center", flash: true };
+    // The end asked for and not drawn yet (latest) would take the draw from this: every jump drops it.
+    this.sel = key; this.follow = false; this.toBottom = false; this.scrollTo = { key, how: "center", flash: true };
   }
 
   // The first turn of the day before or after the selected turn's day.
@@ -12200,7 +12203,7 @@ export default class Threads extends View {
     this.traj = false;
     this.keysOpen = false;
     const k = this.turnOfRow(this.tsel);
-    if (k && this.findTurn(k)) { this.sel = k; this.follow = false; this.scrollTo = { key: k, how: "center" }; }
+    if (k && this.findTurn(k)) { this.sel = k; this.follow = false; this.toBottom = false; this.scrollTo = { key: k, how: "center" }; }
   }
   // The turn a ledger row belongs to: a heading's key is its turn's, a step's starts with it.
   turnOfRow(key) {
@@ -12232,7 +12235,7 @@ export default class Threads extends View {
         this.selSent = e.key;
         if (this.trajPane) {
           if (this.turnOfRow(this.tsel) !== e.key) { this.tsel = e.key; this.tscrollTo = e.key; return true; }
-        } else if (this.sel !== e.key && this.chatShows(e.key)) { this.readerMoved(); this.openWait = null; this.sel = e.key; this.follow = false; this.scrollTo = { key: e.key, how: "center" }; return true; }
+        } else if (this.sel !== e.key && this.chatShows(e.key)) { this.readerMoved(); this.openWait = null; this.sel = e.key; this.follow = false; this.toBottom = false; this.scrollTo = { key: e.key, how: "center" }; return true; }
         return false;
       }
     }
