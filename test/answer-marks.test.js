@@ -976,13 +976,13 @@ describe("C: more than one marked answer in a row", () => {
       { k: "p", o: "human", t: "One", ts: ts(0) },
       { k: "h", t: "R1", ts: ts(1) }, { k: "t", t: "First answer.", a: 1, ts: ts(2) },
       { k: "h", t: "R2", ts: ts(3) }, { k: "h", w: 1, ts: ts(3) }, { k: "t", t: "Tidying up.", ts: ts(4) },
-      { k: "h", t: "R3", ts: ts(5) }, { k: "h", w: 1, ts: ts(5) }, { k: "t", t: "Second answer.", a: 1, ts: ts(6) },
+      { k: "h", t: "R3", ts: ts(5) }, { k: "h", w: 1, ts: ts(5) }, { k: "h", w: 1, ts: ts(5) }, { k: "t", t: "Second answer.", a: 1, ts: ts(6) },
       { k: "d", ms: 7000, ts: ts(7) },
     ]) apply(s, e);
     const [row] = s.turns;
     expect(row.steps.map((st) => [st.k, st.t, st.r ?? null, st.h ?? 0, st.at])).toEqual([
       ["final", "First answer.", "R1", 0, Date.parse(ts(2))], ["text", "Tidying up.", "R2", 1, Date.parse(ts(4))]]);
-    expect([row.after, row.reasoning, row.held ?? 0, row.afterAt]).toEqual([["Second answer."], ["R3"], 1, Date.parse(ts(6))]);
+    expect([row.after, row.reasoning, row.held ?? 0, row.afterAt]).toEqual([["Second answer."], ["R3"], 2, Date.parse(ts(6))]);
   });
 
   // Red before this test's commit: "Looking." was a note after the blank text. At c37c64f3 the
