@@ -516,8 +516,9 @@ test("two draws before the output editors' timer runs ask for one timer, not two
 // for and, in the other test, in the order they fall due: the landing must not depend on either. On
 // main the ask order and the due order of the landing's three timers are the same, and the stopped
 // render's leftover timers run in the round before the watch draw asks for the rerun's, so the two
-// pins run the landing's timers alike and differ only in where the flash's timers fall among them;
-// the ask-order pin is what goes red if anyone asks for the 120 ms clear first again (L1).
+// pins run the landing's timers alike and differ only in where the flash's timers fall among them.
+// Both also check the order the two lift timers are asked in. If anyone asks for the 120 ms clear
+// first again (L1), both go red on that order, and the ask-order pin also finds the lift left on.
 const LAND_STOPS = [null, "16 before", "16 after", "48 before", "48 after", "120 before", "120 after"];
 for (const order of ["asked", "due"]) {
   test(`a landing with a lift that Herdr stops at any of its three timer calls takes the lift off, its timers run in the order ${order === "asked" ? "they were asked for" : "they fall due"}: the first row keeps its height`, async () => {
