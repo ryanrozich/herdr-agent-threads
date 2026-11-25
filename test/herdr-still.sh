@@ -49,7 +49,11 @@ RIG=${HERDR_RIG:-$(pwd)/.herdr-rig}
 APP=$RIG/bin/herdr-app
 X11=${HERDR_STILL_X11:-/tmp/.X11-unix}
 
+# The processes that run already: the cleanup leaves them alone.
+OLD=$(echo /proc/[0-9]*)
 R=$(mktemp -d "${TMPDIR:-/tmp}/herdr-still.XXXXXX") || exit 2
+# As the system gives a working folder: links followed.
+R=$(cd "$R" && pwd -P) || exit 2
 A=$R/a
 n=99
 XPID=""
@@ -85,9 +89,12 @@ cleanup() {
   [ -n "$WPID" ] && kill "$WPID" 2> /dev/null
   [ -n "$HPID" ] && kill "$HPID" 2> /dev/null
   [ -n "$APID" ] && { appenv timeout -k 2 8 "$APP" "do" app.quit > /dev/null 2>&1; sleep 1; kill "$APID" 2> /dev/null; }
-  # The core and anything it started carry the folder in their environment.
+  # The core and anything it started have the folder in their command line or work in it. A
+  # process that ran before this script is never one of them. No environment is read.
   for p in /proc/[0-9]*; do
-    grep -qs "$R" "$p/environ" && kill "${p#/proc/}" 2> /dev/null
+    case " $OLD " in *" $p "*) continue ;; esac
+    grep -qsF "$R" "$p/cmdline" && { kill "${p#/proc/}" 2> /dev/null; continue; }
+    case $(readlink "$p/cwd" 2> /dev/null)/ in "$R"/* | "$R (deleted)/") kill "${p#/proc/}" 2> /dev/null ;; esac
   done
   [ -n "$XPID" ] && kill "$XPID" 2> /dev/null
   rm -rf "$R"
