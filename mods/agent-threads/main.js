@@ -11990,12 +11990,24 @@ export default class Threads extends View {
     const mine = this.trajPane ? this.turnOfRow(this.tsel) : this.sel;
     // Sent again when another turn comes in under the same number (its id), and not before the
     // turn is read: an entry with no id is left by the other pane.
-    const id = mine ? this.turnIdAt(mine) : null;
+    const id = mine ? this.selIdOf(mine) : null;
     if (!id || `${mine}|${id}` === this.selSent) return false;
     this.selSent = `${mine}|${id}`;
     const keep = Object.fromEntries(Object.entries(map).filter(([k, v]) => k !== this.terminal && Date.now() - (v?.at ?? 0) < DAY_MS));
     setShared(SEL_KEY, { ...keep, [this.terminal]: { key: mine, id, by: this.selId, at: Date.now(), pane: this.trajPane ? "trajectory" : "chat" } });
     return false;
+  }
+
+  // The id of the selected turn, worked out again only when the key or its session changed:
+  // turnIdAt walks the session's turns, and syncSel runs on every draw.
+  selIdOf(key) {
+    const s = this.sessions[Number(key.split(":")[0])];
+    const sig = `${key}|${s?.version}|${s?.turns.length}`;
+    const m = this.selIdMemo;
+    if (m?.sig === sig && m.s === s) return m.id;
+    const id = this.turnIdAt(key);
+    this.selIdMemo = { sig, s, id };
+    return id;
   }
 
   // The stable id of the turn a key names, or null.
