@@ -518,8 +518,9 @@ function closeOpen(s, cur, end, e) {
     t.done = true;
     if (end) t.endTs = end;
     // Answered together with a later prompt: its reply is on that row. Not a turn with a line
-    // left out (noteSkip): its reply may be the line itself.
-    if (t !== cur && !hasReply(t) && !t.skipped) t.answeredBy = cur.n;
+    // left out (noteSkip): its reply may be the line itself. Not work that started by itself: it
+    // has no prompt to answer.
+    if (t !== cur && !t.self && !hasReply(t) && !t.skipped) t.answeredBy = cur.n;
   }
   if (s.clock) for (const t of s.open) clockEnd(s, t, e);
   s.open = [];
