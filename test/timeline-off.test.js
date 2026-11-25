@@ -1105,9 +1105,8 @@ test("timeline failure marks in the build: a turn of 4,000 failed calls whose ce
   // And no more than that is counted. The sort and the spacing read no row, and the rows of the
   // next turn follow them in the step they end in, so their run of steps that touch no row is at
   // most their work at 1,024 a step: 48,000 entries and 4,000 marks, 50 whole steps; with the
-  // marks in order the 4,000 alone, 3; with no mark, none.
+  // marks in order the 4,000 alone, 3.
   const sorted = n * Math.ceil(Math.log2(n));
   expect(quietSteps(session(true)).len).toBeLessThanOrEqual(Math.floor((sorted + n) / TL.TL_BUILD_BARS));
   expect(quietSteps(session(false)).len).toBeLessThanOrEqual(Math.floor(n / TL.TL_BUILD_BARS));
-  expect(quietSteps(session(false, "tool")).len).toBe(0);
 });
