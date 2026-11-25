@@ -12201,20 +12201,32 @@ export default class Threads extends View {
     this.tsel = this.sel && this.findTurn(this.sel) ? this.sel : null;
     this.tscrolled = false;
     this.tscrollTo = this.tsel;
-    // What the way back goes by (leaveTraj).
-    this.trajFrom = { follow: this.follow, turn: this.tsel };
+    // What the way back goes by (leaveTraj): whether the reader followed on the newest turn now (the
+    // one the Trajectory shows selected when nothing is), and the turn it opens on.
+    const newest = this.newestTurn();
+    this.trajFrom = { follow: this.follow && (!this.tsel || this.tsel === newest), turn: this.tsel ?? newest };
   }
   // Every way back to the Chat counts here once (y, Esc, its Chat button, a command): the Chat
-  // scrolls to the Trajectory's turn. A reader who followed on the way in, follows still and is on
-  // the turn it opened on only looked: the Chat is back at its end, following.
+  // scrolls to the Trajectory's turn. A reader who followed on the newest turn on the way in, follows
+  // still and is on the turn it opened on only looked: the Chat is back at its end, following.
   leaveTraj() {
     this.readerMoved();
     this.traj = false;
     this.keysOpen = false;
     const k = this.turnOfRow(this.tsel);
     const from = this.trajFrom;
-    if (from?.follow && this.follow && k === from.turn) { this.jumpLatest(true); return; }
+    if (from?.follow && this.follow && (!this.tsel || k === from.turn)) { this.jumpLatest(true); return; }
     if (k && this.findTurn(k)) { this.sel = k; this.follow = false; this.toBottom = false; this.scrollTo = { key: k, how: "center" }; }
+  }
+  // The newest turn the Chat shows, by the turns: right after a search closes, the rows can still be
+  // the search's (buildStep).
+  newestTurn() {
+    const agentTurns = Boolean(this.prefs.agentTurns);
+    for (let si = this.sessions.length - 1; si >= 0; si--) {
+      const s = this.sessions[si];
+      for (let ti = s.turns.length - 1; ti >= 0; ti--) if (isShown(s.turns[ti], { agentTurns, live: this.isLive(s, si, ti), turns: s.turns })) return `${si}:${s.turns[ti].n}`;
+    }
+    return null;
   }
   // The turn a ledger row belongs to: a heading's key is its turn's, a step's starts with it.
   turnOfRow(key) {
