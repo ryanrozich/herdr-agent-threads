@@ -12284,11 +12284,14 @@ export default class Threads extends View {
   }
   // A press on the lanes: the nearest step in that lane within 4 px, else its turn's heading
   // (timeline.js timelineHit), with the running turn's growing bars as the last draw had them.
-  // local_position is in Herdr px from the lanes' corner.
-  tlPress(e, cx) {
+  // local_position is in Herdr px from the lanes' corner. whole: the turns (their array) of the
+  // frame pressed. A press that comes after the pane is on others (a pick, a clear, a session
+  // started over) and before its next frame does nothing: a row's key is its place ("tr:0:3:1"),
+  // so one of the strip pressed would name a row of theirs. A session that grows keeps its array.
+  tlPress(e, cx, whole) {
     const M = this.tlModel;
     const p = e?.local_position;
-    if (!M || this.tlWait || p?.x == null) return;
+    if (!M || this.tlWait || p?.x == null || whole !== (this.current()?.turns ?? null)) return;
     const z = this.zoom();
     const li = p.y == null ? -1 : Math.floor(p.y / z / TL_LANE);
     const lane = TL_LANES[li] ?? null;
@@ -12359,6 +12362,7 @@ export default class Threads extends View {
     this.tlModel = M;
     if (M.L !== prev?.L) this.tlMs = Math.round((now() - t0) * 10) / 10;
     const T = M.L;
+    const whole = L.whole;
     const laneH = 3 * TL_LANE;
     const color = (ink) => (ink === "sub" ? alpha(inks.sub, SUB_ALPHA) : inks[ink] ?? t.dim);
     const at = (k) => { const [lane, ink, track] = k.split("|"); return { lane, ink, half: track === "1", li: TL_LANES.indexOf(lane), track }; };
@@ -12401,7 +12405,7 @@ export default class Threads extends View {
         .h(TL_AX + TL_TK + TL_LT + laneH).rounded(3).bg(alpha(t.foreground, 0.06))
       : null;
     const lanes = div().id("th-tl-lanes").relative().w(cw).h(laneH).cursor_pointer().overflow_hidden()
-      .on_mouse_down("left", (e, cx) => this.tlPress(e, cx))
+      .on_mouse_down("left", (e, cx) => this.tlPress(e, cx, whole))
       .children(kids);
     // Every number, tick and fail mark the layout gives: the numbers every k-th turn's, apart by
     // their own width and a gap, the ticks 62 and the fail marks 6 px apart, so there are never
