@@ -10,7 +10,7 @@
 #      slash command line               {cmd: true, o, ts, t: "/name args", u: line uuid}
 #   b  a meta line, by its parent       {pu: parent uuid}: a skill or custom command's text
 #                                       follows its command line this way; a local command
-#                                       has no such line
+#                                       has no such line. o: "scheduled" on a scheduled line
 #   i  "[Request interrupted"           {ts}
 #   t  assistant text block             {t, ts}, and a: 1 on a message that ends the reply
 #                                       (ends_reply, by its stop_reason)
@@ -136,7 +136,7 @@ def user_event:
     elif $l.isMeta == true and ($ENV.THREADS_SKILL // "") != "" and $l.uuid == $ENV.THREADS_SKILL then
       {k: "p", o: "human", ts: $l.timestamp, t: ($c | text_of | cap)}
     elif $l.isMeta == true and ($l.origin.kind? // null) != "peer" then
-      (if ($l.parentUuid | type) == "string" then {k: "b", pu: $l.parentUuid} else empty end),
+      (if ($l.parentUuid | type) == "string" then {k: "b", pu: $l.parentUuid} + (if $l.turnOrigin == "scheduled" then {o: "scheduled"} else {} end) else empty end),
       (if $l.turnOrigin == "scheduled" then {k: "w", o: "scheduled", ts: $l.timestamp} else empty end)
     else ($c | text_of) as $t
       | if ($t | startswith("[Request interrupted")) then {k: "i", ts: $l.timestamp}
@@ -181,10 +181,12 @@ def queued_event:
   | ($a.origin.kind? // "human") as $o
   | ($a.prompt | text_of) as $t
   | {uuid: $l.uuid, imagePasteIds: ($a.imagePasteIds // null)} as $img
-  | if ($t | startswith("<task-notification>")) then notice($t)
+  # A scheduled meta line first: its text is never read, not even as a notification.
+  | if $a.isMeta == true and $o == "scheduled" and ($a.commandMode // "prompt") == "prompt" then
+      {k: "w", o: "scheduled", ts: ($l.timestamp // $a.timestamp)}
+    elif ($t | startswith("<task-notification>")) then notice($t)
     elif (own($o) | not) or ($a.commandMode // "prompt") != "prompt" then empty
-    elif $a.isMeta == true and $o != "peer" then
-      if $o == "scheduled" then {k: "w", o: "scheduled", ts: ($l.timestamp // $a.timestamp)} else empty end
+    elif $a.isMeta == true and $o != "peer" then empty
     elif ($t | length) == 0 and (imgs($img; $a.prompt) == {}) then empty
     else {k: "p", o: $o, ts: ($l.timestamp // $a.timestamp), t: ($t | cap)} + imgs($img; $a.prompt)
       + (if $o == "peer" and ($a.origin.name | type) == "string" then {n: ($a.origin.name | .[0:80])} else {} end)

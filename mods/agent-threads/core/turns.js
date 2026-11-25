@@ -544,28 +544,30 @@ export function apply(s, e) {
 function applyOne(s, e) {
   s.version++;
   if (e.k === "b") {
-    if (s.pendingCmd?.u && s.pendingCmd.u === e.pu) promote(s);
+    // A scheduled line follows whatever line came before it: only a command the scheduler ran
+    // itself is promoted by one.
+    if (s.pendingCmd?.u && s.pendingCmd.u === e.pu && (!e.o || e.o === s.pendingCmd.o)) promote(s);
     return;
   }
-  // Work that starts by itself: no row yet (openSelf), and it leaves a waiting command line
-  // waiting. While a row is open or a background update runs it is part of that.
+  // Work that starts by itself: no row yet (openSelf). A waiting command line gets it only by
+  // its own "b", above. While a row is open or a background update runs it is part of that.
   if (e.k === "w") {
     if (!s.open.length && !s.followActive && typeof e.o === "string") s.pendingSelf = { o: e.o, ts: e.ts ?? null };
     return;
   }
   // Only between turns: a command line logged during a turn (a local /usage), with no text
   // of its own for the model, is not what the model is working on, so it never takes a row.
-  if (s.pendingCmd && !s.open.length && !s.followActive && (e.k === "t" || e.k === "h" || e.k === "u" || e.k === "m" || e.k === "e")) promote(s);
+  if (s.pendingCmd && !s.pendingSelf && !s.open.length && !s.followActive && (e.k === "t" || e.k === "h" || e.k === "u" || e.k === "m" || e.k === "e")) promote(s);
   if (s.pendingCmd && e.k !== "c" && e.k !== "title" && e.k !== "an" && e.k !== "r" && e.k !== "n" && e.k !== "x") s.pendingCmd = null;
   if (s.pendingSelf) {
     const above = s.turns[s.turns.length - 1];
     // A count the row above already has is not work: Codex writes its last one again.
     if ((e.k === "t" && e.t) || e.k === "h" || e.k === "u" || e.k === "e" || (e.k === "m" && !(above && e.id in above.usage))) openSelf(s);
-    // A prompt takes the work, and a stop ends it. An end with nothing done leaves no row, and
+    // A prompt takes the work (a command line does not yet), and a stop ends it. An end with nothing done leaves no row, and
     // its time is not the row above's. A turn_duration that comes while the row above has only
     // its estimate (case "s") is the row above's real time, and the work still waits.
     else if (e.k === "d" && e.ms != null && above && s.guess?.turn === above) { /* the row above's */ }
-    else if (e.k === "p" || e.k === "i" || e.k === "d" || e.k === "s") {
+    else if ((e.k === "p" && !e.cmd) || e.k === "i" || e.k === "d" || e.k === "s") {
       s.pendingSelf = null;
       if (e.k === "d" || e.k === "s") return;
     }
