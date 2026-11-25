@@ -5146,7 +5146,7 @@ export default class Threads extends View {
   // its rows are built again at each event. Out of time for this draw (as stepLinks), it is cut
   // with no links, not kept, and cut again in a later draw.
   keptCut(key, turn, text) {
-    const ver = `${key}|${this.linksVer}|${this.links.length}|${this.repoSig()}|${this.remote.owner ?? ""}`;
+    const ver = `${this.linksVer}|${this.links.length}|${this.repoSig()}|${this.remote.owner ?? ""}`;
     this.cutOf ??= new WeakMap();
     const known = this.cutOf.get(turn);
     if (known?.ver === ver && known.text === text) return known;
