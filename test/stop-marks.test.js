@@ -1,0 +1,152 @@
+// bun test: marks a render sets for its next draw (buildNext, shapeNext) are cleared by the
+// timer it asks for. A render Herdr stopped may lose those timers, and a mark left set asked for
+// no draw again: the rows build it stood for never went on. On the render harness
+// (test/render-harness.js), with made-up turns (scripted).
+import { test, expect } from "bun:test";
+
+import { H, scripted, setup } from "./render-harness.js";
+
+setup();
+
+function events(n) {
+  const ev = [];
+  for (let i = 0; i < n; i++) {
+    const ts = new Date(Date.UTC(2026, 10, 1, 8, 0) + i * 20000).toISOString();
+    const what = i % 10 === 0 ? "rename the queue helper" : i % 3 === 0 ? "check the cart total" : "look at the staging deploy";
+    ev.push({ k: "p", o: "human", t: `Turn ${i}: please ${what} for order ${i}.`, ts });
+    ev.push({ k: "t", t: `Done for order ${i}. The totals round per line.` });
+    ev.push({ k: "d", ms: 1000, ts });
+  }
+  return ev;
+}
+
+// A search's rows are built over several draws, each asked for by a timer (buildNext). Herdr
+// stops the draw just after the build asked for its next one, and that timer is lost. The draw
+// after a stopped one (Herdr's watch draw) clears the marks, so the build asks again and its
+// rows come in; with the mark left set, the list kept the rows from before the search.
+test("a render Herdr stops after the rows build asked for its next draw, with that timer lost, leaves no mark: the search's rows come in", async () => {
+  const { v, cx } = await scripted(events(1500));
+  v.debug = false;
+  v.width = 560; v.rootH = 1100; v.listH = 1000;
+  H.listWindow = (k) => ({ start: Math.max(0, k - 14), end: k });
+  v.shapeBudget = Infinity;
+  for (let k = 0; k < 400; k++) { v.render(cx); cx.flush(0); if (!v.rowJob && !v.staleRows?.length && !(v.shapeLeft > 0)) break; }
+  v.shapeBudget = null;
+  v.buildMax = () => 0.3;
+  v.action("search:rename", cx);
+  cx.timers = [];
+  // The stop, once: in the draw that started the build, after it asked for its next draw.
+  const floating = v.floating;
+  let stopped = false;
+  v.floating = function (...a) { if (!stopped && this.rowJob && this.buildNext) { stopped = true; throw new Error("stopped by Herdr"); } return floating.apply(this, a); };
+  for (let k = 0; k < 50 && !stopped; k++) {
+    const n0 = cx.timers.length;
+    try { v.render(cx); } catch (e) {
+      if (String(e?.message) !== "stopped by Herdr") throw e;
+      // Herdr's stop runs no catch: the render is left open, and its timers are lost.
+      v.renderOpen = true;
+      cx.timers.length = Math.min(cx.timers.length, n0);
+      break;
+    }
+    cx.flush(0);
+  }
+  v.floating = floating;
+  // Herdr's watch draw, then a draw only when the pane asks for one.
+  let asked = 0;
+  cx.notifyHook = () => { asked++; };
+  v.render(cx);
+  for (let k = 0; k < 2000; k++) {
+    asked = 0;
+    cx.flush(0);
+    if (!asked) break;
+    v.render(cx);
+  }
+  cx.notifyHook = null;
+  const rows = v.rows().length;
+  const marks = [Boolean(v.rowJob), Boolean(v.buildNext)];
+  for (let k = 0; k < 2000 && v.rowJob; k++) { v.render(cx); cx.flush(0); }
+  expect([stopped, ...marks, rows === v.rows().length]).toEqual([true, false, false, true]);
+}, 120000);
+
+// The probe measures the rows' parts over several draws, each asked for by a timer (probeNext).
+// Herdr stops the draw just after the probe asked for its next one, and that timer is lost.
+// The draw after a stopped one clears the mark, so the probe asks again and measures the rest;
+// with the mark left set, it never asked again, and the parts kept their rough heights.
+test("a render Herdr stops after the probe asked for its next draw, with that timer lost, leaves no mark: the probe measures the rest", async () => {
+  const { v, cx } = await scripted(events(1500));
+  v.debug = false;
+  v.width = 560; v.rootH = 1100; v.listH = 1000;
+  H.listWindow = (k) => ({ start: Math.max(0, k - 14), end: k });
+  v.shapeBudget = Infinity;
+  for (let k = 0; k < 400; k++) { v.render(cx); cx.flush(0); if (!v.rowJob && !v.staleRows?.length && !(v.shapeLeft > 0)) break; }
+  v.shapeBudget = null;
+  v.buildMax = () => 0.3;
+  v.action("search:rename", cx);
+  cx.timers = [];
+  // The stop, once: in a draw after the build, once the probe has asked for its next draw.
+  const floating = v.floating;
+  let stopped = false;
+  v.floating = function (...a) { if (!stopped && !this.rowJob && this.probeNext && this.probeLeft > 0) { stopped = true; throw new Error("stopped by Herdr"); } return floating.apply(this, a); };
+  for (let k = 0; k < 400 && !stopped; k++) {
+    const n0 = cx.timers.length;
+    try { v.render(cx); } catch (e) {
+      if (String(e?.message) !== "stopped by Herdr") throw e;
+      // Herdr's stop runs no catch: the render is left open, and its timers are lost.
+      v.renderOpen = true;
+      cx.timers.length = Math.min(cx.timers.length, n0);
+      break;
+    }
+    cx.flush(0);
+  }
+  v.floating = floating;
+  // Herdr's watch draw, then a draw only when the pane asks for one.
+  let asked = 0;
+  cx.notifyHook = () => { asked++; };
+  v.render(cx);
+  // The light draws after a stopped one (CUT_MS, 5 s) measure nothing; that time passes.
+  v.cutUntil = 0;
+  // The probe's timer is 16 ms: the timers due within 20 ms run between draws.
+  for (let k = 0; k < 2000; k++) {
+    asked = 0;
+    cx.flush(20);
+    if (!asked) break;
+    v.render(cx);
+  }
+  cx.notifyHook = null;
+  expect([stopped, Boolean(v.probeNext), v.probeLeft ?? 0]).toEqual([true, false, 0]);
+}, 120000);
+
+// Rows left with their old shape are reshaped in a later draw, asked for by a timer (shapeNext).
+// A render asks for it and Herdr stops that render, losing the timer. The render after a stopped
+// one clears the mark and asks again, so the rows are reshaped once the light draws are over;
+// with the mark left set, no draw asked again and the rows kept their old shape.
+test("a render Herdr stops after the shaping asked for its next draw, with that timer lost, leaves no mark: the rows are reshaped", async () => {
+  const { v, cx } = await scripted(events(40));
+  v.debug = false;
+  v.width = 560; v.rootH = 1100; v.listH = 1000;
+  for (let k = 0; k < 400; k++) { v.render(cx); cx.flush(0); if (!v.rowJob && !v.staleRows?.length && !(v.shapeLeft > 0)) break; }
+  cx.timers = [];
+  // A row left with its old shape, as a build out of time leaves it, and the render that asks.
+  const i = v.baseRows.findIndex((x) => x.kind === "turn" && !x.live);
+  v.staleRows = [i];
+  v.render(cx);
+  const asked = [v.shapeNext, cx.timers.length];
+  // Herdr stopped that render after it asked: its timer is lost and the render left open.
+  cx.timers = [];
+  v.renderOpen = true;
+  v.render(cx);
+  // Its own timer again, besides the light window's.
+  const again = [v.shapeNext, cx.timers.length > 1];
+  // The light window passes; then a draw only when the pane asks for one.
+  v.cutUntil = 0;
+  let notified = 0;
+  cx.notifyHook = () => { notified++; };
+  for (let k = 0; k < 50; k++) {
+    const n0 = notified;
+    cx.flush(5000);
+    if (notified === n0) break;
+    v.render(cx);
+  }
+  cx.notifyHook = null;
+  expect([i >= 0, ...asked, ...again, v.staleRows?.length ?? 0, Boolean(v.shapeNext)]).toEqual([true, true, 1, true, true, 0, false]);
+}, 60000);

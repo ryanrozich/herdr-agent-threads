@@ -53,6 +53,12 @@
 //                between two blocks of the reply
 //   --pad-mb N   add about N MB of bookkeeping lines (api-request-blob, snapshots,
 //                attachments) between turns, as real transcripts have
+//   --order      add three turns whose bars come out of the clock's order on the timeline
+//                (TRD-23): a note whose line is listed after a later one but stamped earlier
+//                (30 s, then 10 s), an unfinished call that starts in its 60 s turn's last
+//                quarter second (drawn 6 px wide, so left of the finished call before it), and
+//                an interrupted 4 s turn whose unfinished call follows a finished one (with
+//                --only 100 or more turns, under 6 px wide across 1,440 px)
 //   --images     add prompts with pasted images, as Claude Code writes them (text with
 //                [Image #N], base64 image blocks, imagePasteIds): one wide image, a tall and
 //                a square one together, and an image with no text. The images are generated
@@ -82,6 +88,7 @@ const hostile = bool("--hostile");
 const edge = bool("--edge");
 const blocks = bool("--blocks");
 const imagesFx = bool("--images");
+const orderFx = bool("--order");
 const extra = Number(flag("--extra") ?? 0);
 const only = flag("--only");
 const busy = Number(flag("--busy") ?? 0);
@@ -594,6 +601,44 @@ if (imagesFx) {
   imagePrompt("[Image #4]", [png(640, 360, 120)], [4]);
   assistant([{ type: "text", text: "That is the empty state of the dashboard. It looks right." }], { out: 20 });
   end(8000);
+}
+
+if (orderFx) {
+  // Each line at its own time, ms after its turn's prompt: the clock is set before each.
+  const say = (text, ms, stop = "tool_use") => { clock = ms; assistant([{ type: "text", text }], { stop, secs: 0, out: 30 }); };
+  const call = (name, input, ms, rt, pid) => {
+    clock = ms;
+    const id = `toolu_${String(msg).padStart(6, "0")}_${name}`;
+    assistant([{ type: "thinking", thinking: "…" }, { type: "tool_use", id, name, input }], { stop: "tool_use", out: 40, secs: 0 });
+    if (rt == null) return;
+    clock = rt;
+    push({ ...base(), type: "user", promptId: pid, toolUseResult: { stdout: "…" }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "…" }] }, uuid: uid(), timestamp: tick(0) });
+  };
+  // A note listed after a later one but stamped 20 s before it.
+  let pid = prompt("Why does the retry path warn on an empty queue?", "human", 60);
+  let t0 = clock;
+  say("The retry settings are in queue.ts.", t0 + 30000);
+  call("Read", { file_path: "src/queue.ts" }, t0 + 31000, t0 + 32000, pid);
+  say("Reading the backoff first.", t0 + 10000);
+  call("Grep", { pattern: "backoff" }, t0 + 33000, t0 + 34000, pid);
+  say("The backoff doubles up to 30 s; the warning is the empty-queue path, and it is harmless.", t0 + 50000, "end_turn");
+  clock = t0 + 60000;
+  end(60000);
+  // An unfinished call in its turn's last quarter second, after a finished one.
+  pid = prompt("Tail the deploy log", "human", 60);
+  t0 = clock;
+  say("Checking the last deploy first.", t0 + 2000);
+  call("Read", { file_path: "deploy.log" }, t0 + 59800, t0 + 59850, pid);
+  call("Bash", { command: "tail -f deploy.log" }, t0 + 59900, null, pid);
+  clock = t0 + 60000;
+  end(60000);
+  // A short turn interrupted during its second call.
+  pid = prompt("Run the smoke test", "human", 60);
+  t0 = clock;
+  call("Read", { file_path: "test/smoke.ts" }, t0 + 1000, t0 + 1500, pid);
+  call("Bash", { command: "bun run smoke" }, t0 + 2000, null, pid);
+  clock = t0 + 4000;
+  push({ ...base(), type: "user", promptId: pid, message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user for tool use]" }] }, uuid: uid(), timestamp: tick(0) });
 }
 
 if (open) {
