@@ -2712,7 +2712,7 @@ test("a press's open 300 ms on is dropped by a jump from outside the list made i
 // kept. The note was made before the record, with no key: a stop there left the new rows under
 // no key, and the next build was of every row. Over two days (a build keeps rows only then,
 // keptFrom), with a live event on the running turn.
-test("a build Herdr stops in noteRows, before or after its note, is followed by a build of every row that ends as an unstopped run does", async () => {
+test("a build Herdr stops in noteRows, before or after its note, ends as an unstopped run does, with the same rows kept and the same turns built", async () => {
   const STOP = new Error("stopped by Herdr");
   const got = {};
   for (const at of ["none", "before", "after"]) {
