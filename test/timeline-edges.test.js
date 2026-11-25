@@ -963,6 +963,22 @@ for (const [how, ms] of [["in the press", 1e9], ["over draws", -1]]) {
   }, 30000);
 }
 
+test("timeline view: the last turn cut back in place and another one read at its number, the strip drawn again before its rows are built: a press on it selects nothing; once they are built a press selects its call", async () => {
+  const { b, cb, read } = await cutPane(eventsTo(6, false));
+  shownFrame(b, cb);
+  await read(eventsOf(6, "other", false));
+  oneTurnASlice(b);
+  const c = frame(b, cb);
+  // The rows built before, so the turn cut back is on the strip.
+  expect([b.tlWait, b.ledgerJob != null, b.tlModel.heads[5].steps[1].text]).toEqual([false, true, "first"]);
+  const on = callOn(b, c, 5);
+  expect(pressed(b, cb, on)).toEqual([null, null]);
+  b.buildMax = () => 1e9;
+  const next = callOn(b, shownFrame(b, cb), 5);
+  expect([next.key, b.tlModel.heads[5].steps[1].text]).toEqual([on.key, "other"]);
+  expect(pressed(b, cb, next)).toEqual([next.key, next.key]);
+}, 30000);
+
 // A turn of pairs of words and a call, then words for half of the turn's time, the last event.
 function pairs(n) {
   const at = (sec) => new Date(T0 + sec * 1000).toISOString();
