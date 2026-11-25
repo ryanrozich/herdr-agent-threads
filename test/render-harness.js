@@ -119,6 +119,7 @@ export let settingsStale = false;
 // With drawBetweenAsks set, probeFrame draws again after each group of timers due before the
 // next frame, in the order of their delays (a scroll asked 16 ms on, then one 48 ms on), as
 // Herdr draws about every 16 ms between them. Off, they all run before the next frame's draw.
+// A timer due after the frame is kept for the next with it set, and dropped with it off.
 export let drawBetweenAsks = false;
 // A script that has not ended in 4 s is killed with everything it started, and the call fails
 // with a line naming it: a hung child ends before bun's 5 s test limit kills it as a dangling
@@ -477,6 +478,7 @@ export function probeFrame(v, cx) {
   // Every draw of the frame asks the probe for parts (each ask spends one of a part's tries):
   // all are answered, a part's last ask winning.
   const due = new Map();
+  let later = null;
   v.probeDue = function () { const d = Threads.prototype.probeDue.call(this); for (const [p, sig] of d) due.set(p.key, [p, sig]); return d; };
   try {
     draw(v, cx);
@@ -498,13 +500,17 @@ export function probeFrame(v, cx) {
         for (const x of now) x.fn(cx);
         draw(v, cx);
       }
-      // Due after the frame: kept past 120 ms, so the flush below leaves them, as before.
-      cx.timers = [...cx.timers.map((x) => ({ ...x, ms: Math.max(121, t + x.ms) })), ...q.map(({ at, ...x }) => ({ ...x, ms: at }))];
+      // Due after the frame: kept for the next, with what is left of their delay. So is what the
+      // 50th draw asked for; what was due in the frame and not reached runs in the flush below.
+      later = [...cx.timers.map((x) => ({ ...x, ms: Math.max(1, t + x.ms - 120) })), ...q.filter((x) => x.at > 120).map(({ at, ...x }) => ({ ...x, ms: at - 120 }))];
+      cx.timers = q.filter((x) => x.at <= 120).map(({ at, ...x }) => ({ ...x, ms: at }));
     }
   } finally { delete v.probeDue; }
-  // The frame marks the timers would clear are cleared.
+  // The frame marks the timers would clear are cleared. With drawBetweenAsks off, a timer due
+  // after the frame is dropped.
   cx.flush(120, 3);
   dropTimers(v, cx);
+  if (later) cx.timers = later;
   for (const [p, sig] of due.values()) v.probed(p.key, sig, { width: 300, height: fakeH(p) * v.zoom() }, cx);
   return due.size;
 }
