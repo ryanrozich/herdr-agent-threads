@@ -3528,7 +3528,7 @@ export default class Threads extends View {
     const [si, n] = key.split(":").map(Number);
     const s = this.sessions[si];
     // In the middle of a read an OpenCode turn is not there yet (rewindTail): as it was.
-    if (s?.partial) return true;
+    if (s?.loaded && s.partial) return true;
     return Boolean(s?.turns[n - 1]) && this.isLive(s, si, n - 1);
   }
   isLiveKey(key) { const i = this.baseIndex?.get(key); return i != null && Boolean(this.baseRows?.[i]?.live); }
