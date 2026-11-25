@@ -11993,7 +11993,9 @@ export default class Threads extends View {
     this.ledgerJob = null;
     // whole: the turns (their array) of the session the pane is on, when it was read whole; null
     // while it is not. Made here with the rows, by the key they were built for, which says whether
-    // each session is read; a session started over (restart) has another array.
+    // each session is read; a session started over (restart) has another array. One whose file was
+    // replaced after it was read (read: restart, not fresh) stays marked read, so its new array
+    // counts as whole while it is read again: the turns read so far, none at first.
     this.ledgerMemo = { key, sessions: this.sessions, rows: this.ledgerJoin(job, 0), going, partial: false, whole: s?.loaded ? s.turns : null };
     this.ledgerMemo.totals = ledgerTotals(this.ledgerMemo.rows);
     this.ledgerShown = null;
@@ -12341,10 +12343,10 @@ export default class Threads extends View {
     // The model, and a build left for later draws (timeline.js tlDraw), TL_BUILD_MS a draw;
     // trajFrame asks for the next draw while one is left. From nothing (opened, after the wait
     // above, or shown again after a hidden strip dropped its model) a waiting line shows
-    // meanwhile. Working off (or on, past the slack), the strip keeps its places but for the last turn's, and is placed
-    // again by the build from the next draw on, drawn as it was meanwhile. The build is taken
-    // off the pane before its step: Herdr's interrupt can stop the draw inside that step and
-    // close the build, and a closed build kept here would throw in every draw after.
+    // meanwhile. Working off (or on, past the slack), the strip keeps its places but for the last
+    // turn's, and is placed again by the build from the next draw on, drawn as it was meanwhile.
+    // The build is taken off the pane before its step: Herdr's interrupt can stop the draw inside
+    // that step and close the build, and a closed build kept here would throw in every draw after.
     const J0 = this.tlJob;
     this.tlJob = null;
     const D = tlDraw(prev, J0, L.totals.heads, cw, Date.now(), t0 + TL_BUILD_MS, now);
