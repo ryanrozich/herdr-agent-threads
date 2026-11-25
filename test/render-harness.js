@@ -469,20 +469,39 @@ export function simList(v) {
 // trickles measures in over the frames after a re-wrap.
 export const fakeH = (p) => 30 + ((p.key.length * 37 + p.key.charCodeAt(p.key.length - 1) * 13) % 70);
 export function probeFrame(v, cx) {
-  let due = [];
-  v.probeDue = function () { due = Threads.prototype.probeDue.call(this); return due; };
-  try { draw(v, cx); } finally { delete v.probeDue; }
-  // The timers due before the next frame run, as Herdr runs them between frames (a scroll
-  // asked 16 or 48 ms on); the frame marks they would clear are cleared.
-  if (drawBetweenAsks) {
-    const first = cx.timers.filter((x) => x.ms <= 120).sort((a, b) => a.ms - b.ms);
-    cx.timers = cx.timers.filter((x) => x.ms > 120);
-    for (const [k, x] of first.entries()) { x.fn(cx); if (first[k + 1]?.ms !== x.ms) draw(v, cx); }
-  }
+  // Every draw of the frame asks the probe for parts (each ask spends one of a part's tries):
+  // all are answered, a part's last ask winning.
+  const due = new Map();
+  v.probeDue = function () { const d = Threads.prototype.probeDue.call(this); for (const [p, sig] of d) due.set(p.key, [p, sig]); return d; };
+  try {
+    draw(v, cx);
+    // The timers due before the next frame (120 ms) run, as Herdr runs them between frames (a
+    // scroll asked 16 or 48 ms on), by a clock moved on to each due time: a timer a callback or
+    // a draw sets joins at its own due time, and a draw follows each group due at once.
+    if (drawBetweenAsks) {
+      let t = 0;
+      let q = cx.timers.map((x) => ({ ...x, at: x.ms }));
+      cx.timers = [];
+      for (let k = 0; k < 50; k++) {
+        q.push(...cx.timers.map((x) => ({ ...x, at: t + x.ms })));
+        cx.timers = [];
+        const next = Math.min(...q.map((x) => x.at));
+        if (!(next <= 120)) break;
+        t = next;
+        const now = q.filter((x) => x.at === t);
+        q = q.filter((x) => x.at !== t);
+        for (const x of now) x.fn(cx);
+        draw(v, cx);
+      }
+      // Due after the frame: kept past 120 ms, so the flush below leaves them, as before.
+      cx.timers = [...cx.timers.map((x) => ({ ...x, ms: Math.max(121, t + x.ms) })), ...q.map(({ at, ...x }) => ({ ...x, ms: at }))];
+    }
+  } finally { delete v.probeDue; }
+  // The frame marks the timers would clear are cleared.
   cx.flush(120, 3);
   dropTimers(v, cx);
-  for (const [p, sig] of due) v.probed(p.key, sig, { width: 300, height: fakeH(p) * v.zoom() }, cx);
-  return due.length;
+  for (const [p, sig] of due.values()) v.probed(p.key, sig, { width: 300, height: fakeH(p) * v.zoom() }, cx);
+  return due.size;
 }
 // Frames until the rows are built and shaped, the probe has measured everything, and no
 // place is held; the frames each drew.
