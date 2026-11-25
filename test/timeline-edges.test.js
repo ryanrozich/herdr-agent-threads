@@ -459,3 +459,20 @@ test("timeline view: a press acts on the strip as it was drawn: past a growing b
     H.state.terminals[0].status = "idle";
   }
 });
+
+// ---- an older Herdr, which paints no path ----
+test("timeline view: where Herdr paints no path, every unfinished call in view is drawn: up to 40 of a layer with a torn end, the ones after with a straight one", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "3"));
+  // 50 made-up turns, each with an unfinished call that runs to its end.
+  const heads = doneTurns(50).map((h) => ({ ...h, steps: [row(h.key, 0, "you", 0, null), row(h.key, 1, "noresult", 10000, null, true), row(h.key, 2, "reply", 10000, 60000)] }));
+  b.ledger();
+  b.ledgerMemo.totals = { ...b.ledgerMemo.totals, heads };
+  const c = shownFrame(b, cb);
+  const spans = b.tlModel.L.spans.get("tools|tools|0");
+  expect([spans.length, spans.every((sp) => sp[2] === 1), spans.every((sp, k) => k === 0 || sp[0] - spans[k - 1][1] > 2)]).toEqual([50, true, true]);
+  // The layer's divs, by where each starts: the bars' own and a torn end's rows.
+  const lefts = own(c, "th-tl-tools-tools-0").filter((e) => e[0] === "left").map((e) => e[1]).slice(1);
+  const divs = spans.map(([a]) => lefts.filter((x) => Math.abs(x - a) <= 1.5).length);
+  expect(divs.filter((n) => n === 0).length).toBe(0);
+  expect([divs.slice(0, 40).every((n) => n > 1), divs.slice(40).every((n) => n === 1)]).toEqual([true, true]);
+});
