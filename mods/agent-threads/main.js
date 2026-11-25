@@ -12219,7 +12219,7 @@ export default class Threads extends View {
     const k = this.turnOfRow(this.tsel);
     const from = this.trajFrom;
     if (from?.follow && this.follow && (!this.tsel || k === from.turn)) { this.jumpLatest(true); return; }
-    if (k && this.findTurn(k)) { this.sel = k; this.follow = false; this.toBottom = false; this.scrollTo = { key: k, how: "center" }; }
+    if (k && this.findTurn(k)) { this.openWait = null; this.sel = k; this.follow = false; this.toBottom = false; this.scrollTo = { key: k, how: "center" }; }
   }
   // The newest turn the Chat shows, by the turns: right after a search closes, the rows can still be
   // the search's (buildStep).
