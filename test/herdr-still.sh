@@ -45,7 +45,7 @@ case $THEME in dark | light) ;; *) usage ;; esac
 W=${SIZE%x*}
 H=${SIZE#*x}
 case $W$H$PX in *[!0-9]*) usage ;; esac
-RIG=${HERDR_RIG:-$(pwd)/.herdr-rig}
+RIG=$(abs "${HERDR_RIG:-.herdr-rig}")
 APP=$RIG/bin/herdr-app
 X11=${HERDR_STILL_X11:-/tmp/.X11-unix}
 
@@ -144,7 +144,9 @@ while [ ! -e "$X11/X$n" ]; do
   sleep 0.5
 done
 
-(X="exec"; appenv "$APP") > "$R/app.log" 2>&1 &
+# In the run's folder: the core it starts names only the rig in its command line, but keeps the
+# folder it was started in, so the cleanup finds it by that.
+(cd "$R" && X="exec" && appenv "$APP") > "$R/app.log" 2>&1 &
 APID=$!
 i=0
 until h status > "$R/status.json" 2> /dev/null && [ -s "$R/status.json" ]; do
