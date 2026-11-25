@@ -2371,6 +2371,74 @@ test("a step's late ask after Home has moved the window is dropped, and the next
   H.listWindow = null;
 });
 
+// The list with #5 selected and a step down to #6 drawn: the timers of its landing, not run.
+async function stepped() {
+  const { v, cx } = await capSession(80);
+  const sim = simList(v);
+  v.command("search:#5", cx);
+  v.command("escape", cx);
+  settleList(v, cx, sim);
+  const asked = scrollsOf(v);
+  v.action("next", cx);
+  draw(v, cx);
+  const late = cx.timers;
+  cx.timers = [];
+  expect([v.sel, v.scrollTo, asked.splice(0), late.some((x) => x.ms === 16)]).toEqual(["0:6", null, [], true]);
+  return { v, cx, sim, asked, late };
+}
+test("a step's ask that the reader's wheel dropped is not owed: one key well after it asks for its turn once, 16 ms on, not in its frame", async () => {
+  const { v, cx, sim, asked, late } = await stepped();
+  sim.wheel(-200);
+  for (const x of late) x.fn(cx);
+  settleList(v, cx, sim);
+  expect(asked).toEqual([]);
+  v.action("next", cx);
+  draw(v, cx);
+  const inFrame = asked.splice(0);
+  cx.flush(48);
+  expect([v.sel, inFrame, asked]).toEqual(["0:7", [], ["0:7"]]);
+  H.listWindow = null;
+});
+test("the reader's wheel while a key is held: the repeat after it is a key alone, and the one after that, its ask dropped too, asks in its frame", async () => {
+  const { v, cx, sim, asked, late } = await stepped();
+  // The wheel and the repeat after it, both before the step's ask 16 ms on.
+  sim.wheel(-40);
+  v.action("next", cx);
+  draw(v, cx);
+  const after = [v.sel, asked.splice(0)];
+  const own = cx.timers;
+  cx.timers = [];
+  for (const x of late) x.fn(cx);
+  expect(asked).toEqual([]);
+  v.action("next", cx);
+  draw(v, cx);
+  const then = [v.sel, asked.splice(0)];
+  for (const x of own) x.fn(cx);
+  expect(asked).toEqual([]);
+  cx.flush(48);
+  expect([after, then, asked]).toEqual([["0:7", []], ["0:8", ["0:8"]], ["0:8"]]);
+  H.listWindow = null;
+});
+test("a step's ask dropped for the list's end, held while rows reshape, is not owed: a step from there asks for its turn 16 ms on, not in its frame", async () => {
+  const { v, cx, asked, late } = await stepped();
+  Object.defineProperty(v, "shapeLeft", { get: () => 5, set() {}, configurable: true });
+  v.jumpLatest(true);
+  draw(v, cx);
+  expect([v.toBottom, v.sel]).toEqual([true, "0:80"]);
+  for (const x of late) x.fn(cx);
+  expect(asked).toEqual([]);
+  // The end never landed: the rows are laid out, and the step up from it does.
+  v.action("prev", cx);
+  delete v.shapeLeft;
+  v.shapeLeft = 0;
+  cx.timers = [];
+  draw(v, cx);
+  expect([v.sel, v.toBottom, v.scrollTo, asked.splice(0)]).toEqual(["0:79", false, null, []]);
+  cx.flush(48);
+  expect(asked).toEqual(["0:79"]);
+  H.listWindow = null;
+});
+
 test("latest's own ask 16 ms after the end is taken is dropped by a newer jump: #20 from there stays on screen", async () => {
   const { v, cx } = await capSession(150, SMALL);
   const sim = simList(v);
