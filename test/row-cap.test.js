@@ -2362,7 +2362,7 @@ test("a step's late ask after Home has moved the window is dropped, and the next
   H.listWindow = null;
 });
 
-// The list with #5 selected and a step down to #6 drawn: the timers of its landing, not run.
+// The list with #5 selected and a step down to #6 drawn: the timers of its landing still to come.
 async function stepped() {
   const { v, cx } = await capSession(80);
   const sim = simList(v);
@@ -3638,6 +3638,19 @@ const PENDING = {
       turn.answeredIn = was;
     },
   },
+  // Answered together with a later turn: that turn opens, and its reply lands at the top.
+  "Go to that reply, answered together": {
+    go: (v) => {
+      const turn = v.findTurn("0:148");
+      const was = turn.answeredBy;
+      turn.answeredBy = 5;
+      v.goToAnswer(turn);
+      turn.answeredBy = was;
+      expect([v.scrollTo.key, v.scrollTo.how]).toEqual(["md:0:5:0", "land"]);
+    },
+    at: () => "md:0:5:0",
+    sel: "0:5",
+  },
   "Show earlier": { go: (v) => { v.showMore(false); }, at: (v) => v.scrollTo.key },
   // 100 closed turns past a cap of 60 items, in no window: the newest 59 under the note.
   "a press on the cut's note": { n: 100, cap: { max: 60 }, go: (v) => { v.capMore("capped"); }, at: (v) => v.scrollTo.key, sel: "0:100" },
@@ -3663,8 +3676,12 @@ async function backAtEnd(n, cap) {
 // The frames after a jump, each drawn between its asks as Herdr draws them, until all is settled.
 function jumpFrames(v, cx, sim) {
   H.drawBetweenAsks = true;
-  for (let k = 0; k < 8; k++) probeFrame(v, cx);
-  settleList(v, cx, sim);
+  try {
+    for (let k = 0; k < 8; k++) probeFrame(v, cx);
+    settleList(v, cx, sim);
+  } finally {
+    H.drawBetweenAsks = false;
+  }
 }
 for (const [name, { n = 150, cap = SMALL, go, at = () => "0:5", sel = null }] of Object.entries(PENDING)) {
   test(`the end brought on screen by a wheel and, before the next frame, ${name}: the list ends at the place it went to, and does not follow`, async () => {
