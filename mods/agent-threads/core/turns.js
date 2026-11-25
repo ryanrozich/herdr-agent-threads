@@ -834,6 +834,11 @@ export function reply(turn) {
   if (!turn.finals?.length) return turn.after.join("\n\n").trim();
   return [...turn.finals.map((x) => x.t), ...(turn.after.marked ? turn.after : [])].join("\n\n").trim();
 }
+// Whether a row has an answer its harness marked. Before the row ends, only such a text is known
+// to be the reply: one with no mark can be a note before the next call.
+export function answered(turn) {
+  return Boolean(turn.finals?.length || turn.after?.marked);
+}
 // Whether a row has a reply, without joining it.
 export function hasReply(turn) {
   return Boolean(turn.finals?.length || turn.after?.length);

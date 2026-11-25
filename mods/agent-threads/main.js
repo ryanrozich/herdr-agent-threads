@@ -68,7 +68,7 @@ import {
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
-  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, readCap, replaced, reply, hasReply, updatesText, stats, segments, threadMatches, remarkSenders, ruleSender, typedTurn, RULE_TEXT,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, readCap, replaced, reply, hasReply, answered, updatesText, stats, segments, threadMatches, remarkSenders, ruleSender, typedTurn, RULE_TEXT,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount, turnSums, sumsStats,
   noteSkip, skipNote,
 } from "./core/turns.js";
@@ -4798,7 +4798,7 @@ export default class Threads extends View {
     if (turn.shapeKey == null && (this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return this.blankShape(); }
     const q = this.filterText();
     const P = this.prefs;
-    const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
+    const why = turn.interrupted && !answered(turn) ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
     const key = `${Math.round(this.width)}|${P.textSize}|${this.chars()}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}|${turn.agent ? 1 : 0}|${this.sendersVer}`;
     const fast = { key, look, p: turn.prompt.length, t: text.length, live, tools: turn.tools, int: Boolean(turn.interrupted), by: turn.answeredBy, inn: turn.answeredIn, img: turn.images?.length ?? 0, ag: Boolean(turn.agent), sv: this.sendersVer };
     if (turn.shapeKey === key) { turn.shapeFast = fast; this.keepShape(turn); return turn.shapeMemo; }
@@ -4980,7 +4980,7 @@ export default class Threads extends View {
 
   // A compact pin's lines (ui.js pinRowShape) at the pane width, kept on the turn like shape().
   pinShape(turn, live = false) {
-    const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
+    const why = turn.interrupted && !answered(turn) ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
     const text = live ? "" : this.replyText(turn);
     const key = `${Math.round(this.width)}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredIn}|${turn.errors.length}`;
     if (turn.pinShapeKey === key) return turn.pinShapeMemo;
