@@ -12422,7 +12422,8 @@ export default class Threads extends View {
   // A layer of filled bars, each span [x0, x1] px of a strip cw px wide (a torn one [x0, x1, 1],
   // timeline.js tornPoints), top px down the lanes and h px tall: one painted path where Herdr
   // has one (its points in % of the layer), else at most 60 divs, and a torn end as its rows
-  // of whole px (a 12 px bar is 7 divs) for up to 40 of them. The path is kept by the layer's
+  // of whole px (a 12 px bar is 7 divs) for up to 40 of them, the ones after them plain bars
+  // among the 60. The path is kept by the layer's
   // id while its spans, width, height and colour stay the same (timeline.js tlPathOf, tlKeep):
   // building it was most of the strip's paint time.
   rectLayer(spans, color, id, cw, top, h) {
@@ -12436,9 +12437,14 @@ export default class Threads extends View {
       } catch { this.tlKeep?.delete(id); /* the divs below */ }
     }
     const inView = spans.filter(([a, z]) => z > 0 && a < cw);
-    const plain = inView.filter((sp) => !sp[2] || sp[1] > cw).map(([a, z]) => [Math.max(0, a), Math.min(cw, z)]);
+    const plain = [];
+    const tears = [];
+    for (const sp of inView) {
+      if (sp[2] && sp[1] <= cw && tears.length < 40) tears.push(sp);
+      else plain.push([Math.max(0, sp[0]), Math.min(cw, sp[1])]);
+    }
     const few = plain.length > 60 ? coarse(plain.map(([a, z]) => [a / cw, z / cw]), 60).map(([a, z]) => [a * cw, z * cw]) : plain;
-    const torn = inView.filter((sp) => sp[2] && sp[1] <= cw).slice(0, 40).flatMap(([a, z]) => polyRows(tornPoints(a, z, h), h).filter((r) => r.x1 > 0));
+    const torn = tears.flatMap(([a, z]) => polyRows(tornPoints(a, z, h), h).filter((r) => r.x1 > 0));
     return div().id(id).absolute().left(0).top(top).w(cw).h(h)
       .children(few.map(([a, z]) => div().absolute().top(0).h_full().left(a).w(Math.max(1, z - a)).rounded(1).bg(color)))
       .children(torn.map((r) => div().absolute().top(r.y).h(r.h).left(Math.max(0, r.x0)).w(Math.max(0.5, r.x1 - Math.max(0, r.x0))).bg(color)));
