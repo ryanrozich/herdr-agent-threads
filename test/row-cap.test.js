@@ -4312,3 +4312,44 @@ test("a press's open in its 300 ms, followed again by a wheel to the end, into t
   jumpFrames(v, cx, sim);
   expect({ ...endsAt(v, sim), open: v.open.has(key) }).toEqual({ ...atEnd(), open: false });
 }, 30000);
+
+// The newest turn the way in goes by (newestTurn) is the newest the Chat lists, in whatever session.
+const peerTurn = (...rest) => {
+  const ts = new Date(Date.UTC(2026, 10, 1, 10)).toISOString();
+  return [{ k: "p", o: "peer", t: '<teammate-message teammate_id="helper-a" color="blue" summary="x">Done here</teammate-message>', ts }, ...rest.map((e) => ({ ...e, ts }))];
+};
+const ENDED = { k: "d", ms: 200 };
+const NEWEST_IS = {
+  "an ended agent message with no reply, hidden, after the newest turn the Chat lists": { events: peerTurn(ENDED), sel: NEWEST, done: true },
+  "an agent message's turn still open, hidden once it ends, the newest the Chat lists": { events: peerTurn(), sel: "0:151", done: false },
+  "an ended agent message with a reply of its own, agent messages hidden, the newest the Chat lists": { events: peerTurn({ k: "t", t: "The check is done." }, ENDED), sel: "0:151", done: true },
+  "an ended agent message with no reply, agent messages shown, the newest the Chat lists": { events: peerTurn(ENDED), sel: "0:151", done: true, agentTurns: true },
+};
+for (const [what, { events, sel, done, agentTurns = false }] of Object.entries(NEWEST_IS)) {
+  test(`followed into the Trajectory with ${what}, and back without a step: the Chat is at its end and follows`, async () => {
+    const { v, cx, came } = await narrowChat(false);
+    v.prefs = { ...v.prefs, agentTurns };
+    await came(events);
+    trajFrames(v, cx);
+    const last = v.current().turns.at(-1);
+    expect([last.n, last.agent, last.done, v.sel, v.follow]).toEqual([151, true, done, sel, true]);
+    v.openTraj();
+    trajFrames(v, cx);
+    v.leaveTraj();
+    expect(asksBack(v)).toEqual(toEnd(sel));
+  }, 30000);
+}
+test("followed into the Trajectory with a new session with no turns after a clear, and back without a step: the Chat is at its end and follows", async () => {
+  const { v, cx, s, came } = await narrowChat(false);
+  const file = s.file.replace(/[^/]*$/, "next.jsonl");
+  const found = v.pinnedResult();
+  v.pinnedResult = () => ({ ...found, id: "00000000-0000-4000-8000-00000000000b", file });
+  state.terminals[0].turn = "next";
+  await came([], file);
+  trajFrames(v, cx);
+  expect([v.sessions.length, v.current().turns.length, v.sel, v.follow]).toEqual([2, 0, NEWEST, true]);
+  v.openTraj();
+  trajFrames(v, cx);
+  v.leaveTraj();
+  expect(asksBack(v)).toEqual(toEnd());
+}, 30000);

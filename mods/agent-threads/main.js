@@ -12201,8 +12201,8 @@ export default class Threads extends View {
     this.tsel = this.sel && this.findTurn(this.sel) ? this.sel : null;
     this.tscrolled = false;
     this.tscrollTo = this.tsel;
-    // What the way back goes by (leaveTraj): whether the reader followed on the newest turn now (the
-    // one the Trajectory shows selected when nothing is), and the turn it opens on.
+    // What the way back goes by (leaveTraj): whether the reader followed on the newest turn now, and the turn it opens
+    // on: with nothing selected the Chat's newest, though the Trajectory shows a hidden agent turn after it as selected.
     const newest = this.newestTurn();
     this.trajFrom = { follow: this.follow && (!this.tsel || this.tsel === newest), turn: this.tsel ?? newest };
   }
