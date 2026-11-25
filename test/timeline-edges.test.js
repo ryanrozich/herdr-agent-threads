@@ -8,7 +8,8 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as TL from "../mods/agent-threads/timeline.js";
-import { LEDGER_KINDS, trajInks } from "../mods/agent-threads/ledger.js";
+import { newSession, apply } from "../mods/agent-threads/core/turns.js";
+import { LEDGER_KINDS, headParts, ledgerTurn, trajInks } from "../mods/agent-threads/ledger.js";
 import { fixture, frame, H, handlerAfterId, makeCx, pane, settle, setup, theme, Threads, unsliced, until } from "./render-harness.js";
 
 setup();
@@ -686,13 +687,13 @@ test("timeline view: a pick still being looked for, with no session yet: the str
 
 // Every frame until no build of the rows or of the strip is left, the clock 3 ms on at each look:
 // what it drew (the strip's headings, or the words it waits with), the placings and the whole
-// layouts begun in it, and whether it left a build of the strip.
+// layouts begun in it, and whether it left a build of the strip. A slice of the rows is ms long:
+// about 20 turns at 60, every turn at 1e9.
 const LAYING = "Laying out the timeline…";
-function countedFrames(b, cb) {
+function countedFrames(b, cb, ms = 60) {
   rowAsks(cb);
   buildAsks(cb);
-  // About 20 turns a slice of the rows.
-  b.buildMax = () => 60;
+  b.buildMax = () => ms;
   const seen = [];
   for (let k = 0; k < 600; k++) {
     const m = { ...TL.TL_MADE };
@@ -747,6 +748,140 @@ test("timeline view: a first read with the Trajectory open, its last rows built 
   builtOverDraws(b, cb, countedFrames(b, cb));
 }, 60000);
 
+// The rows of the turns before a clear are kept, so a short session after it has its rows in the
+// draw that ends the read's wait: no draw waits for the rows alone.
+test("timeline view: a new session after a clear held midway in its read, its rows then built in one draw: no draw waits for the rows alone, and the strip is built from nothing over draws", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "300"));
+  shownFrame(b, cb);
+  expect(b.tlModel.heads.length).toBeGreaterThan(300);
+  const file = fixture("--extra", "12");
+  const hold = heldRead(file);
+  H.extractHook = hold.hook;
+  b.adopt({ kind: "found", id: "made-up-second", file, live: true }, cb);
+  await hold.mid(b);
+  for (let k = 0; k < 3; k++) expect([oneFrame(b, cb), b.tlModel ?? null, b.tlJob ?? null]).toEqual([READ_WAIT, null, null]);
+  hold.open();
+  await settle(b);
+  const seen = countedFrames(b, cb, 1e9);
+  const heads = b.ledgerMemo.totals.heads;
+  const draws = seen.map(([x, ...n]) => [told(x, [[heads, "its strip"]]), ...n]);
+  expect(draws.length).toBeGreaterThan(2);
+  expect(draws).toEqual(draws.map((_, i) => (i === draws.length - 1 ? ["its strip", 0, 0, false] : i ? [LAYING, 0, 0, true] : [LAYING, 1, 1, true])));
+  sameStrip(b.tlModel, TL.timelineModel(null, heads, b.tlModel.cw, "clock", Date.now(), null));
+  wholeStrip(b, cb);
+}, 60000);
+
+test("timeline view: the debug report counts no turns while the strip waits, for the read and for the rows, and the strip's own once it is drawn", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "30"));
+  shownFrame(b, cb);
+  const counted = () => {
+    const { shown, waiting, turns, drawn, spans, layers, labels, cw } = b.trajReport().timeline;
+    return { shown, waiting, turns, drawn, spans, layers, labels, cw };
+  };
+  const none = { shown: true, waiting: true, turns: 0, drawn: 0, spans: 0, layers: 0, labels: 0, cw: null };
+  expect(counted()).toMatchObject({ shown: true, waiting: false, turns: b.current().turns.length });
+  const file = fixture("--extra", "40");
+  const hold = heldRead(file);
+  H.extractHook = hold.hook;
+  b.pick({ path: file }, cb);
+  await hold.mid(b);
+  expect([oneFrame(b, cb), b.unread(), counted()]).toEqual([READ_WAIT, true, none]);
+  oneTurnASlice(b);
+  hold.open();
+  await settle(b);
+  expect([oneFrame(b, cb), b.unread(), counted()]).toEqual([READ_WAIT, false, none]);
+  expect(b.ledgerJob ?? null).not.toBe(null);
+  b.buildMax = () => 1e9;
+  shownFrame(b, cb);
+  const now = counted();
+  expect([now.shown, now.waiting, now.turns, now.drawn > 0, now.spans > 0, now.layers > 0, now.labels > 0, now.cw]).toEqual([true, false, b.current().turns.length, true, true, true, true, b.tlModel.cw]);
+}, 30000);
+
+// ---- a press between the pane's change and its next frame ----
+// A call on the strip of frame c (the last drawn) whose bar a press gets, the first there is: its
+// row's key, and that press through the frame's own handler.
+function callOn(b, c) {
+  const M = b.tlModel;
+  const down = handlerAfterId(c, "th-tl-lanes", "on_mouse_down");
+  for (let ti = 0; ti < M.heads.length; ti++) {
+    for (const [i, r] of M.heads[ti].steps.entries()) {
+      if (LEDGER_KINDS[r.lk]?.lane !== "tools") continue;
+      const box = TL.tlBar(M.L, M.heads, ti, i, M.nowMs);
+      if (!box) continue;
+      const x = (box.x0 + box.x1) / 2;
+      // 11 px down the lane a full bar and a half-height one are both drawn.
+      if (TL.timelineHit(M.L, M.heads, x, "tools", M.nowMs, 11)?.key !== r.key) continue;
+      const y = 2 * TL.TL_LANE + 11;
+      return { key: r.key, press: (cb) => down({ local_position: { x, y }, position: { x, y } }, cb) };
+    }
+  }
+  throw new Error("no call on the strip");
+}
+// What that press selects and scrolls to, with nothing selected before it.
+function pressed(b, cb, on) {
+  b.tsel = null;
+  b.tscrollTo = null;
+  on.press(cb);
+  return [b.tsel ?? null, b.tscrollTo ?? null];
+}
+const whenRead = (b, was) => until(() => !b.reading && !b.resolving && b.current()?.loaded && b.current().turns !== was, "the read to end");
+for (const [what, change] of [
+  ["another transcript picked and read", async (b, cb) => { b.pick({ path: fixture("--extra", "4") }, cb); await settle(b); }],
+  ["another transcript picked, read in part", async (b, cb, was) => {
+    const file = fixture("--extra", "40");
+    const hold = heldRead(file);
+    H.extractHook = hold.hook;
+    b.pick({ path: file }, cb);
+    await hold.mid(b);
+    expect(b.current().turns.length).toBeGreaterThan(5);
+    return async () => { hold.open(); await whenRead(b, was); };
+  }],
+  ["the transcript replaced by a shorter one and read again", async (b, cb, was, file) => {
+    writeLines(file, linesOf(fixture("--extra", "3")));
+    b.read(cb);
+    await whenRead(b, was);
+  }],
+]) {
+  for (const [how, ms] of [["in the press", 1e9], ["over draws", -1]]) {
+    test(`timeline view: ${what}, its rows built ${how}: a press on the strip of the frame before it selects nothing; on the next strip drawn a press selects its call`, async () => {
+      const file = fixture("--extra", "6");
+      const { b, cb } = await dockPane(file);
+      const on = callOn(b, shownFrame(b, cb));
+      expect(pressed(b, cb, on)).toEqual([on.key, on.key]);
+      const was = b.current().turns;
+      const then = await change(b, cb, was, file);
+      expect(b.current().turns === was).toBe(false);
+      // The new turns have a row of that key too, so the key alone names one of them.
+      const [si, n] = b.turnOfRow(on.key).split(":").map(Number);
+      expect([si, Boolean(b.current().turns[n - 1])]).toEqual([0, true]);
+      b.buildMax = () => ms;
+      expect(pressed(b, cb, on)).toEqual([null, null]);
+      b.buildMax = () => 1e9;
+      await then?.();
+      const next = callOn(b, shownFrame(b, cb));
+      expect(b.tlModel.heads === b.ledger().totals.heads).toBe(true);
+      expect(pressed(b, cb, next)).toEqual([next.key, next.key]);
+    }, 30000);
+  }
+}
+
+for (const [how, ms] of [["in the press", 1e9], ["over draws", -1]]) {
+  test(`timeline view: a session that grows by turns, its rows built ${how}: a press on the strip of the frame before selects the call it did`, async () => {
+    const file = fixture("--extra", "30");
+    const { b, cb, lines } = await wholeThen(file, Math.floor(linesOf(file).length / 2));
+    const on = callOn(b, frame(b, cb));
+    expect(pressed(b, cb, on)).toEqual([on.key, on.key]);
+    const was = b.current().turns;
+    const n = was.length;
+    writeLines(file, lines);
+    b.read(cb);
+    await until(() => !b.reading, "the read to end");
+    expect([b.current().turns === was, was.length > n]).toEqual([true, true]);
+    b.buildMax = () => ms;
+    expect(pressed(b, cb, on)).toEqual([on.key, on.key]);
+  }, 30000);
+}
+
 // ---- the last turn's bars over the turns before ----
 // A session of n turns drawn as one span a lane each, under 2 px, but the first, so long that
 // it takes the rest of the strip, and the last, px wide, its steps rows(key, ms long). Up to
@@ -769,6 +904,79 @@ function narrowLast(n, px, rows) {
   return heads;
 }
 const withLast = (heads, steps) => [...heads.slice(0, -1), { ...heads.at(-1), steps }];
+
+// ---- the words beside the last turn's number ----
+const said = (M) => M.L.labels.map((l) => [l.text, l.total]);
+// The draw of heads after the model prev: the model, and the placings, whole layouts and layouts of
+// the last turn alone it made.
+function after(prev, heads, now = T0) {
+  const m = { ...TL.TL_MADE };
+  const M = TL.timelineModel(prev, heads, CW, "clock", now, null);
+  return { M, made: [TL.TL_MADE.geo - m.geo, TL.TL_MADE.layout - m.layout, TL.TL_MADE.tail - m.tail] };
+}
+
+test("timeline tail: a wide last turn with no start time that starts or stops running, its places kept: the words beside its number are a whole layout's, and kept while it neither starts nor stops", () => {
+  const last = { ...doneTurn(1), t0: null };
+  const off = [doneTurn(0), last];
+  const on = [off[0], { ...last, going: true }];
+  expect([said(whole(off)), said(whole(on))]).toEqual([[["1", "1m 00s"], ["2", "1m 00s"]], [["1", "1m 00s"], ["2", "running"]]]);
+  let M = whole(off);
+  for (const heads of [on, off, on]) {
+    const a = after(M, heads);
+    // With no start time there is no room for the running turn, so nothing is placed again.
+    expect([a.made, a.M.geo === M.geo, a.M.geo.room]).toEqual([[0, 0, 1], true, 0]);
+    expect(said(a.M)).toEqual(said(whole(heads)));
+    expect(a.M.L.labels).toEqual(whole(heads).L.labels);
+    M = a.M;
+  }
+  // An event that moves nothing: a new heading, running as before.
+  const a = after(M, [off[0], { ...on[1], steps: on[1].steps.map((r) => ({ ...r })) }]);
+  expect([a.made, a.M.L.labels === M.L.labels]).toEqual([[0, 0, 1], true]);
+});
+
+// A session whose prompts carry ts, or no time at all, and no other time (an agent that writes none,
+// its transcript opened after it was written): turns of a prompt, a call and a reply, the last open.
+function timeless(ts) {
+  const s = newSession("made-up", "made-up");
+  const prompt = (t) => ({ k: "p", o: "human", t, ...(ts ? { ts } : {}) });
+  for (const e of [prompt("one"), { k: "u", n: "Shell" }, { k: "t", t: "Done." }, { k: "d" }, prompt("two"), { k: "u", n: "Shell" }, { k: "t", t: "Fixed." }]) apply(s, e);
+  const head = (i, live) => ledgerTurn(s, s.turns[i], 0, live, { ends: false }).head;
+  return { s, head, first: head(0, false) };
+}
+
+test("timeline tail: a turn of a session with no times that ends with no new step, or is taken up again: the last number says running while it runs and not after", () => {
+  const { s, head, first } = timeless(null);
+  const on = [first, head(1, true)];
+  apply(s, { k: "d" });
+  const off = [first, head(1, false)];
+  expect([on[1].t0, on[1].steps.length, off[1].steps.length]).toEqual([null, 3, 3]);
+  let M = whole(on);
+  expect(said(M).at(-1)).toEqual(["2", "running"]);
+  for (const [heads, running] of [[off, false], [on, true], [off, false]]) {
+    const a = after(M, heads);
+    expect(a.made).toEqual([0, 0, 1]);
+    expect([said(a.M).at(-1)[1] === "running", said(a.M)]).toEqual([running, said(whole(heads))]);
+    M = a.M;
+  }
+});
+
+test("timeline number: a turn with no length recorded has no length beside its number, as its heading says no times; one with a length has it", () => {
+  for (const ts of [null, "2026-11-01T09:00:00Z"]) {
+    const { s, head, first } = timeless(ts);
+    apply(s, { k: "d" });
+    const heads = [first, head(1, false)];
+    const M = whole(heads);
+    expect(heads.map((h) => headParts(h).total)).toEqual(["no times", "no times"]);
+    // Each is wide enough for one (TL_NUM_LEN).
+    expect(M.L.labels.every((l) => l.tw >= TL.TL_NUM_LEN)).toBe(true);
+    expect(said(M)).toEqual([["1", null], ["2", null]]);
+    // The selected turn's number, added at draw time, the same.
+    expect(TL.tlNumbers({ ...M.L, labels: [] }, heads, 1).map((l) => [l.text, l.total])).toEqual([["2", null]]);
+  }
+  // A short one that is recorded: 50 ms, alone on the strip.
+  const short = { ...doneTurn(0), total: 50, span: 50 };
+  expect(said(whole([short]))).toEqual([["1", "<0.1s"]]);
+});
 
 test("timeline tail: only the last turn laid out again gives the spans a whole layout gives, where its bars reach back over the spans before it: an unfinished call that comes, ends or stays, in a turn 2 to 6 px wide", () => {
   let reached = 0;

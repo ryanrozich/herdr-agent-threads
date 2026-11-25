@@ -401,12 +401,17 @@ test("timeline view: every turn number and tick the model gives is drawn, not th
     H.rec = null;
     return c;
   };
-  // 85 turns on a 2,530 px strip: each over 24 px wide, so each has its number.
+  // 85 turns on a 2,530 px strip: each over 24 px wide, so each has its number, and none a tick.
   let c = view(made(85));
   let T = b.tlModel.L;
   expect(T.labels.length).toBeGreaterThan(80);
   expect(words(own(c, "th-tl-labels")).length).toBe(T.labels.length);
-  expect(words(own(c, "th-tl-ticks")).length).toBe(T.ticks.length);
+  expect([T.ticks.length, words(own(c, "th-tl-ticks")).length]).toEqual([0, 0]);
+  // 4 turns: each over 120 px wide, so each has ticks.
+  c = view(made(4));
+  T = b.tlModel.L;
+  expect(T.ticks.length).toBeGreaterThan(4);
+  expect(words(own(c, "th-tl-ticks"))).toEqual(T.ticks.map((k) => k.text));
   // 400: a fail mark for nearly every turn, more than 120.
   c = view(made(400));
   T = b.tlModel.L;
@@ -619,6 +624,8 @@ test("timeline view: a hidden strip keeps no model: b, the four-row rule or a na
   const before = { ...TL.TL_MADE };
   b.key(keyEv("b"), cb);
   c = frame(b, cb);
+  // The frames after it while its build from nothing goes on (as in shownFrame).
+  for (let k = 0; k < 50 && b.tlJob; k++) c = frame(b, cb);
   expect(ids(c)).toContain("th-tl-lanes");
   expect(b.tlModel).not.toBe(null);
   expect([TL.TL_MADE.geo - before.geo, TL.TL_MADE.layout - before.layout]).toEqual([1, 1]);
