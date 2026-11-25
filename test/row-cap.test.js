@@ -1846,13 +1846,13 @@ function expectOutsideRight(v) {
   expect(o.newer).toBe(turnsText(o.fresh.later, "later"));
   return o.fresh;
 }
-// A session of n short turns where every seventh (3, 10, 17, ...), or those peerAt names, is a
-// made-up teammate's message, over days of perDay turns.
-async function agentSession(n, cap, perDay = 1000, peerAt = (i) => i % 7 === 3) {
+// A session of n short turns where every seventh (3, 10, 17, ...) is a made-up teammate's
+// message, over days of perDay turns.
+async function agentSession(n, cap, perDay = 1000) {
   const ev = [];
   for (let i = 0; i < n; i++) {
     const ts = new Date(Date.UTC(2026, 10, 1 + Math.floor(i / perDay), 9, 0, 0) + i * 1000).toISOString();
-    const peer = peerAt(i);
+    const peer = i % 7 === 3;
     ev.push({ k: "p", o: peer ? "peer" : "human", t: peer ? `<teammate-message teammate_id="helper-a" color="blue" summary="check">Check ${i} done.</teammate-message>` : `Prompt ${i}: check order ${i}.`, ts }, { k: "t", t: `Reply ${i}: the order is fine.` }, { k: "d", ts });
   }
   const r = await scripted(ev);
@@ -2423,10 +2423,10 @@ test("a card opened and closed above the window, and one inside it, keep the cou
   }
 });
 
-test("a build that keeps fewer rows than it changes is not noted: past an older window's end, the turns are counted afresh, and right", async () => {
-  // Teammates' messages from the 81st turn on: the agent messages toggle keeps the rows before
-  // them, the window's among them, and builds the rest again in other numbers.
-  const { v, cx } = await agentSession(150, SMALL, 1000, (i) => i >= 80 && i % 2 === 0);
+test("a build that adds more rows than it keeps is not noted: past an older window's end, the turns are counted afresh, and right; with one turn more it is, and none is read", async () => {
+  const { v, cx, s } = await capSession(100, SMALL);
+  // No clock: every row is shaped in the draw that needs it (shapeMax).
+  v.shapeBudget = Infinity;
   v.jumpLatest(true);
   frames(v, cx);
   v.action("first", cx);
@@ -2436,28 +2436,32 @@ test("a build that keeps fewer rows than it changes is not noted: past an older 
   v.rowsKey = null;
   frames(v, cx);
   const n = memoReads(v);
-  for (let way = 0; way < 2; way++) {
+  expectOutsideRight(v);
+  const add = async (from, count) => {
     const before = expectOutsideRight(v);
     const was = v.allRows();
     const ver = v.baseVer ?? 0;
     const z = v.win.at.z;
     n.outside = 0;
-    v.action("agents", cx);
+    await addCapTurns(s, from, count);
     frames(v, cx);
     const reads = n.outside;
     const now = v.allRows();
     let K = 0;
     while (K < was.length && K < now.length && now[K] === was[K]) K++;
-    // The window's end is among the rows kept, so a note would carry its count; the change reads
-    // more rows than it keeps.
-    expect([v.win.at.a, v.win.at.z, v.baseVer ?? 0]).toEqual([0, z, ver]);
-    expect(K).toBeGreaterThanOrEqual(z);
-    expect(now.length + was.length - 2 * K).toBeGreaterThan(K);
-    // No note: the changes since are not known, and every row past the window is read.
-    expect(v.rowsSince(was, ver)).toBe(null);
-    expect(reads).toBeGreaterThanOrEqual(now.length - z);
-    expect(expectOutsideRight(v)).toEqual(before);
-  }
+    const changed = now.length + was.length - 2 * K;
+    // The window stays, its end is among the rows kept (so a note would carry its count), and
+    // no splice has changed the rows' version.
+    expect([v.win.at.a, v.win.at.z, v.baseVer ?? 0, K >= z]).toEqual([0, z, ver, true]);
+    expect(expectOutsideRight(v)).toEqual({ earlier: 0, later: before.later + count });
+    return { more: changed > K, known: v.rowsSince(was, ver) !== null, reads, past: now.length - z };
+  };
+  const one = await add(100, 1);
+  expect([one.more, one.known, one.reads]).toEqual([false, true, 0]);
+  // 300 turns at once, as when more of a session is read than the pane has: the rows changed
+  // are more than those kept, so the change is not known, and every row past the window is read.
+  const many = await add(101, 300);
+  expect([many.more, many.known, many.reads >= many.past]).toEqual([true, false, true]);
 });
 
 // Rows of made-up kinds over a fixed seed, with day bands, turns and a turn's other rows.
