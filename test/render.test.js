@@ -21031,3 +21031,34 @@ test("the agent message counts follow a session's read ending: a running agent t
   expect(after).toEqual(fresh);
   expect(fresh).not.toEqual(before);
 });
+
+// ---- work the agent starts on its own: the trigger names the row (TRD-164) ------------------
+
+test("Chat shows trigger labels and answers without injected prompts", async () => {
+  const { v, cx, s } = await scripted([
+    { k: "p", o: "human", t: "Check the build.", ts: at(0) },
+    { k: "t", t: "Build passed.", f: 1, id: "m1", ts: at(1) },
+    { k: "d", ms: 1000, ts: at(2) },
+    { k: "p", o: "loop", ts: at(3) },
+    { k: "u", n: "Read", ts: at(4) },
+  ]);
+  const { apply, reply } = await import("../mods/agent-threads/core/turns.js");
+  const { kindWords } = await import("../mods/agent-threads/ui.js");
+  // Every autonomous trigger's label: a goal task, a loop tick, unattributed background work.
+  expect([kindWords({ kind: "goal" }), kindWords({ kind: "loop" }), kindWords({ kind: "background" })])
+    .toEqual(["Codex goal", "Loop tick", "Background agent"]);
+  // Before its answer: the completed turn keeps its reply, the tick's row is the live one.
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2"]);
+  expect(reply(s.turns[0])).toBe("Build passed.");
+  expect(s.turns[1].sender).toEqual({ kind: "loop" });
+  expect(s.turns[1].prompt).toBe("");
+  // Its answer arrives: the row shows it, and no injected prompt text ever does.
+  apply(s, { k: "t", t: "Tests passed.", f: 1, id: "m2", ts: at(5) });
+  apply(s, { k: "d", ms: 2000, ts: at(6) });
+  draw(v, cx);
+  expect(reply(s.turns[1])).toBe("Tests passed.");
+  // The label a row draws where the prompt would be, and never the injected text.
+  expect(senderLabel(s.turns[1].sender, 400)).toBe("Loop tick");
+  expect(senderLabel(s.turns[1].sender, 240)).toBe("Loop tick");
+  expect(s.turns[1].prompt).toBe("");
+});
