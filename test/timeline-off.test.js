@@ -970,6 +970,21 @@ test("timeline build: no step touches more than 1,024 bars and span entries toge
   }
 }, 120000);
 
+// The steps of a build of heads that touch no row: the first run of them after the rows begin
+// (len), and the longest other run (outside).
+function quietSteps(heads) {
+  const { per } = touchedSteps(heads, 1440, T0 + 1e10);
+  const runs = [];
+  per.forEach((read, j) => {
+    if (read) return;
+    if (j && !per[j - 1]) runs[runs.length - 1].len++;
+    else runs.push({ from: j, len: 1 });
+  });
+  const first = per.findIndex((read) => read > 0);
+  const at = runs.findIndex((r) => r.from > first);
+  return { len: at >= 0 ? runs[at].len : 0, outside: Math.max(0, ...runs.filter((_r, j) => j !== at).map((r) => r.len)) };
+}
+
 // A turn's tracks worked out apart from the code: its calls sorted by start, the one listed first
 // at equal starts, and each on the second track when it starts before the first track's last
 // call ends.
@@ -1014,18 +1029,14 @@ test("timeline tracks in the build: a turn of calls out of the clock's order, wi
       // the rows are read: the sort reads only its keys, the calls' starts, so its steps touch no
       // row. It moves n entries a pass, at TL_BUILD_BARS a step, less the part of one step it
       // shares with the rows read before it. No other run in the build is as long.
-      const { per } = touchedSteps([h, doneTurn(1)], 1440, T0 + 1e10);
-      const runs = [];
-      per.forEach((read, j) => {
-        if (read) return;
-        if (j && !per[j - 1]) runs[runs.length - 1].len++;
-        else runs.push({ from: j, len: 1 });
-      });
-      const first = per.findIndex((read) => read > 0);
-      const at = runs.findIndex((r) => r.from > first);
+      const { len, outside } = quietSteps([h, doneTurn(1)]);
       const bound = Math.floor((n * passes) / TL.TL_BUILD_BARS) - 1;
-      const outside = Math.max(0, ...runs.filter((_r, j) => j !== at).map((r) => r.len));
-      expect([n, at >= 0 && runs[at].len >= bound, outside < bound]).toEqual([n, true, true]);
+      expect([n, len >= bound, outside < bound]).toEqual([n, true, true]);
+      // And no longer than that work at TL_BUILD_BARS a step: 36,000 entries are 35 whole steps
+      // and 160 entries over, and those go in a step that reads a row (the rows before the sort,
+      // or the calls placed on their tracks after it). A sort that counts more than it moves, or
+      // moves more, takes more steps.
+      expect([n, len <= Math.floor((n * passes) / TL.TL_BUILD_BARS)]).toEqual([n, true]);
     }
   }
 });
@@ -1086,4 +1097,12 @@ test("timeline failure marks in the build: a turn of 4,000 failed calls whose ce
   expect(odd.k - even.k).toBeGreaterThanOrEqual(Math.floor((n * Math.ceil(Math.log2(n))) / TL.TL_BUILD_BARS) - 2);
   // The spacing of the marks is counted too: 4,000 marks, at 1,024 a step.
   expect(even.k - plain.k).toBeGreaterThanOrEqual(Math.floor(n / TL.TL_BUILD_BARS));
+  // And no more than that is counted. The sort and the spacing read no row, and the rows of the
+  // next turn follow them in the step they end in, so their run of steps that touch no row is at
+  // most their work at 1,024 a step: 48,000 entries and 4,000 marks, 50 whole steps; with the
+  // marks in order the 4,000 alone, 3; with no mark, none.
+  const sorted = n * Math.ceil(Math.log2(n));
+  expect(quietSteps(session(true)).len).toBeLessThanOrEqual(Math.floor((sorted + n) / TL.TL_BUILD_BARS));
+  expect(quietSteps(session(false)).len).toBeLessThanOrEqual(Math.floor(n / TL.TL_BUILD_BARS));
+  expect(quietSteps(session(false, "tool")).len).toBe(0);
 });
