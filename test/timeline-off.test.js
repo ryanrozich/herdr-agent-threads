@@ -667,6 +667,88 @@ test("timeline view: a stop inside a step of the build from nothing: that frame 
   sameStrip(M, TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null));
 });
 
+// ---- a stop as the strip's build asks for its next draw ----
+// A build left to later draws asks for the next one: the frame marks the ask (tlNext), then asks
+// for the 0 ms timer that clears the mark and draws. Herdr's stop falls at any call, so it can
+// come between the two, or just after the timer is registered, and the timers the stopped render
+// asked for may be lost. A mark left set with no timer never asked again, and on a pane that is
+// still the build stopped there, the line that says it is being laid out kept. The stop is an
+// error thrown from the timer call whose callback clears the mark (found by its source, which the
+// transpiler may give as !1) and caught out of the draw, with renderOpen set again: Herdr's stop
+// runs no catch and no finally (test/stop-calls.test.js).
+const STOP = new Error("stopped by Herdr");
+// A Trajectory pane of 2,000 turns, its strip's build from nothing begun in a draw that stop
+// (null: none) ends, then draws only as the pane asks for them, on one clock: performance.now
+// and the timers, a look at it 3 ms later and a frame 16 ms. The pane's own 120 ms watch asks for
+// the draw after a stopped one. It ends once the pane has been still for 3 s of that clock, or
+// after 400 draws. stop: { after } thrown once the timer is registered, not before;
+// { lost } the timers the stopped render asked for are lost. No field of the pane is set by hand
+// but renderOpen, as the stop leaves it.
+async function askedBuild(stop) {
+  const { b, cb } = await dockPane(fixture("--extra", "2000"), 1440);
+  b.debug = false;
+  const real = performance.now;
+  const after = cb.timer.after;
+  let t = real.call(performance);
+  let asked = 0;
+  let armed = false;
+  const out = { stops: 0, begun: false, draws: 0, full: false };
+  // Timers asked for before run on the clock too.
+  for (const x of cb.timers) x.due = t + x.ms;
+  performance.now = () => (t += 3);
+  cb.timer.after = (ms, fn) => {
+    const at = armed && /this\.tlNext = (false|!1)/.test(String(fn));
+    if (at) armed = false;
+    if (at && !stop.after) throw STOP;
+    cb.timers.push({ ms, fn, due: t + ms });
+    if (at) throw STOP;
+  };
+  try {
+    handlerAfterId(frame(b, cb), "th-traj-listbox", "on_size_change")({ width: 1440, height: 400 }, cb);
+    const had = [...cb.timers];
+    cb.notifyHook = () => { asked++; };
+    armed = stop != null;
+    try { b.render(cb); } catch (e) { if (e !== STOP) throw e; b.renderOpen = true; out.stops++; }
+    if (stop?.lost) cb.timers = had;
+    out.begun = Boolean(b.tlJob) && b.tlJob.total > 0;
+    let watch = t + 120;
+    for (let still = 0; still < 3000 && out.draws < 400; still += 16) {
+      t += 16;
+      asked = 0;
+      const due = cb.timers.filter((x) => x.due <= t);
+      cb.timers = cb.timers.filter((x) => x.due > t);
+      for (const x of due) x.fn(cb);
+      if (t >= watch) { watch = t + 120; for (const e of cb.everies) if (e.ms === 120) e.fn(cb); }
+      if (asked) { b.render(cb); out.draws++; still = -16; }
+    }
+    out.full = out.draws >= 400;
+  } finally {
+    performance.now = real;
+    cb.timer.after = after;
+    cb.notifyHook = null;
+  }
+  return { b, out: [out.stops, out.begun, out.full, Boolean(b.tlJob), Boolean(b.tlNext), Boolean(b.tlModel), out.draws > 3] };
+}
+test("timeline view: the strip's build left to later draws asks for each of them on a still pane and ends, with no stop (the control of the stopped ones)", async () => {
+  const { b, out } = await askedBuild(null);
+  expect(out).toEqual([0, true, false, false, false, true, true]);
+  const M = b.tlModel;
+  sameStrip(M, TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null));
+}, 60000);
+for (const [what, stop] of [
+  ["before its timer is asked for, the render's other timers kept", { after: false, lost: false }],
+  ["before its timer is asked for, the render's other timers lost", { after: false, lost: true }],
+  ["after its timer is asked for, that timer lost", { after: true, lost: true }],
+  ["after its timer is asked for, that timer kept", { after: true, lost: false }],
+]) {
+  test(`timeline view: a render Herdr stops as the strip's build asks for its next draw, ${what}: the watch draw asks again on a still pane and the build ends`, async () => {
+    const { b, out } = await askedBuild(stop);
+    expect(out).toEqual([1, true, false, false, false, true, true]);
+    const M = b.tlModel;
+    sameStrip(M, TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null));
+  }, 60000);
+}
+
 // The clock held still: no budget runs out.
 function stillNow(f) {
   const real = performance.now;
