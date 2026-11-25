@@ -1792,6 +1792,8 @@ describe("the pane", () => {
     s.partial = true;
     rewindTail(s);
     for (const e of events.slice(0, at)) apply(s, e);
+    // An editor asked for before the read: made at its end, not from the half answer.
+    v.codeDue.add("0:1");
     expect([reply(s.turns[0]), shown(), cuts, v.code.get("0:1:1")?.st === st]).toEqual(["First answer.", ["First answer."], 0, true]);
     for (const e of events.slice(at)) apply(s, e);
     s.partial = false;
