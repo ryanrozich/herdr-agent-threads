@@ -2145,12 +2145,20 @@ function endsOf(v) {
   return n;
 }
 
+// The reader's drag on the bar to the end of the rows the list holds, as no wheel event comes.
+function toListEnd(v, cx, sim) {
+  sim.off = 1e9;
+  probeFrame(v, cx);
+  expect(sim.last().end).toBe(true);
+}
+
 test("a landing's late asks are dropped by a newer landing in the same rows, and ask for their row by key after the rows above it change", async () => {
   const { v, cx } = await capSession(150, SMALL);
   const sim = simList(v);
   const turns = (f) => shownIn(v, f).filter((k) => /^0:\d+$/.test(k));
   v.action("first", cx);
   settleList(v, cx, sim);
+  toListEnd(v, cx, sim);
   // A rail jump to #30 inside the oldest window, then, before its late asks, #5 there: the
   // same rows, so #30's row is still in them, and only the newer landing drops its asks.
   v.railJump("0:30", cx);
@@ -2176,6 +2184,9 @@ test("a landing's late asks are dropped by a newer landing in the same rows, and
     const sim = simList(v);
     v.action("first", cx);
     settleList(v, cx, sim);
+    // From the window's end, with the card to open above the view: seen from its start, the card
+    // would push #40 out of the window, and the asks would find no row.
+    toListEnd(v, cx, sim);
     v.railJump("0:40", cx);
     draw(v, cx);
     const late = cx.timers;
@@ -2237,8 +2248,12 @@ test("a press's open 300 ms on is dropped by a jump made in the wait: a rail cli
   cx.timers = cx.timers.filter((x) => x.ms !== 300);
   expect(wait.length).toBe(1);
   // In the wait, a rail click on #25, in the same window, so #10 is still in its rows: it lands.
-  v.railJump("0:25", cx);
-  settleList(v, cx, sim);
+  // It comes down from turn 1, so its two asks (16 and 48 ms on) need the draw between them.
+  H.drawBetweenAsks = true;
+  try {
+    v.railJump("0:25", cx);
+    settleList(v, cx, sim);
+  } finally { H.drawBetweenAsks = false; }
   expect(turns(sim.last())).toContain("0:25");
   // #10 is still in the window's rows, so only the jump keeps it from opening there.
   expect(v.rows().some((r) => r.key === "0:10")).toBe(true);
@@ -2857,9 +2872,13 @@ test("a press's open 300 ms on is dropped by a jump from outside the list made i
     const wait = cx.timers.filter((x) => x.ms === 300);
     cx.timers = cx.timers.filter((x) => x.ms !== 300);
     expect(wait.length).toBe(1);
-    // In the wait, #30, in the same window, so #10 is still in its rows.
-    go(v, cx);
-    settleList(v, cx, sim);
+    // In the wait, #30, in the same window, so #10 is still in its rows. A pin's return comes
+    // down from turn 1, so its two asks (16 and 48 ms on) need the draw between them.
+    H.drawBetweenAsks = true;
+    try {
+      go(v, cx);
+      settleList(v, cx, sim);
+    } finally { H.drawBetweenAsks = false; }
     expect(turns(sim.last())).toContain("0:30");
     expect(v.rows().some((r) => r.key === "0:10")).toBe(true);
     for (const x of wait) x.fn(cx);
