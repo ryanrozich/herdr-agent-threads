@@ -12308,7 +12308,8 @@ export default class Threads extends View {
   // keys of its rows name the rows drawn. OpenCode's unfinished turn is cut back at each read and
   // read again as another object: its heading's key then names the same turn where its time and
   // words are the same, and a step's is not known to. Past STEP_MAX steps a call can take the place
-  // of words (turns.js addStep, stepsDropped), so no step of a turn answers after that either.
+  // of words (turns.js addStep, stepsDropped): no step of that turn answers until its rows are made
+  // again.
   tlSame(h, step) {
     const t = this.sessions[h.si]?.turns[h.n - 1];
     if (step) return t === h.turn && (t.stepsDropped ?? 0) === h.dropped;
@@ -12380,6 +12381,11 @@ export default class Threads extends View {
     if (M.L !== prev?.L) this.tlMs = Math.round((now() - t0) * 10) / 10;
     const T = M.L;
     const { whole } = L;
+    // Under the key sheet or the settings card the lanes take no press: Herdr gives them one made
+    // on the card, or beside it. As this frame is drawn and not at the press, as the settings card
+    // closes on a press beside it (on_mouse_down_out) before the lanes get that press. Not covered():
+    // the opening draws nothing over the Trajectory, and only the Chat's draws end it.
+    const under = this.settingsOpen || this.keysOpen;
     const laneH = 3 * TL_LANE;
     const color = (ink) => (ink === "sub" ? alpha(inks.sub, SUB_ALPHA) : inks[ink] ?? t.dim);
     const at = (k) => { const [lane, ink, track] = k.split("|"); return { lane, ink, half: track === "1", li: TL_LANES.indexOf(lane), track }; };
@@ -12422,7 +12428,7 @@ export default class Threads extends View {
         .h(TL_AX + TL_TK + TL_LT + laneH).rounded(3).bg(alpha(t.foreground, 0.06))
       : null;
     const lanes = div().id("th-tl-lanes").relative().w(cw).h(laneH).cursor_pointer().overflow_hidden()
-      .on_mouse_down("left", (e, cx) => this.tlPress(e, cx, M, whole))
+      .on_mouse_down("left", (e, cx) => { if (!under) this.tlPress(e, cx, M, whole); })
       .children(kids);
     // Every number, tick and fail mark the layout gives: the numbers every k-th turn's, apart by
     // their own width and a gap, the ticks 62 and the fail marks 6 px apart, so there are never
