@@ -265,7 +265,9 @@ function* geoGen(heads, cw, scale, nowMs) {
 export const TL_SLACK = 1;
 // The places G with only the last turn's length changed to wall (room: the running room, 0
 // when it does not run), at G's px per ms: the other turns keep their places, so the strip
-// may end up to TL_SLACK px short of or past its edge. Null when that turn's end would move
+// may end up to TL_SLACK px short of or past G's end. G may be kept places already, so over
+// the running turn's room steps the end is under 3 TL_SLACK px off a whole placing
+// (timelineModel). Null when that turn's end would move
 // more than TL_SLACK px at zoom z (unless any: then by any amount, the strip ending short of
 // its edge or past it), or G has no px per ms (by steps, or no turn has a length).
 // was: the last heading G was placed for.
@@ -922,9 +924,12 @@ export function timelineModel(prev, heads, cw, scale = "clock", nowMs = Date.now
   // At Fit that holds from a few hundred turns, where placing them all again costs most.
   // Working off, or on with that end moving more than TL_SLACK px, the places are kept by any
   // amount and marked the old scale's (stale): tlDraw places the turns again with the bounded
-  // build over the draws after this one. So working off is exact once that build ends, and
-  // while a turn runs its end may be TL_SLACK px off. The running turn's room growing a step
-  // (liveRoom) is the same: only that turn's length changes.
+  // build over the draws after this one. So working off is exact once that build ends. The
+  // running turn's room growing a step (liveRoom) is the same: only that turn's length changes.
+  // A step kept unmarked moves the end TL_SLACK px or less from the places kept, not from a
+  // whole placing, and the room grows TL_ROOM_GROW (1.5) times a step, so the steps kept since
+  // the last whole placing add up to under three times the last (1 + 2/3 + 4/9 + ...): while a
+  // turn runs its end may be under 3 TL_SLACK px off a whole placing.
   const vk = view ? `${view.z}|${view.x0}` : "";
   const was = only ? prev.heads[n - 1] : null;
   let regeo = null;
