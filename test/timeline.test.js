@@ -224,14 +224,14 @@ test("timeline running turn: only the last turn moves; the strip keeps its place
   const hitX = (m2.grow[0].x0 + m2.grow[0].x1) / 2;
   expect(timelineHit(m2.L, heads, hitX, "tools", at + 1000).key).toBe(stepsOf(live).find((it) => it.open).key);
   expect(timelineHit(m2.L, heads, tx + T.w - 1, "tools", at + 1000).key).toBe(live.key);
-  // Past its room the turn gets the next one: its length changes and the others keep their
-  // places, marked the old scale's, so tlDraw places them again by the bounded build
-  // (test/timeline-off.test.js).
+  // Past its room the turn gets the next one, and its end moves more than 1 px. A session this
+  // small (1,024 steps or fewer) is placed again whole at once; a larger one keeps its places,
+  // marked the old scale's, for the bounded build (test/timeline-off.test.js).
   expect(tx + T.w - 1 - m2.grow[0].x1).toBeGreaterThan(4);
   const m3 = timelineModel(m2, heads, 600, "clock", live.t0 + 16000);
   expect(m3.geo).not.toBe(m2.geo);
-  expect([m3.geo.room, m3.geo.stale]).toEqual([22500, true]);
-  expect(m3.geo.turns.slice(0, 2)).toEqual(m2.geo.turns.slice(0, 2));
+  expect([m3.geo.room, m3.geo.stale]).toEqual([22500, undefined]);
+  expect(m3.geo).toEqual(timelineGeo(heads, 600, "clock", live.t0 + 16000));
   expect(timelineModel(m3, heads, 600, "clock", live.t0 + 17000).geo).toBe(m3.geo);
   // A new width, scale or session places it again; a turn that is not running never grows.
   // A new heads array alone is not a new session: ledger() makes one at every change, with
@@ -798,12 +798,13 @@ test("timeline model: with events arriving in the running turn, the finished tur
     expect(drawn(m2.L)).toEqual(drawn(timelineLayout(m2.heads, cw, "clock", at(32), null)));
     // Past its room (a step of liveRoom): nothing placed, the running turn laid out alone, the
     // places kept; marked the old scale's for the bounded build (test/timeline-off.test.js)
-    // where its end moved more than 1 px, as working on.
+    // where its end moved more than 1 px, as working on. At 8 turns (1,024 steps or fewer) it is
+    // placed again whole at once instead.
     const b3 = { ...TL.TL_MADE };
     const m3 = timelineModel(m2, [...done, runningHead(n, 33, t0)], cw, "clock", t0 + 260000, null);
-    expect([TL.TL_MADE.geo - b3.geo, TL.TL_MADE.layout - b3.layout, TL.TL_MADE.tail - b3.tail]).toEqual([0, 0, 1]);
+    expect([n, TL.TL_MADE.geo - b3.geo, TL.TL_MADE.layout - b3.layout, TL.TL_MADE.tail - b3.tail]).toEqual([n, ...(n === 8 ? [1, 1, 0] : [0, 0, 1])]);
     const moved = Math.abs(m3.geo.turns[n - 1].w - m2.geo.turns[n - 1].w);
-    expect([n, m3.geo.room, m3.geo.stale, moved > 1]).toEqual([n, liveRoom(260000), n === 5600 ? undefined : true, n !== 5600]);
+    expect([n, m3.geo.room, m3.geo.stale, moved > 1]).toEqual([n, liveRoom(260000), n === 2000 ? true : undefined, n !== 5600]);
     // A finished heading that is new (another session, or the turn before the running one
     // just ended) places it again.
     const g1 = TL.TL_MADE.geo;
@@ -814,7 +815,7 @@ test("timeline model: with events arriving in the running turn, the finished tur
   }
 });
 
-test("timeline model: working on or off on the last turn alone places nothing in that frame: the finished turns keep their places and only the last is laid out; working off, or on with its end moved more than 1 px, marks the places the old scale's for the bounded build", () => {
+test("timeline model: working on or off on the last turn alone places nothing in that frame: the finished turns keep their places and only the last is laid out; working off, or on with its end moved more than 1 px, marks the places the old scale's for the bounded build, past 1,024 steps; at 3 turns either is placed again whole at once", () => {
   for (const [n, cw, kept] of [[2000, 1370, true], [5600, 1143, true], [3, 1370, false]]) {
     const done = strip(n - 1);
     const t0 = T0 + (n - 1) * 100000;
@@ -843,12 +844,13 @@ test("timeline model: working on or off on the last turn alone places nothing in
       for (let ti = 0; ti < n; ti++) expect(Math.abs(m1.geo.turns[ti].x - fresh.turns[ti].x)).toBeLessThanOrEqual(1);
       expect(m1.geo.stale).toBeUndefined();
     } else {
-      // Its end moves more than 1 px: the places are kept all the same, marked the old scale's;
-      // tlDraw places them again over the draws after (test/timeline-off.test.js).
+      // Its end moves more than 1 px on a session of 1,024 steps or fewer: placed again whole at
+      // once, nothing marked (test/timeline-off.test.js holds the edge, and past it the places
+      // kept and marked the old scale's).
       expect(moved).toBeGreaterThan(1);
-      expect(c1).toEqual({ geo: 0, layout: 0, tail: 1, tracks: wide(m1) });
-      expect(m1.geo.stale).toBe(true);
-      expect(m1.geo.turns.slice(0, -1).every((t, ti) => t === m0.geo.turns[ti])).toBe(true);
+      expect(c1).toEqual({ geo: 1, layout: 1, tail: 0, tracks: wide(m1) });
+      expect(m1.geo.stale).toBeUndefined();
+      expect(m1.geo).toEqual(fresh);
     }
     // The strip is the one a whole layout of those places makes: the running turn's bars grow.
     expect(drawn(m1.L)).toEqual(drawn(timelineLayout(m1.heads, cw, "clock", at, null, m1.geo)));
@@ -857,10 +859,17 @@ test("timeline model: working on or off on the last turn alone places nothing in
     before = { ...TL.TL_MADE };
     const m2 = timelineModel(m1, [...done, { ...fin }], cw, "clock", at, null);
     expect([m2.geo.room, m2.geo.live, m2.geo.walls[n - 1]]).toEqual([0, -1, run.span]);
-    // Placed nothing, and marked the old scale's either way, so the bounded build makes it exact.
-    expect(count(before)).toEqual({ geo: 0, layout: 0, tail: 1, tracks: wide(m2) });
-    expect(m2.geo.stale).toBe(true);
-    expect(m2.geo.turns.every((t, ti) => ti === n - 1 ? t.w === m0.geo.turns[ti].w : t === m0.geo.turns[ti])).toBe(true);
+    // Placed nothing, and marked the old scale's either way, so the bounded build makes it exact;
+    // at 3 turns placed again whole at once.
+    if (kept) {
+      expect(count(before)).toEqual({ geo: 0, layout: 0, tail: 1, tracks: wide(m2) });
+      expect(m2.geo.stale).toBe(true);
+      expect(m2.geo.turns.every((t, ti) => ti === n - 1 ? t.w === m0.geo.turns[ti].w : t === m0.geo.turns[ti])).toBe(true);
+    } else {
+      expect(count(before)).toEqual({ geo: 1, layout: 1, tail: 0, tracks: wide(m2) });
+      expect(m2.geo.stale).toBeUndefined();
+      expect(m2.geo).toEqual(timelineGeo(m2.heads, cw, "clock", at));
+    }
     expect(drawn(m2.L)).toEqual(drawn(timelineLayout(m2.heads, cw, "clock", at, null, m2.geo)));
   }
 });
