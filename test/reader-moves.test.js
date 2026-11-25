@@ -216,10 +216,11 @@ const HANDLERS = [
   ["on_click", /^th-traj-fail-(prev|next)$/, 0, PRESS],
   ["on_item_click", /^tr:N:N:N$/, 0, "item"],
   // From 540 px: its filter buttons, the timeline's button, and a press on the timeline's
-  // lanes, which selects a row as a press on the row does. They move nothing of the Chat's.
+  // lanes (24 px down, in the middle lane of their 48), which selects a row as a press on the
+  // row does. They move nothing of the Chat's.
   ["on_click", /^th-filter-(failed|user|input|model|tools)$/, 0, PRESS],
   ["on_click", /^th-traj-timeline$/, 0, PRESS],
-  ["on_mouse_down", /^th-tl-lanes$/, 0, { local_position: { x: 120, y: 50 } }],
+  ["on_mouse_down", /^th-tl-lanes$/, 0, { local_position: { x: 120, y: 24 } }],
   // The keys sheet: its close, its scrim and the sheet itself.
   ["on_click", /^th-keys(-close|-scrim)?$/, 0, PRESS],
   ["on_scroll_wheel", /^th-keys-scrim$/, 0, WHEEL],
