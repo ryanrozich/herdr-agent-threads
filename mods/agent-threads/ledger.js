@@ -401,6 +401,8 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
     interrupted: Boolean(tr.interrupted), agent: Boolean(turn.agent), stale, lastAt, reading,
     // Calls past what the reader keeps: their failures are not known, so the count is a floor.
     partial: cells.some((c) => c.kind === "more"),
+    // Its texts dropped past STEP_MAX when these rows were made (main.js tlSame).
+    dropped: turn.stepsDropped ?? 0,
     t0, span, cnt, steps: rows,
     // The keys of its failed calls and of the user's messages, for the session's lists.
     failKeys: rows.filter((r) => r.failed).map((r) => r.key), userKeys: rows.filter((r) => r.lk === "you").map((r) => r.key),
