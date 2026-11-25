@@ -2,6 +2,29 @@
 
 Newest first. Each release's full list of pull requests is in [CHANGELOG.md](../CHANGELOG.md).
 
+## 1.3.0
+
+Herdr stops a mod's draw when it runs past its time, and a draw stopped at the wrong point could leave the Chat wrong until you resized it or closed it. This release fixes the stops that were found. It needs the same Herdr and tools as 1.2.0.
+
+### The chat view
+
+- A tool call you open after a stopped draw shows its output again, and groups show their check and failed counts. Before, every call opened afterwards in that pane showed "Reading...", until the pane was closed and opened again.
+- Code blocks that arrive in an open card, and the output of calls you open, keep their colours after a stopped draw. Before, every later one in that pane drew as plain text, until the pane was closed and opened again.
+- Pasted images are decoded after a stopped draw. Before, tiles stayed empty and the review showed no image, until the pane was closed and opened again.
+- An open turn's interim texts and estimates fill in after a draw ran out of time. Before, they stayed as placeholders until something else rebuilt that turn.
+- A closed turn opens when you click it, and an open card closes, where a stopped draw had left either stuck. A resize or a fresh pane used to bring it back. A card you were opening appears, and one you were closing closes, where a stopped draw had left it stuck and another click did nothing.
+- A closed turn draws at its right height, with no gap under it and not over the turn below. The running turn no longer keeps a gap under it after the selection moves on or off it.
+- After a resize across a column step, the list keeps the turn you were reading at the top, where a stopped draw could jump it about ten turns.
+
+### Sender rules and panes
+
+- An open sender rule's count of the prompts it matches shows after a stopped draw, where it never did.
+- After you drag the pane's edge, the column takes its new width at once, where a stopped draw left it centred in a wider pane or cut off in a narrower one.
+
+### Known limits
+
+- A draw stopped while a long session opens can leave the pane blank, with no loading state, until the read's next step draws.
+
 ## 1.2.0
 
 Open a large session at its end in seconds, see the Trajectory in a pane of its own, step through search matches, and add sender rules. It needs the same Herdr and tools as 1.1.0. The Chat, the Trajectory and the Pinned column dragging and resizing together need Herdr 0.1.16 to 0.1.18; on any other version they keep the sizes and drags they had in 1.1.0.
