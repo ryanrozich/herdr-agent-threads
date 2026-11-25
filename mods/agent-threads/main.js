@@ -5642,8 +5642,7 @@ export default class Threads extends View {
       // none (stickCheck, busy), so a jump made since asked for it, and is the newer word.
       this.follow = true;
       this.unseen = false;
-      const keys = this.turnKeys(this.allRows());
-      if (keys.length) this.sel = keys[keys.length - 1];
+      this.selectNewest();
     }
   }
 
@@ -5653,11 +5652,7 @@ export default class Threads extends View {
     this.follow = true;
     this.stickStep = null;
     this.unseen = false;
-    const keys = this.turnKeys(this.allRows());
-    if ((select || !this.sel) && keys.length) this.sel = keys[keys.length - 1];
-    // The first rows build is still going over several frames (a long session, a slow
-    // machine), so there is no turn to select yet: its end selects the newest (latestAfterBuild).
-    else if ((select || !this.sel) && this.rowJob) this.latestDue = { sel: this.sel };
+    if (select || !this.sel) this.selectNewest();
     // Latest wins over a jump still to come: the end is held from the next frame, also while
     // the rows reshape, where a pending jump would keep it waiting (render, bottomHeld). A
     // render Herdr stopped does not ask for the jump again either (renderWant).
@@ -5665,7 +5660,15 @@ export default class Threads extends View {
     if (this.renderWant) this.renderWant.scrollTo = null;
     this.toBottom = true;
   }
-  // Selects the newest turn when the build that jumpLatest waited for is done, if the pane is
+  // Selects the newest turn of the rows there are. While rows are still being built over several
+  // frames (a long session, a slow machine) those are the rows before them, or none yet, and the
+  // build's end selects the newest (latestAfterBuild).
+  selectNewest() {
+    const keys = this.turnKeys(this.allRows());
+    if (keys.length) this.sel = keys[keys.length - 1];
+    if (this.rowJob) this.latestDue = { sel: this.sel };
+  }
+  // Selects the newest turn when the build that selectNewest found going is done, if the pane is
   // still following and nothing moved the selection meanwhile.
   latestAfterBuild() {
     const due = this.latestDue;
