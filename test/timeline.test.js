@@ -1152,3 +1152,120 @@ test("timeline seeded mixed turns: the failure marks keep both rules, and every 
   }
   expect([seen.x > 0, seen.own > 0, seen.deep > 100]).toEqual([true, true, true]);
 }, 120000);
+
+// The seeded sessions zoomed in, where a turn under 2 px at Fit can be drawn as bars and a
+// turn still under 2 px has its 1 px span run over the turns after it. The bars in px of the
+// view, as the press places them: each turn at x * z - x0, w * z wide.
+function viewBars(L, heads, cw) {
+  const all = [];
+  const turns = L.turns.map((t, ti) => {
+    const tx = t.x * L.z - L.x0;
+    const tw = t.w * L.z;
+    const narrow = tw < 2;
+    const bars = [];
+    if (tx > cw + 8 || tx + Math.max(tw, 1) < -8) return { narrow, tx, tw, bars };
+    const h = heads[ti];
+    const wall = L.geo.walls[ti];
+    const len = tlLen(h);
+    const tk = narrow ? null : L.tracks.has(h) ? L.tracks.get(h) : tlTracks(h);
+    for (let i = 0; i < len; i++) {
+      const st = tlStep(h, i, tk);
+      if (!st.sk) continue;
+      const r = (narrow ? 0 : st.track) + (st.ink === "failed" ? 2 : 0);
+      const b = narrow ? { x0: tx, x1: tx + Math.max(tw, 1) } : itemBox(st.a ?? Number.NaN, st.b ?? Number.NaN, (st.track ? TL_TRACK : 0) | (st.open ? TL_OPEN : 0) | (st.failed ? TL_FAILED : 0), i, tx, tw, wall, "clock", len);
+      if (!b) continue;
+      const bar = { ti, i, key: st.key, lane: st.lane, x0: b.x0, x1: b.x1, r, w: b.x1 - b.x0 };
+      bars.push(bar);
+      all.push(bar);
+    }
+    return { narrow, tx, tw, bars };
+  });
+  return { all, turns };
+}
+
+test("timeline seeded mixed turns, zoomed: every press gets the bar drawn on top there, at a thin span's exact drawn end too, and over a near bar of the turn under the press", () => {
+  const seen = { near: 0, end: 0 };
+  for (const [n, cw, seed, z] of [[5600, 1143, 11, 3.7], [2500, 1440, 5, 2.5], [20000, 1440, 3, 6], [1000, 1440, 3, 1]]) {
+    const heads = mixedSession(n, seed);
+    const G = timelineGeo(heads, cw, "clock");
+    const GT = G.turns;
+    // The views: the session's middle, and up to 12 spread over it, each centred on a turn drawn
+    // as bars, with a failed call, that the 1 px span of the turn under 2 px before it runs into.
+    const into = [];
+    for (let j = 0; j + 1 < GT.length; j++) {
+      const w = GT[j].w * z;
+      if (w < 2 && GT[j].x * z + Math.max(w, 1) > GT[j + 1].x * z && GT[j + 1].w * z >= 2 && heads[j + 1].cnt?.failed) into.push(j + 1);
+    }
+    const views = [0.5 * (G.total * z - cw)];
+    const k6 = Math.min(12, into.length);
+    for (let k = 0; k < k6; k++) views.push(GT[into[Math.floor((k * into.length) / k6)]].x * z - cw / 2);
+    for (const vx of views) {
+      const L = timelineLayout(heads, cw, "clock", T0 + 1e12, { z, x0: vx }, G);
+      expect([n, L.z]).toEqual([n, z]);
+      const T = L.turns;
+      const { all, turns } = viewBars(L, heads, cw);
+      const byPx = new Map();
+      for (const b of all) for (let p = Math.floor(b.x0) - 4; p <= Math.floor(b.x1) + 4; p++) { if (!byPx.has(p)) byPx.set(p, []); byPx.get(p).push(b); }
+      // The turn the press is in: found on the strip, then the nearer one past its drawn end.
+      const turnAt = (x) => {
+        const fx = (x + L.x0) / L.z;
+        let lo = 0;
+        let hi = T.length - 1;
+        while (lo < hi) { const m = (lo + hi + 1) >> 1; if (T[m].x <= fx) lo = m; else hi = m - 1; }
+        const end = T[lo].x + (T[lo].w * L.z < 2 ? Math.max(T[lo].w, 1 / L.z) : T[lo].w);
+        return fx > end && T[lo + 1] && T[lo + 1].x - fx < fx - end ? lo + 1 : lo;
+      };
+      const press = (x, lane) => {
+        if (!(x >= 0 && x < cw)) return null;
+        const D = turnAt(x);
+        const on = (byPx.get(Math.floor(x)) ?? []).filter((b) => b.lane === lane && b.x0 <= x && x <= b.x1);
+        const got = timelineHit(L, heads, x, lane, T0 + 1e12);
+        // The nearest bar of the turn the press is in, within 4 px, the first listed at equal distance.
+        let best = null;
+        for (const b of turns[D].bars) {
+          if (b.lane !== lane) continue;
+          const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
+          if (d < 4 && (!best || d < best.d)) best = { d, b };
+        }
+        if (!on.length) {
+          const want = { turn: heads[D].key, key: best ? best.b.key : heads[D].key };
+          if (got.turn !== want.turn || got.key !== want.key) expect([n, x, lane, got]).toEqual([n, x, lane, want]);
+          return null;
+        }
+        const top = on.reduce((m, b) => (b.r > m.r || (b.r === m.r && b.w < m.w) ? b : m));
+        const okBars = on.filter((b) => b.r === top.r && b.w === top.w);
+        if (!okBars.some((b) => b.key === got.key)) expect([n, x, lane, got.key]).toEqual([n, x, lane, okBars.map((b) => b.key)]);
+        // Every bar under the press is an earlier turn's span, and the turn the press is in has
+        // a bar near it, not under it, that the span drawn on top does not outrank. A look-back
+        // that let a span replace that near bar only by outranking it would answer the near bar.
+        if (on.every((b) => b.ti < D) && best && best.d > 0 && !(top.r > best.b.r || (top.r === best.b.r && top.w < best.b.w))) seen.near++;
+        return { D, okBars };
+      };
+      for (let x = 0; x < cw; x += 0.13) for (const lane of ["input", "model", "tools"]) press(x, lane);
+      for (let j = 1; j < T.length; j++) {
+        const t = turns[j];
+        const p = turns[j - 1];
+        if (!t.bars.length && !p.bars.length) continue;
+        // Inside the span of a turn under 2 px where it runs into a turn drawn as bars: 16 presses
+        // between the bars' turn's start and the span's end.
+        if (!t.narrow && p.narrow) {
+          const reach = p.tx + Math.max(p.tw, 1);
+          for (let k = 0; k < 16 && reach > t.tx; k++) for (const lane of ["input", "model", "tools"]) press(t.tx + ((reach - t.tx) * (k + 0.5)) / 16, lane);
+        }
+        // At the exact drawn end of each span of a turn under 2 px, where the span is still under
+        // the press. Where only spans that end at the press, of turns before the one the press is
+        // in, are drawn on top, a look-back that stopped at a span ending at the press misses them.
+        if (p.narrow && p.bars.length) {
+          const x = T[j - 1].x * L.z - L.x0 + Math.max(T[j - 1].w * L.z, 1);
+          for (const lane of new Set(p.bars.map((b) => b.lane))) {
+            const r = press(x, lane);
+            if (r?.okBars.every((b) => b.ti < r.D && b.x1 === x)) seen.end++;
+          }
+        }
+      }
+    }
+  }
+  // The sessions hold both cases: 77 presses over a near bar, at 17 turns, and 28,420 at a
+  // span's exact end.
+  expect([seen.near > 40, seen.end > 10000]).toEqual([true, true]);
+}, 120000);
