@@ -2207,6 +2207,35 @@ test("a landing's late asks are dropped by a newer landing in the same rows, and
   for (const d of opened.moved) expect(d).toBeGreaterThan(0);
 });
 
+// The list is the plain one, so a jump that waits asks for nothing while it waits (nothing is held).
+test("a landing's late asks are dropped while a newer jump waits for the rows to reshape: the view stays as it was until the newer turn lands", async () => {
+  for (const [name, go] of [["#30 in the search", (v, cx) => v.command("search:#30", cx)], ["a rail click on #30", (v, cx) => v.railJump("0:30", cx)]]) {
+    const { v, cx } = await capSession(80);
+    const sim = simList(v);
+    v.jumpLatest(true);
+    settleList(v, cx, sim);
+    go(v, cx);
+    draw(v, cx);
+    const late = cx.timers;
+    cx.timers = [];
+    expect([name, v.scrollTo, late.length > 0]).toEqual([name, null, true]);
+    // Before its asks, #5, while rows are left to reshape.
+    Object.defineProperty(v, "shapeLeft", { get: () => 5, set() {}, configurable: true });
+    v.command("search:#5", cx);
+    draw(v, cx);
+    const at = Math.round(sim.last().off);
+    const asked = scrollsOf(v);
+    for (const x of late) x.fn(cx);
+    draw(v, cx);
+    expect([name, asked, Math.round(sim.last().off), v.scrollTo?.key]).toEqual([name, [], at, "0:5"]);
+    delete v.shapeLeft;
+    v.shapeLeft = 0;
+    settleList(v, cx, sim);
+    expect([name, shownIn(v, sim.last()).includes("0:5")]).toEqual([name, true]);
+    H.listWindow = null;
+  }
+});
+
 test("latest's own ask 16 ms after the end is taken is dropped by a newer jump: #20 from there stays on screen", async () => {
   const { v, cx } = await capSession(150, SMALL);
   const sim = simList(v);
