@@ -12602,14 +12602,18 @@ export default class Threads extends View {
         const h = size.height / this.zoom();
         const slot = Boolean(this.tlSlot);
         const base = h + (slot ? TL_H : 0);
-        // A change under 1 px is taken only where it takes or gives the timeline its fourth row,
-        // and then not from a size measured with the timeline the other way to one with it this
-        // way: those two can differ by a fraction of a px of their own (the zoom's division), and
-        // taking that would show and hide it by turns.
+        // A change in base under 1 px is taken only where it takes or gives the timeline its
+        // fourth row, and not at the first size measured after the timeline came or went: base is
+        // worked out in two ways there, and a part of a px between them would show and hide it by
+        // turns.
         const last = this.tlSeen;
         this.tlSeen = { slot, base };
         const flips = last?.slot === slot && last.base !== base && this.tlFits(base) !== this.tlFits(this.tlBase);
-        if (flips || Math.abs(h - (this.tlistH ?? -9)) >= 1 || Math.abs(base - (this.tlBase ?? -9)) >= 1) { this.tlistH = h; this.tlBase = base; cx.notify(); }
+        const takes = flips || Math.abs(base - (this.tlBase ?? -9)) >= 1;
+        if (!takes && Math.abs(h - (this.tlistH ?? -9)) < 1) return;
+        this.tlistH = h;
+        if (takes) this.tlBase = base;
+        cx.notify();
       })
       .child(v_virtual_list("th-traj-list", shown.length, LEDGER_ROW, (j) => shown[j]?.key ?? `gone:${j}`,
         (range) => {
