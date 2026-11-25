@@ -1754,6 +1754,7 @@ describe("the pane", () => {
     // Another turn at that number (a file read again from its start), the selection where it was.
     const turn = v.findTurn(key);
     turn.prompt = "Another question";
+    turn.v = ++v.current().version;
     v.syncSel();
     expect([sent().key, sent().id === first, sent().id]).toEqual([key, false, turnId(v.current().turns, turn)]);
     // A turn not read yet is not sent until it is.
@@ -1792,16 +1793,84 @@ describe("the pane", () => {
     s.partial = true;
     rewindTail(s);
     for (const e of events.slice(0, at)) apply(s, e);
-    // An editor asked for before the read: made at its end, not from the half answer.
+    // An editor asked for before the read waits for its end: it is not made from the half answer.
+    const { makeCode } = Object.getPrototypeOf(v);
+    const made = [];
+    v.makeCode = function (k) { if (!this.midRead(k)) made.push(k); return makeCode.call(this, k); };
     v.codeDue.add("0:1");
     expect([reply(s.turns[0]), shown(), cuts, v.code.get("0:1:1")?.st === st]).toEqual(["First answer.", ["First answer."], 0, true]);
+    expect(made).toEqual([]);
     for (const e of events.slice(at)) apply(s, e);
     s.partial = false;
-    expect([shown(), cuts, v.code.get("0:1:1")?.st === st]).toEqual([["First answer."], 0, true]);
+    // At the end it is made, the same editor as its text is the same, and nothing waits.
+    expect([shown(), cuts, v.code.get("0:1:1")?.st === st, made, v.codeDue.size]).toEqual([["First answer."], 0, true, ["0:1"], 0]);
     // A read left half way in a session that is not the newest: its turn runs no more.
     v.sessions = [s, newSession("ses_0002demo", "other")];
     s.partial = true;
     expect(v.runs("0:1")).toBe(false);
+  });
+
+  // Red before its cure: the click makes the editors from the half answer and lets the one it
+  // lacks go.
+  test("OpenCode: a click that opens the running turn in the middle of a read makes no editor from the half answer", async () => {
+    const o = oc();
+    o.prompt("msg_u1", "Why does the cart test fail?", 0);
+    o.reply("msg_a1", "msg_u1", 100, "stop");
+    o.say("msg_a1", "First answer.");
+    o.reply("msg_a2", "msg_u1", 200, "stop");
+    o.say("msg_a2", "```js\nconst a = 1;\n```");
+    o.reply("msg_a3", "msg_u1", 300, null);
+    o.tool("msg_a3", "call_3");
+    const { v, cx } = await pane(claudeReplied().file());
+    const s = o.read();
+    s.loaded = true;
+    v.sessions = [s];
+    v.sel = null;
+    v.rowsKey = null;
+    state.terminals[0].status = "working";
+    settleRows(v, cx);
+    cx.flush(0);
+    const { st } = v.code.get("0:1:1");
+    const events = o.events();
+    const at = events.findIndex((e) => e.k === "t" && e.t.startsWith("```"));
+    s.partial = true;
+    rewindTail(s);
+    for (const e of events.slice(0, at)) apply(s, e);
+    v.toggle("0:1", cx);
+    expect([v.open.has("0:1"), v.code.get("0:1:1")?.st === st, v.codeDue.has("0:1")]).toEqual([true, true, true]);
+    for (const e of events.slice(at)) apply(s, e);
+    s.partial = false;
+    settleRows(v, cx);
+    cx.flush(0);
+    expect([v.code.get("0:1:1")?.st === st, v.codeDue.size]).toEqual([true, 0]);
+  });
+
+  // Red before its cure: each sync walks the session's turns for the id.
+  test("the selected turn's id is worked out again only when the selection or its session changes", async () => {
+    const t = claudeReplied("One.");
+    t.prompt("Next question");
+    t.say("m5", "Two.");
+    t.hooks();
+    const { v, cx } = await pane(t.file());
+    settleRows(v, cx);
+    state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+    state.shared["threads.trajByTerminal"] = { [v.terminal]: { pane: "p3" } };
+    const [key, other] = v.turnKeys(v.rows());
+    v.sel = key;
+    v.syncSel();
+    const { turnIdAt } = Object.getPrototypeOf(v);
+    let walks = 0;
+    v.turnIdAt = function (...a) { walks++; return turnIdAt.apply(this, a); };
+    // What each draw and the 1 s timer run, with the selection where it is.
+    for (let i = 0; i < 5; i++) v.syncSel();
+    const still = walks;
+    v.sel = other;
+    v.syncSel();
+    v.syncSel();
+    const moved = walks;
+    v.current().version++;
+    v.syncSel();
+    expect([still, moved, walks, state.shared["threads.turnSel"][v.terminal].key]).toEqual([0, 1, 2, other]);
   });
 
   // Red on the base: one row, opened to "No final reply." with the answer in the Worked part.

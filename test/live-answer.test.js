@@ -408,6 +408,25 @@ test("a running answer rewritten to a text of the same length shows the new one,
   expect([shown().includes("https://linear.example/ACME-34"), shown().includes("ACME-12")]).toEqual([true, false]);
 });
 
+// Red if the middle of a read kept a cut made under other link rules: the old links stay until
+// the read ends.
+test("link rules changed in the middle of a read cut the running answer again under them", async () => {
+  const { v, cx, s } = await live([PROMPT, call(), answer("See ACME-12."), call()]);
+  dropTimers(v, cx);
+  const shown = () => mine(v).filter((r) => r.kind === "md").map((r) => r.md).join("\n");
+  expect(shown()).toBe("See ACME-12.");
+  s.partial = true;
+  v.applyPrefs(JSON.stringify({ links: [{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.example/ACME-$1" }] }));
+  dropTimers(v, cx);
+  settleRows(v, cx);
+  v.sel = null;
+  expect(shown()).toContain("https://linear.example/ACME-12");
+  s.partial = false;
+  settleRows(v, cx);
+  v.sel = null;
+  expect(shown()).toContain("https://linear.example/ACME-12");
+});
+
 // Red at c37c64f3: no row says what is left out.
 test("an answer past what an open reply shows says how much is left out, with no Collapse", async () => {
   const { v, cx } = await live([PROMPT, call(), answer(long(2600)), call()]);
