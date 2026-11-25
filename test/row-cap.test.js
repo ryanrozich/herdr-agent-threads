@@ -2702,3 +2702,59 @@ test("a press's open 300 ms on is dropped by a jump from outside the list made i
     delete state.shared["threads.turnSel"];
   }
 });
+
+// A build that keeps the rows before its first new turn notes its change for the window's
+// memos (noteRows) once it has put its rows in, with the rows' key cleared until its record is
+// made. Herdr's stop falls at any call and runs no catch: the render is left open (renderOpen).
+// A stop in noteRows, before the note or just after it, ends as an unstopped run does: the
+// same rows, sizes and index, the same window and list, the same counts of turns outside the
+// window, which the drawn notes say, and the same turns built, the rows before the last mark
+// kept. The note was made before the record, with no key: a stop there left the new rows under
+// no key, and the next build was of every row. Over two days (a build keeps rows only then,
+// keptFrom), with a live event on the running turn.
+test("a build Herdr stops in noteRows, before or after its note, is followed by a build of every row that ends as an unstopped run does", async () => {
+  const STOP = new Error("stopped by Herdr");
+  const got = {};
+  for (const at of ["none", "before", "after"]) {
+    const { v, cx, s } = await runningSession(300, SMALL);
+    const { apply } = await import("../mods/agent-threads/core/turns.js");
+    v.jumpLatest(true);
+    frames(v, cx);
+    let built = 0;
+    const turnRows = v.turnRows;
+    v.turnRows = function (...a) { built++; return turnRows.apply(this, a); };
+    let armed = at !== "none";
+    let notes = 0;
+    const note = v.noteRows;
+    v.noteRows = function (...a) {
+      notes++;
+      if (armed && at === "before") { armed = false; throw STOP; }
+      const r = note.apply(this, a);
+      if (armed && at === "after") { armed = false; throw STOP; }
+      return r;
+    };
+    apply(s, { k: "t", t: "More: the order is still fine." });
+    built = 0;
+    let stops = 0;
+    for (let k = 0; k < 40; k++) {
+      try { draw(v, cx); } catch (e) { if (e !== STOP) throw e; stops++; v.renderOpen = true; }
+      cx.flush(150);
+    }
+    delete v.turnRows;
+    delete v.noteRows;
+    const index = v.baseRows.every((r, i) => v.baseIndex.get(r.key) === i) && v.baseIndex.size === v.baseRows.length;
+    got[at] = {
+      stops, noted: notes > 0, keyed: v.rowsKey != null, index,
+      rows: v.baseRows.map((r) => r.key), sizes: v.baseSizes.slice(), list: v.rows().map((r) => r.key),
+      win: [v.win.at?.a, v.win.at?.z], outside: expectOutsideRight(v),
+      // Turns built from the live event on: all 300 again when a build is of every row.
+      built,
+    };
+  }
+  const same = (x) => ({ keyed: x.keyed, index: x.index, rows: x.rows, sizes: x.sizes, list: x.list, win: x.win, outside: x.outside, built: x.built });
+  expect([got.none.stops, got.none.noted, got.before.stops, got.after.stops]).toEqual([0, true, 1, 1]);
+  expect(same(got.before)).toEqual(same(got.none));
+  expect(same(got.after)).toEqual(same(got.none));
+  expect(got.none.outside.earlier).toBeGreaterThan(0);
+  expect(got.none.built).toBeLessThan(300);
+}, 60000);
