@@ -3527,6 +3527,8 @@ export default class Threads extends View {
   runs(key) {
     const [si, n] = key.split(":").map(Number);
     const s = this.sessions[si];
+    // In the middle of a read an OpenCode turn is not there yet (rewindTail): as it was.
+    if (s?.partial) return true;
     return Boolean(s?.turns[n - 1]) && this.isLive(s, si, n - 1);
   }
   isLiveKey(key) { const i = this.baseIndex?.get(key); return i != null && Boolean(this.baseRows?.[i]?.live); }
@@ -5081,10 +5083,10 @@ export default class Threads extends View {
   }
 
   // The reply's rows: an open turn's, and (running) those of an answer given by a turn that still
-  // runs. Both have the same keys, so they stay in place, and measured, when the turn ends.
+  // runs. Both have the same keys, so an open turn's stay in place, and measured, when it ends.
   replyRows(item, text, out, { push = (row) => out.push(row), running = false } = {}) {
-    const { key, turn } = item;
-    const kept = running ? this.keptCut(key, turn, text) : null;
+    const { key } = item;
+    const kept = running ? this.keptCut(key, text) : null;
     const segs = kept ? kept.segs : segments(text);
     // Editors cannot be made while drawing: note the turn, and flushCode() makes them
     // on the next tick.
@@ -5155,12 +5157,12 @@ export default class Threads extends View {
     return { cut, left };
   }
   // A running turn's answer so far, cut: kept until the answer or the link rules change, since
-  // its rows are built again at each event. Out of time for this draw (as stepLinks), it is cut
-  // with no links, not kept, and cut again in a later draw.
-  keptCut(key, turn, text) {
+  // its rows are built again at each event, and by its text, since OpenCode's running turn is
+  // another object at each read. One is kept, until its turn runs no more (flushCode). Out of
+  // time for this draw (as stepLinks), it is cut with no links, not kept, and cut again later.
+  keptCut(key, text) {
     const ver = `${this.linksVer}|${this.links.length}|${this.repoSig()}|${this.remote.owner ?? ""}`;
-    this.cutOf ??= new WeakMap();
-    const known = this.cutOf.get(turn);
+    const known = this.cutKept;
     if (known?.ver === ver && known.text === text) return known;
     const segs = segments(text);
     if (this.links.length && (this.shapeSpent ?? 0) > this.shapeMax()) {
@@ -5169,8 +5171,8 @@ export default class Threads extends View {
       return { segs, ...this.cutReply(key, segs, true) };
     }
     const t0 = now();
-    const made = { text, ver, segs, ...this.cutReply(key, segs) };
-    this.cutOf.set(turn, made);
+    const made = { key, text, ver, segs, ...this.cutReply(key, segs) };
+    this.cutKept = made;
     this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
     return made;
   }
@@ -5755,7 +5757,9 @@ export default class Threads extends View {
   }
 
   flushCode(cx) {
-    // The editors of a running turn's answer go once it runs no more, unless the turn is open.
+    // The cut of a running turn's answer goes once it runs no more, and its editors with it,
+    // unless the turn is open.
+    if (this.cutKept && !this.runs(this.cutKept.key)) this.cutKept = null;
     for (const k of this.liveCode ?? []) if (!this.runs(k)) (this.codeDue ??= new Set()).add(k);
     if (!this.codeDue?.size || this.codeTick) return;
     // The timer is asked for before it is marked as asked for, as in flushCalls: a render Herdr
