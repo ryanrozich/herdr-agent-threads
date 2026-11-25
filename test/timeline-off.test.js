@@ -351,6 +351,52 @@ test("timeline working on, the room growing step after step for 16 days: the ste
   expect([most.n, most.gap, most.cw, most.d > 2.9 * TL.TL_SLACK]).toEqual([5600, 4000000, 1370, true]);
 });
 
+// A session of TL_BUILD_BARS steps or fewer is placed again whole in the frame where its
+// places would be marked the old scale's: a room step, working on and working off. n finished
+// turns of 4 steps each and a running turn of k steps; the room 16 days in, so each moves the
+// end far.
+function grownSession(n, k) {
+  const heads = [];
+  for (let i = 0; i < n; i++) heads.push(doneTurn(i));
+  const key = `0:${n}`;
+  const t0 = T0 + n * 100000;
+  const steps = [row(key, 0, "you", 0, null)];
+  for (let j = 1; j < k - 1; j++) steps.push(row(key, j, "tool", 1000 * j, 1000 * j + 500));
+  steps.push(row(key, k - 1, "reply", 50000, 60000));
+  const base = { kind: "trh", key, n: n + 1, t0, total: null, span: 60000, cnt: { steps: k, input: 1, model: 1, tools: k - 2, failed: 0, user: 1, agent: 0 }, steps };
+  return { on: [...heads, { ...base, going: true }], off: [...heads, { ...base, going: false, total: 60000 }], t0 };
+}
+
+test("timeline at its edge of 1,024 steps: a room step, working on and working off are placed again whole in that frame at 1,024 steps; at 1,025 the places are kept and marked the old scale's for the bounded build", () => {
+  for (const [k, whole] of [[4, true], [5, false]]) {
+    const { on, off, t0 } = grownSession(255, k);
+    const steps = on.reduce((a, h) => a + Math.max(1, TL.tlLen(h)), 0);
+    expect([k, steps]).toEqual([k, 1020 + k]);
+    const r0 = TL.liveRoom(16 * DAY);
+    const a = t0 + r0 - 1000;
+    const b = t0 + r0 + 1000;
+    const cases = [
+      // A room step: the same heads, the clock past the room.
+      ["step", TL.timelineModel(null, on, CW, "clock", a, null), on, b],
+      // Working on: the last heading new and running.
+      ["on", TL.timelineModel(null, off, CW, "clock", b, null), [...on.slice(0, -1), { ...on.at(-1) }], b],
+      // Working off: the last heading new and finished.
+      ["off", TL.timelineModel(null, on, CW, "clock", b, null), [...off.slice(0, -1), { ...off.at(-1) }], b],
+    ];
+    for (const [what, prev, heads, now] of cases) {
+      const m = made();
+      const M = TL.timelineModel(prev, heads, CW, "clock", now, null);
+      if (whole) {
+        expect([k, what, since(m), M.geo.stale]).toEqual([k, what, { geo: 1, layout: 1, tail: 0 }, undefined]);
+        sameStrip(M, TL.timelineModel(null, heads, CW, "clock", now, null));
+      } else {
+        expect([k, what, since(m), M.geo.stale]).toEqual([k, what, { geo: 0, layout: 0, tail: 1 }, true]);
+        expect(M.geo.turns.slice(0, -1).every((t, ti) => t === prev.geo.turns[ti])).toBe(true);
+      }
+    }
+  }
+});
+
 // ---- on the pane ----
 // A Trajectory pane docked along the bottom, w px wide, its rows built whole.
 async function dockPane(file, w) {
@@ -638,6 +684,54 @@ test("timeline view: the pane's width changing every frame while the working-off
     const M = b.tlModel;
     expect(M.cw).toBe(TL.tlStrip(1700));
     sameStrip(M, TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null));
+  } finally {
+    setSystemTime();
+    H.state.terminals[0].status = "idle";
+  }
+});
+
+// A pane on a made-up session of one short turn cut just after a call, so it is the running
+// turn and the only one, shown with the strip, Herdr saying working, the clock 1 s into the turn.
+async function soloPane(w = 1440) {
+  const file = fixture("--only", "1");
+  const lines = readFileSync(file, "utf8").split("\n").filter((l) => l && !l.includes('"isApiErrorMessage":true'));
+  writeFileSync(file, `${lines.slice(0, lines.findLastIndex((l) => l.includes('"tool_use"')) + 1).join("\n")}\n`);
+  const { b, cb } = await dockPane(file, w);
+  const c = frame(b, cb);
+  handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: w, height: 400 }, cb);
+  settleStrip(b, cb);
+  const { t0 } = b.ledger().totals.heads.at(-1);
+  setSystemTime(new Date(t0 + 1000));
+  H.state.terminals[0].status = "working";
+  b.ledgerMemo = null;
+  settleStrip(b, cb);
+  expect(b.tlModel.heads.length).toBe(1);
+  expect(b.tlModel.heads[0].going).toBe(true);
+  return { b, cb, t0 };
+}
+
+test("timeline view: a room step with only the running turn is placed again whole in that frame: nothing is marked, no build starts, and the turn and its growing bar are inside the strip", async () => {
+  try {
+    const { b, cb, t0 } = await soloPane();
+    const cw = TL.tlStrip(1440);
+    const r0 = b.tlModel.geo.room;
+    expect(b.tlModel.geo.stale).toBeUndefined();
+    const box0 = TL.tlBox(b.tlModel.L, 0);
+    expect(box0.x + box0.w).toBeCloseTo(cw, 6);
+    // 1 ms past its room: the room grows a step, and on the places kept its end would move half
+    // the strip, past the strip's end, the growing bar with it.
+    setSystemTime(new Date(t0 + r0 + 1));
+    const m = made();
+    const c = frame(b, cb);
+    const M = b.tlModel;
+    expect([M.geo.room, M.geo.stale, b.tlJob, since(m)]).toEqual([r0 * TL.TL_ROOM_GROW, undefined, null, { geo: 1, layout: 1, tail: 0 }]);
+    sameStrip(M, TL.timelineModel(null, M.heads, cw, "clock", Date.now(), null));
+    const box = TL.tlBox(M.L, 0);
+    expect(box.x + box.w).toBeCloseTo(cw, 6);
+    expect(M.grow.length).toBeGreaterThan(0);
+    for (const g of M.grow) expect(g.x1).toBeLessThanOrEqual(cw);
+    const lanes = own(c, "th-tl-lanes");
+    expect(lanes.find((e) => e[0] === "w")[1]).toBe(cw);
   } finally {
     setSystemTime();
     H.state.terminals[0].status = "idle";
