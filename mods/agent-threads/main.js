@@ -5432,11 +5432,11 @@ export default class Threads extends View {
     if (rows[i - 1]?.kind === "pday") i -= 1;
     return i;
   }
-  // The row a scroll (scrollTo) goes to in these rows, and how: its own key, else the next best
+  // The row a scroll (scrollTo) goes to in the list's rows (rowsMemo), and how: its own key, else the next best
   // (or, a pin's place that may be gone), else its turn's head, which a card's scroll takes.
-  scrollRow(st, rows) {
-    for (const k of [st.key, ...(st.or ?? [])]) { const i = rows.findIndex((x) => x.key === k); if (i >= 0) return { i, how: st.how }; }
-    return st.head ? { i: rows.findIndex((x) => x.key === st.head), how: "card" } : { i: -1, how: st.how };
+  scrollRow(st) {
+    for (const k of [st.key, ...(st.or ?? [])]) { const i = this.rowIndex(k); if (i >= 0) return { i, how: st.how }; }
+    return st.head ? { i: this.rowIndex(st.head), how: "card" } : { i: -1, how: st.how };
   }
   // A scroll the pane asks for itself, by its own count (askN): the frame that takes it does
   // not count it as the reader's (stickCheck), wherever it lands. A scrollTo's landing and a
@@ -9597,7 +9597,7 @@ export default class Threads extends View {
     // never other items, and the scroll then lands it from there.
     const st0 = this.scrollTo;
     if (st0 && (st0.held || (this.capSpan ?? "") !== (this.capLaid ?? ""))) {
-      const { i, how } = this.scrollRow(st0, rows);
+      const { i, how } = this.scrollRow(st0);
       if (i >= 0) { this.ownAsk(this.landTop(rows, i, how), how === "center" ? "center" : "top"); st0.held = true; }
     }
     // So is the end, for latest over other items (from the oldest window, say): asked for at
@@ -9659,7 +9659,7 @@ export default class Threads extends View {
       // its command, once: its landing asks (ownAsk), like every landing's, do not count again.
       if (st.person) { this.upAt = Date.now() + 600; this.downAt = this.upAt; }
       else { this.scrollBusyUntil = Date.now() + 500; this.upAt = 0; this.downAt = 0; }
-      let { i, how } = this.scrollRow(st, rows);
+      let { i, how } = this.scrollRow(st);
       this.scrollTo = null;
       // The landing's asks 16 and 48 ms on, unless the reader has wheeled since (listWheel), or
       // a newer scroll has come (a jump or latest, waiting or landed: landN): each asks for its
