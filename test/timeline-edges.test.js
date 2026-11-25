@@ -819,6 +819,23 @@ function callOn(b, c, from = 0, lane = "tools") {
   throw new Error("no call on the strip");
 }
 // What that press selects and scrolls to, with nothing selected before it.
+// A press on turn ti on the strip of frame c (the last drawn) where it gets the turn's heading: the
+// heading's key, and that press.
+function headOn(b, c, ti) {
+  const M = b.tlModel;
+  const down = handlerAfterId(c, "th-tl-lanes", "on_mouse_down");
+  const { key } = M.heads[ti];
+  const { x: x0, w } = M.L.turns[ti];
+  for (let x = x0; x <= x0 + w; x++) {
+    for (const [li, lane] of ["input", "model", "tools"].entries()) {
+      if (TL.timelineHit(M.L, M.heads, x, lane, M.nowMs, 11)?.key !== key) continue;
+      const y = li * TL.TL_LANE + 11;
+      return { key, press: (cb) => down({ local_position: { x, y }, position: { x, y } }, cb) };
+    }
+  }
+  throw new Error("no place for the heading on the strip");
+}
+// What press on selects, and what the list is scrolled to, with nothing selected before it.
 function pressed(b, cb, on) {
   b.tsel = null;
   b.tscrollTo = null;
@@ -852,16 +869,24 @@ for (const [what, change] of [
     test(`timeline view: ${what}, its rows built ${how}: a press on the strip of the frame before it selects nothing; on the next strip drawn a press selects its call`, async () => {
       const file = fixture("--extra", "6");
       const { b, cb } = await dockPane(file);
-      const on = callOn(b, shownFrame(b, cb));
+      const c = shownFrame(b, cb);
+      const on = callOn(b, c);
       expect(pressed(b, cb, on)).toEqual([on.key, on.key]);
       const was = b.current().turns;
+      const ti = b.tlModel.L.index.get(b.turnOfRow(on.key));
+      const head = headOn(b, c, ti);
+      const before = was[ti];
       const then = await change(b, cb, was, file);
       expect(b.current().turns === was).toBe(false);
       // The new turns have a row of that key too, so the key alone names one of them.
       const [si, n] = b.turnOfRow(on.key).split(":").map(Number);
       expect([si, Boolean(b.current().turns[n - 1])]).toEqual([0, true]);
+      // A turn of the same words and time, as in a session's resumed copy: its heading does not
+      // tell the two apart.
+      const now = b.current().turns[ti];
+      expect([n - 1, now === before, now.ts != null, now.ts === before.ts, now.prompt === before.prompt]).toEqual([ti, false, true, true, true]);
       b.buildMax = () => ms;
-      expect(pressed(b, cb, on)).toEqual([null, null]);
+      expect([pressed(b, cb, on), pressed(b, cb, head)]).toEqual([[null, null], [null, null]]);
       b.buildMax = () => 1e9;
       await then?.();
       const next = callOn(b, shownFrame(b, cb));
@@ -890,7 +915,7 @@ for (const [how, ms] of [["in the press", 1e9], ["over draws", -1]]) {
 
 // ---- a press between a change to the turns read and the next frame ----
 // A pane on a transcript whose reader gives the events first at its first read. read(events, rewind):
-// a read after it that gives events, with rewind as OpenCode's reader gives every one, so that the
+// a read after it that gives events, with rewind on it, as on every read of OpenCode's, so that the
 // turns after the last settled one are cut back first (turns.js rewindTail).
 async function cutPane(first) {
   const file = fixture("--extra", "3");
@@ -909,7 +934,8 @@ async function cutPane(first) {
   };
   return { b, cb, read };
 }
-// Turn n's events, its words w: a prompt, a call and a reply, and, settled, its end.
+// Turn n's events, its words w: a prompt, a call and a reply, and, settled, its end. The call and
+// the reply have times, so that they have bars, as no OpenCode session's have (bareOf).
 function eventsOf(n, w, settled) {
   const at = (sec) => new Date(T0 + n * 100000 + sec * 1000).toISOString();
   return [
@@ -921,6 +947,20 @@ function eventsOf(n, w, settled) {
     ...(settled ? [{ k: "d", ms: 60000, ts: at(60) }, { k: "settle", id: `p-${n}` }] : []),
   ];
 }
+// The same in the shape of OpenCode's reader (core/opencode-read.sql): no time on a call or on
+// words, and no result. The prompt is sent sec seconds in; null: it has no time.
+function bareOf(n, w, settled, sec = 0) {
+  const at = (x) => new Date(T0 + n * 100000 + x * 1000).toISOString();
+  return [
+    { k: "p", o: "human", t: `${w} ${n}`, ...(sec == null ? {} : { ts: at(sec) }) },
+    { k: "u", n: "bash", id: `${w}-${n}` },
+    { k: "t", t: `${w} done` },
+    { k: "m", id: `m-${n}`, u: {}, ts: at(60) },
+    ...(settled ? [{ k: "d", ms: 60000, ts: at(60) }, { k: "settle", id: `p-${n}` }] : []),
+  ];
+}
+// Five finished turns and the events last after them, in that shape.
+const bareTo = (last) => [...Array.from({ length: 5 }, (_, i) => bareOf(i + 1, "first", true)).flat(), ...last];
 const eventsTo = (n, settled) => Array.from({ length: n }, (_, i) => eventsOf(i + 1, "first", settled || i + 1 < n)).flat();
 for (const [what, events, left] of [
   ["cut back in place and another one read at its number", eventsOf(6, "other", false), 6],
@@ -932,15 +972,17 @@ for (const [what, events, left] of [
       const c = shownFrame(b, cb);
       const on = callOn(b, c, 5);
       const early = callOn(b, c);
-      expect([on.key, early.key]).toEqual(["tr:0:6:1", "tr:0:1:1"]);
-      expect([pressed(b, cb, on), pressed(b, cb, early)]).toEqual([[on.key, on.key], [early.key, early.key]]);
+      const head = headOn(b, c, 5);
+      expect([on.key, early.key, head.key]).toEqual(["tr:0:6:1", "tr:0:1:1", "0:6"]);
+      expect([on, early, head].map((x) => pressed(b, cb, x))).toEqual([on, early, head].map((x) => [x.key, x.key]));
       const was = b.current().turns;
       const last = was[5];
       await read(events);
       expect([b.current().turns === was, was.length, was[5] === last]).toEqual([true, left, false]);
       b.buildMax = () => ms;
-      // Nor does one on a turn before the cut.
-      expect([pressed(b, cb, on), pressed(b, cb, early)]).toEqual([[null, null], [null, null]]);
+      // Nor does one on its heading (the turn read at its number has other words). One on a turn
+      // before the cut selects the call it did.
+      expect([on, early, head].map((x) => pressed(b, cb, x))).toEqual([[null, null], [early.key, early.key], [null, null]]);
       b.buildMax = () => 1e9;
       const next = callOn(b, shownFrame(b, cb), left - 1);
       expect(next.key).toBe(`tr:0:${left}:1`);
@@ -979,6 +1021,59 @@ test("timeline view: the last turn cut back in place and another one read at its
   expect(pressed(b, cb, next)).toEqual([next.key, next.key]);
 }, 30000);
 
+for (const [how, ms] of [["in the press", 1e9], ["over draws", -1]]) {
+  test(`timeline view: a read that cuts back the last turn and reads it again as it was, in the shape of OpenCode's reader, its rows built ${how}: a press on the strip of the frame before selects the heading it did, of the turns before and of the last one`, async () => {
+    const { b, cb, read } = await cutPane(bareTo(bareOf(6, "first", false)));
+    const c = shownFrame(b, cb);
+    const heads = b.tlModel.heads.map((_, ti) => headOn(b, c, ti));
+    const keys = ["0:1", "0:2", "0:3", "0:4", "0:5", "0:6"];
+    expect(heads.map((x) => x.key)).toEqual(keys);
+    const was = b.current().turns;
+    const last = was[5];
+    await read(bareOf(6, "first", false));
+    expect([b.current().turns === was, was.length, was[5] === last]).toEqual([true, 6, false]);
+    b.buildMax = () => ms;
+    expect(heads.map((x) => pressed(b, cb, x))).toEqual(keys.map((k) => [k, k]));
+  }, 30000);
+}
+for (const [what, sec, then] of [
+  ["sent at another time", 0, 7],
+  ["and no time on either", null, null],
+]) {
+  test(`timeline view: the last turn cut back and a turn of the same words ${what} read at its number: a press on its heading on the strip of the frame before selects nothing; on the next strip drawn one selects the heading`, async () => {
+    const { b, cb, read } = await cutPane(bareTo(bareOf(6, "first", false, sec)));
+    const head = headOn(b, shownFrame(b, cb), 5);
+    expect(pressed(b, cb, head)).toEqual([head.key, head.key]);
+    const last = b.current().turns[5];
+    await read(bareOf(6, "first", false, then));
+    const now = b.current().turns[5];
+    expect([now === last, now.prompt === last.prompt, now.ts === last.ts]).toEqual([false, true, sec === then]);
+    expect(pressed(b, cb, head)).toEqual([null, null]);
+    const next = headOn(b, shownFrame(b, cb), 5);
+    expect(pressed(b, cb, next)).toEqual([head.key, head.key]);
+  }, 30000);
+}
+
+// Herdr's stop in the draw after the read, past the strip's model: the frame before stays on
+// screen, with its handlers, and the pane has the new model.
+const STOP = new Error("stopped by Herdr");
+test("timeline view: the last turn cut back in place and another one read at its number, the next draw stopped by Herdr after the strip is placed: a press on the strip of the frame before selects nothing; on the next strip drawn a press selects its call", async () => {
+  const { b, cb, read } = await cutPane(eventsTo(6, false));
+  const on = callOn(b, shownFrame(b, cb), 5);
+  expect(pressed(b, cb, on)).toEqual([on.key, on.key]);
+  await read(eventsOf(6, "other", false));
+  b.buildMax = () => 1e9;
+  b.hatchLayer = () => { throw STOP; };
+  let stops = 0;
+  try { b.render(cb); } catch (e) { if (e !== STOP) throw e; b.renderOpen = true; stops++; }
+  expect([stops, b.tlWait, b.tlModel.heads[5].steps[1].text]).toEqual([1, false, "other"]);
+  expect(pressed(b, cb, on)).toEqual([null, null]);
+  delete b.hatchLayer;
+  const next = callOn(b, shownFrame(b, cb), 5);
+  expect(next.key).toBe(on.key);
+  expect(pressed(b, cb, next)).toEqual([next.key, next.key]);
+}, 30000);
+
 // A turn of pairs of words and a call, then words for half of the turn's time, the last event.
 function pairs(n) {
   const at = (sec) => new Date(T0 + sec * 1000).toISOString();
@@ -992,15 +1087,17 @@ for (const [n, what, kept] of [
 ]) {
   test(`timeline view: a turn that ${what}`, async () => {
     const { b, cb, read } = await cutPane(pairs(n));
-    const on = callOn(b, shownFrame(b, cb), 0, "model");
+    const c = shownFrame(b, cb);
+    const on = callOn(b, c, 0, "model");
+    const head = headOn(b, c, 0);
     expect(on.key).toBe(`tr:0:1:${2 * n + 1}`);
-    expect(pressed(b, cb, on)).toEqual([on.key, on.key]);
+    expect([pressed(b, cb, on), pressed(b, cb, head)]).toEqual([[on.key, on.key], [head.key, head.key]]);
     const was = b.current().turns;
     const turn = was[0];
     const at = (sec) => new Date(T0 + sec * 1000).toISOString();
     await read([{ k: "u", n: "Bash", id: "c-next", in: "ls", ts: at(4 * n + 3) }, { k: "x", id: "c-next", f: false, ts: at(4 * n + 9) }], false);
     expect([b.current().turns === was, was[0] === turn, was.length]).toEqual([true, true, 1]);
-    expect(pressed(b, cb, on)).toEqual(kept ? [on.key, on.key] : [null, null]);
+    expect([pressed(b, cb, on), pressed(b, cb, head)]).toEqual([kept ? [on.key, on.key] : [null, null], [head.key, head.key]]);
     expect(b.ledger().rows.find((r) => r.key === on.key).lk).toBe(kept ? "text" : "tool");
     const next = callOn(b, shownFrame(b, cb));
     expect(pressed(b, cb, next)).toEqual([next.key, next.key]);
