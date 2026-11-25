@@ -53,6 +53,8 @@ test("a running turn shows the answer it has given, once, under its steps and ou
   expect([md(v), mine(v).filter((r) => r.kind === "itext").map((r) => r.src)]).toEqual(["The tax is rounded twice.", ["Looking."]]);
   expect(words(v, own(v))).not.toContain("no reply yet");
   expect(words(v, own(v))).toContain("Working for");
+  // No code block, so no editor to look after.
+  expect(v.liveCode?.size ?? 0).toBe(0);
 });
 
 // Red at c37c64f3, as above.
@@ -142,6 +144,22 @@ test("a running turn that has answered says so, selected or not, whatever its st
   expect(says("idle")[0]).toContain("Answered · ");
 });
 
+// Red at c37c64f3: "No reply yet".
+test("a running turn that is pinned says it has answered", async () => {
+  const { v, cx, s } = await live([PROMPT, call(), answer("The tax is rounded twice."), call()]);
+  const says = (status) => {
+    state.terminals[0].status = status;
+    v.rowsKey = null;
+    settleRows(v, cx);
+    v.sel = null;
+    return words(v, { ...own(v), kind: "turn", live: false, running: true, compact: true, pinNo: 1, shape: v.pinShape(s.turns[0], true) });
+  };
+  expect(says("working")).toContain("Working");
+  const idle = says("idle");
+  expect(idle).toContain("Answered");
+  expect(idle).not.toContain("No reply yet");
+});
+
 // Red at c37c64f3 for the rows under it; the row itself is found past each kind of them.
 test("selecting a running turn swaps its own row, with every kind of row of an answer under it", async () => {
   const code = Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n");
@@ -150,10 +168,11 @@ test("selecting a running turn swaps its own row, with every kind of row of an a
   // With the line folded each of them is the last row in turn.
   v.toggleLine(A, true);
   settleRows(v, cx);
-  for (const last of ["codeall", "mview", "code", "md"]) {
-    const t = { mview: `One.\n\n\`\`\`mermaid\ngraph TD\n${code}\n\`\`\``, codeall: `One.\n\n\`\`\`js\n${code}\n\`\`\``, code: "One.\n\n```js\na\n```", md: "One." }[last];
+  for (const last of ["codeall", "mview", "code", "md", "fold", "seltext"]) {
+    const t = { mview: `One.\n\n\`\`\`mermaid\ngraph TD\n${code}\n\`\`\``, codeall: `One.\n\n\`\`\`js\n${code}\n\`\`\``, code: "One.\n\n```js\na\n```", md: "One.", fold: long(2600), seltext: "One." }[last];
     const p = await live([PROMPT, call(), answer(t), call()]);
     p.v.toggleLine(A, true);
+    if (last === "seltext") { p.v.selEditor = { key: A, st: null, text: "One." }; p.v.selecting = A; }
     settleRows(p.v, p.cx);
     p.v.sel = null;
     expect([p.v.rows().filter((r) => r.turn).at(-1).kind, kinds(p.v)[0]]).toEqual([last, "wrow"]);
@@ -203,6 +222,26 @@ test("a long answer of a running turn is cut and linked once, not at each event"
   add(call(41));
   expect(n.cut).toBe(2);
   expect(md(v).endsWith("Second answer.")).toBe(true);
+  // And when the repo, its owner or the number of rules is another.
+  v.remote = { ...v.remote, owner: "example" };
+  add(call(42), call(43));
+  expect(n.cut).toBe(3);
+  v.remote = { ...v.remote, repo: "example/shop" };
+  add(call(44), call(45));
+  expect(n.cut).toBe(4);
+  expect(v.links.length).toBeGreaterThan(0);
+  v.links = [];
+  add(call(46), call(47));
+  expect(n.cut).toBe(5);
+  // The time a cut takes is the draw's, as a row's shaping is.
+  const real = performance.now;
+  let t = real.call(performance);
+  v.cutReply = function (...a) { t += 7; return cutReply.apply(this, a); };
+  v.linksVer++;
+  v.rowsKey = null;
+  performance.now = () => t;
+  try { v.rows(); } finally { performance.now = real; }
+  expect(v.shapeSpent).toBeCloseTo(7);
 });
 
 // Red at c37c64f3: there is no answer to link. The frame that links it is one the draw out of
@@ -210,9 +249,11 @@ test("a long answer of a running turn is cut and linked once, not at each event"
 test("an answer cut with no time left shows with no links, and the next frame links it, once", async () => {
   const { v, cx, add } = await live([PROMPT, call(), answer("See ACME-12.")]);
   v.debug = false;
-  const { cutReply } = Object.getPrototypeOf(v);
+  const { cutReply, linkedSegs } = Object.getPrototypeOf(v);
   let linking = 0;
-  v.cutReply = function (key, segs, plain) { if (!plain) linking++; return cutReply.call(this, key, segs, plain); };
+  let segs = 0;
+  v.cutReply = function (key, list, plain) { if (!plain) linking++; return cutReply.call(this, key, list, plain); };
+  v.linkedSegs = function (...a) { segs++; return linkedSegs.apply(this, a); };
   const shown = () => mine(v).filter((r) => r.kind === "md").map((r) => [r.key, r.md, r.links]);
   v.applyPrefs(JSON.stringify({ links: [{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.example/ACME-$1" }] }));
   expect(v.links.length).toBe(1);
@@ -220,7 +261,7 @@ test("an answer cut with no time left shows with no links, and the next frame li
   // Out of time from the start of the draw.
   v.shapeBudget = -1;
   draw(v, cx);
-  expect([shown(), linking]).toEqual([[[`md:${A}:0`, "See ACME-12.", 0]], 0]);
+  expect([shown(), linking, segs]).toEqual([[[`md:${A}:0`, "See ACME-12.", 0]], 0, 0]);
   // With time again.
   v.shapeBudget = 1e9;
   cx.flush(0);
@@ -230,6 +271,13 @@ test("an answer cut with no time left shows with no links, and the next frame li
   settleRows(v, cx);
   add(call(20));
   expect([shown(), linking, v.shapeLeft]).toEqual([linked, 1, 0]);
+  // With no rules there is nothing to link later: cut and kept, whatever the time.
+  v.applyPrefs(JSON.stringify({ links: [] }));
+  expect(v.links.length).toBe(0);
+  dropTimers(v, cx);
+  v.shapeBudget = -1;
+  draw(v, cx);
+  expect([shown(), linking]).toEqual([[[`md:${A}:0`, "See ACME-12.", 0]], 2]);
 });
 
 // Red at c37c64f3: no editor for a running turn's code.
@@ -239,6 +287,9 @@ test("a running answer's code block has an editor, and lets it go when the turn 
   expect([...v.code.keys()]).toEqual(["0:1:1"]);
   const st = v.code.get("0:1:1").st;
   expect(Boolean(st)).toBe(true);
+  // A frame with nothing new asks for no other frame.
+  draw(v, cx);
+  expect([v.codeDue.size, v.codeTick]).toEqual([0, false]);
   // The same editor while it runs on.
   add(call(5), call(6));
   cx.flush(0);
@@ -259,6 +310,10 @@ test("a running answer's editor stays when the turn ends open, and a turn that r
   add(done);
   cx.flush(0);
   expect(v.code.get("0:1:1")?.st).toBe(st);
+  // Open and ended, it is looked after as any open turn is.
+  v.rowsKey = null;
+  v.rows();
+  expect(v.liveCode.size).toBe(0);
   v.toggle(A, cx);
   add({ k: "p", o: "human", t: "Next", ts: at(20) }, call(21), answer(code, 22));
   cx.flush(0);
@@ -282,6 +337,11 @@ test("a running answer's editor is made while the rows it came with are still be
   v.flushCode(cx);
   cx.flush(0);
   expect([[...v.code.keys()], v.liveCode.has(A)]).toEqual([["0:1:1"], true]);
+  // A turn of a session that is gone runs no more.
+  v.liveCode.add("9:1");
+  v.flushCode(cx);
+  cx.flush(0);
+  expect([...v.liveCode]).toEqual([A]);
 });
 
 // Red at c37c64f3: there is no cut.

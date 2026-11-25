@@ -272,11 +272,13 @@ describe("the filters: what is marked, and what started by itself", () => {
     t.tick(1, "auto_continuation");
     t.queued(PLANTED, "human", { isMeta: true });
     t.queued(PLANTED, "scheduled", { isMeta: true, commandMode: "bash" });
+    t.queued("Check the build", "scheduled");
     t.tick(1);
     t.queued(PLANTED, "scheduled", { isMeta: true });
+    t.queued(PLANTED, "scheduled", { isMeta: true, commandMode: undefined });
     const ev = events(t.file(), "claude");
     expect(texts(ev)).toEqual([["Looking.", null], ["Cut.", null], ["Old.", null], ["The answer.", 1], ["Declined.", 1], ["Stopped.", 1]]);
-    const at = t.lines.slice(-2).map((l) => JSON.parse(l).timestamp);
+    const at = t.lines.slice(-3).map((l) => JSON.parse(l).timestamp);
     expect(starts(ev)).toEqual(at.map((ts) => ({ k: "w", o: "scheduled", ts })));
     expect(JSON.stringify(ev)).not.toContain(PLANTED);
   });
@@ -708,6 +710,18 @@ describe("B: work that starts by itself after a row ended", () => {
     expect([agentReplied(s.turns[1], s.turns), agentReplied(s.turns[2], s.turns)]).toEqual([true, false]);
   });
 
+  // Red at c37c64f3: each reads the rows before it, and with a row a tick that is all of them.
+  test("a row that started by itself asks nothing of the rows before it", () => {
+    const t = claudeReplied("One.");
+    t.tick();
+    t.say("m3", "Nothing new.");
+    t.hooks();
+    const { turns } = read(t.file());
+    const asked = [];
+    const watched = new Proxy(turns, { get: (list, k) => { asked.push(k); return list[k]; } });
+    expect([agentReplied(turns[1], watched), threadMatches(watched, turns[1], "elsewhere"), asked]).toEqual([true, false, []]);
+  });
+
   // Green on the base and after.
   test("a prompt a limit cut off is answered in the retry that follows it", () => {
     const t = claude();
@@ -962,13 +976,13 @@ describe("C: more than one marked answer in a row", () => {
       { k: "p", o: "human", t: "One", ts: ts(0) },
       { k: "h", t: "R1", ts: ts(1) }, { k: "t", t: "First answer.", a: 1, ts: ts(2) },
       { k: "h", t: "R2", ts: ts(3) }, { k: "h", w: 1, ts: ts(3) }, { k: "t", t: "Tidying up.", ts: ts(4) },
-      { k: "h", t: "R3", ts: ts(5) }, { k: "t", t: "Second answer.", a: 1, ts: ts(6) },
+      { k: "h", t: "R3", ts: ts(5) }, { k: "h", w: 1, ts: ts(5) }, { k: "t", t: "Second answer.", a: 1, ts: ts(6) },
       { k: "d", ms: 7000, ts: ts(7) },
     ]) apply(s, e);
     const [row] = s.turns;
     expect(row.steps.map((st) => [st.k, st.t, st.r ?? null, st.h ?? 0, st.at])).toEqual([
       ["final", "First answer.", "R1", 0, Date.parse(ts(2))], ["text", "Tidying up.", "R2", 1, Date.parse(ts(4))]]);
-    expect([row.after, row.reasoning, row.held ?? 0, row.afterAt]).toEqual([["Second answer."], ["R3"], 0, Date.parse(ts(6))]);
+    expect([row.after, row.reasoning, row.held ?? 0, row.afterAt]).toEqual([["Second answer."], ["R3"], 1, Date.parse(ts(6))]);
   });
 
   // Red before this test's commit: "Looking." was a note after the blank text. At c37c64f3 the
