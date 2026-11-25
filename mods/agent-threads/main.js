@@ -9419,7 +9419,7 @@ export default class Threads extends View {
     const key = n ? this.jumpKey(n) : null;
     if (!key) return;
     if (cx && this.findTurn(key)?.agent && !this.prefs.agentTurns && !this.turnKeys(this.allRows()).includes(key)) this.setAgents(true, cx);
-    // The end asked for and not drawn yet (latest) would take the draw from this: every jump drops it.
+    // The end asked for and not drawn yet (latest) would take the draw from this: dropped.
     this.sel = key; this.follow = false; this.toBottom = false; this.scrollTo = { key, how: "center", flash: true };
   }
 
