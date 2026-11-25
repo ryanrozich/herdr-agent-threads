@@ -12329,16 +12329,19 @@ export default class Threads extends View {
     if (this.tlWait) {
       // A build left from before is of the turns before the read, and would ask for a draw in
       // every frame of it (trajFrame) while nothing takes its steps. It is begun again after.
+      // The model is of those turns too: kept, the draw that ends the wait would place and lay out
+      // every turn at once. With none the strip is built from nothing, over draws.
       this.tlJob = null;
+      this.tlModel = null;
       return waiting("The timeline shows once the whole session is read");
     }
     const cw = tlStrip(this.pw());
     const prev = this.tlModel;
     const t0 = now();
     // The model, and a build left for later draws (timeline.js tlDraw), TL_BUILD_MS a draw;
-    // trajFrame asks for the next draw while one is left. From nothing (opened, or shown again
-    // after a hidden strip dropped its model) the waiting line shows meanwhile. Working off (or
-    // on, past the slack), the strip keeps its places but for the last turn's, and is placed
+    // trajFrame asks for the next draw while one is left. From nothing (opened, after the wait
+    // above, or shown again after a hidden strip dropped its model) a waiting line shows
+    // meanwhile. Working off (or on, past the slack), the strip keeps its places but for the last turn's, and is placed
     // again by the build from the next draw on, drawn as it was meanwhile. The build is taken
     // off the pane before its step: Herdr's interrupt can stop the draw inside that step and
     // close the build, and a closed build kept here would throw in every draw after.
