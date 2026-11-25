@@ -6795,6 +6795,9 @@ export default class Threads extends View {
       if (!steps.length) return;
       this.sel = steps[Math.max(0, Math.min(steps.length - 1, i))];
       this.follow = this.sel === keys[keys.length - 1];
+      // A scroll to the bottom still to come would take the draw from this one: rows() above can
+      // ask for one (a window that slid, winPlace), and so can a read while following.
+      if (!this.follow) this.toBottom = false;
       this.scrollTo = { key: this.sel, how: "center" };
     };
     switch (name) {
