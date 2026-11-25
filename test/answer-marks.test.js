@@ -648,6 +648,89 @@ describe("B: work that starts by itself after a row ended", () => {
     expect(s.turns[1].tools).toBe(2);
   });
 
+  // A local command's lines, and a skill's line as it is typed.
+  const local = (t, output = true) => {
+    t.user("<command-name>/usage</command-name>\n<command-message>usage</command-message>\n<command-args></command-args>", {}, 1);
+    if (output) t.user("<local-command-stdout>ok</local-command-stdout>", {}, 0);
+  };
+  const skill = (t, fields = {}) => t.user("<command-message>check</command-message>\n<command-name>/check</command-name>", fields, 1);
+
+  // Red on the base and at c37c64f3, both: "/usage" is the row, and the tick's reply its reply.
+  for (const [name, output] of [["", true], [", the line the tick's line follows", false]])
+    test(`Claude Code: a local command typed some time before a tick${name} is no row, and the tick keeps its work`, () => {
+      const t = claudeReplied("One.");
+      local(t, output);
+      t.tick();
+      t.tool("m3");
+      t.say("m4", "The tick's reply.");
+      t.hooks();
+      const s = read(t.file());
+      expect([prompts(s), replies(s), senders(s)]).toEqual([["Why does the cart test fail?", ""], ["One.", "The tick's reply."], ["you", "scheduled"]]);
+    });
+
+  // Red on the base and at c37c64f3: as above.
+  test("Claude Code: a local command typed between a tick's line and its first work is no row", () => {
+    const t = claudeReplied("One.");
+    t.tick();
+    local(t);
+    t.tool("m3");
+    t.say("m4", "The tick's reply.");
+    t.hooks();
+    const s = read(t.file());
+    expect([prompts(s), replies(s), senders(s)]).toEqual([["Why does the cart test fail?", ""], ["One.", "The tick's reply."], ["you", "scheduled"]]);
+  });
+
+  // Green on the base and after.
+  test("Claude Code: a skill typed between a tick's line and its first work is the row", () => {
+    const t = claudeReplied("One.");
+    t.tick();
+    skill(t);
+    t.meta();
+    t.tool("m3");
+    t.say("m4", "Checked.");
+    t.hooks();
+    const s = read(t.file());
+    expect([prompts(s), replies(s), senders(s)]).toEqual([["Why does the cart test fail?", "/check"], ["One.", "Checked."], ["you", "you"]]);
+  });
+
+  // Green on the base and after.
+  test("Claude Code: a skill the scheduler runs, whose text is a scheduled line, is the row", () => {
+    const t = claudeReplied("One.");
+    skill(t, { origin: { kind: "scheduled" } });
+    t.tick(1);
+    t.tool("m3");
+    t.say("m4", "Checked.");
+    t.hooks();
+    const s = read(t.file());
+    expect([prompts(s), replies(s), senders(s)]).toEqual([["Why does the cart test fail?", "/check"], ["One.", "Checked."], ["you", "scheduled"]]);
+  });
+
+  // Green on the base and after: no tick's line comes between.
+  test("Claude Code: a skill with no text line of its own is the row once the model works", () => {
+    const t = claudeReplied("One.");
+    skill(t);
+    t.tool("m3");
+    t.say("m4", "Checked.");
+    t.hooks();
+    expect(prompts(read(t.file()))).toEqual(["Why does the cart test fail?", "/check"]);
+  });
+
+  // Red on the base and at c37c64f3: the work joins the row above, and the line's text is read.
+  test("Claude Code: a queued scheduled line whose text begins as a task notification starts a row", () => {
+    const notice = "<task-notification>\n<task-id>a1b2c3</task-id>\n<status>completed</status>\n</task-notification>";
+    const t = claudeReplied("One.");
+    t.queued(`${notice} check the build`, "scheduled", { isMeta: true });
+    t.tool("m3");
+    t.say("m4", "Nothing new.");
+    t.hooks();
+    // A real notification queued, not a scheduled line: its state is read, as before.
+    t.queued(notice, "task-notification");
+    const file = t.file();
+    const s = read(file);
+    expect([replies(s), senders(s)]).toEqual([["One.", "Nothing new."], ["you", "scheduled"]]);
+    expect(parseChunk(execFileSync("sh", [extractor, file, "0", String(1 << 20), "claude"], { encoding: "utf8" })).events.filter((e) => e.k === "n").map((e) => e.a)).toEqual(["a1b2c3"]);
+  });
+
   // Red on the base: noticeTurn knows a task notification only, and "goal" reads "Background agent".
   test("a row that started by itself is a quiet line that says what started it", () => {
     const goal = read(goalRollout().file(), "codex").turns[1];
