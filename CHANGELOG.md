@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.0](https://github.com/ryanrozich/herdr-agent-threads/compare/v1.2.0...v1.3.0) (2026-11-25)
+
+
+### Features
+
+* **timeline:** the timeline's model (part 1), with nothing drawn ([#293](https://github.com/ryanrozich/herdr-agent-threads/issues/293)) ([7029779](https://github.com/ryanrozich/herdr-agent-threads/commit/7029779a468f0d20681479bef3274607741d9ff9))
+
+
+### Bug Fixes
+
+* **threads:** a stopped draw no longer loses or mis-sizes a row ([#307](https://github.com/ryanrozich/herdr-agent-threads/issues/307)) ([fb83c97](https://github.com/ryanrozich/herdr-agent-threads/commit/fb83c97a0baa8397fb68a26870f69e21e48c99ba))
+* **threads:** a stopped render no longer leaves calls, editors, images or a next draw undone ([#311](https://github.com/ryanrozich/herdr-agent-threads/issues/311)) ([3777d7d](https://github.com/ryanrozich/herdr-agent-threads/commit/3777d7d04b49dce4c9db3f43ea552f1db5eba96d))
+
 ## [1.2.0](https://github.com/ryanrozich/herdr-agent-threads/compare/v1.1.0...v1.2.0) (2026-11-24)
 
 
