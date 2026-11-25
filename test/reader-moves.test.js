@@ -75,7 +75,7 @@ test("a key goes through the same count: j once, and a key with no action not at
 // the Trajectory's turn. Its other keys move the Trajectory's own list.
 const LEDGER = {
   lprev: 0, lnext: 0, lfirst: 0, llast: 0, ldetail: 0, lfail: 0, lfailBack: 0, luser: 0, luserBack: 0,
-  trajectory: 1, escape: 1, focus: 0, settings: 0, keys: 0, narrower: 0, wider: 0,
+  trajectory: 1, escape: 1, focus: 0, settings: 0, keys: 0, narrower: 0, wider: 0, timeline: 0,
 };
 const RING = { next: 0, back: 0, press: 0 };
 const CARD = { down: 0, up: 0, pagedown: 0, pageup: 0, home: 0, end: 0 };
