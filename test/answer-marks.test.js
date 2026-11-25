@@ -704,6 +704,132 @@ describe("C: more than one marked answer in a row", () => {
     expect([reply(row), worked(row)]).toEqual(["First answer.", ["Tidying up."]]);
   });
 
+  // Red on the base and at c37c64f3: "First answer.\n\nTidying up." with nothing in the work.
+  test("Codex: a note right after the answer, with no call between, is work, not the reply", () => {
+    const c = codex();
+    c.prompt("Why does the cart test fail?");
+    c.call("call_1");
+    c.final("First answer.");
+    c.note("Tidying up.");
+    const running = read(c.file(), "codex").turns[0];
+    expect([reply(running), worked(running), running.done]).toEqual(["First answer.", [], false]);
+    c.done(1000);
+    const [row] = read(c.file(), "codex").turns;
+    expect([reply(row), worked(row), groups(row)]).toEqual(["First answer.", ["Tidying up."], [1]]);
+    expect(row.steps.map((st) => st.k)).toEqual(["group", "final", "text"]);
+  });
+
+  // Red on the base and at c37c64f3: one text of all three.
+  test("Codex: a note between two answers, with no call between, is work, and both answers the reply", () => {
+    const c = codex();
+    c.prompt("Why does the cart test fail?");
+    c.call("call_1");
+    c.final("First answer.");
+    c.note("Tidying up.");
+    c.note("Nearly there.");
+    c.final("Second answer.");
+    c.done(1000);
+    const [row] = read(c.file(), "codex").turns;
+    expect(reply(row)).toBe("First answer.\n\nSecond answer.");
+    expect(worked(row)).toEqual(["Tidying up.\n\nNearly there."]);
+    expect(row.steps.map((st) => st.k)).toEqual(["group", "final", "text"]);
+  });
+
+  // Red on the base ("") and at c37c64f3: the first answer, the note and the second are one.
+  test("Codex: a note between two answers stays out of both when a call follows", () => {
+    const c = codex();
+    c.prompt("Why does the cart test fail?");
+    c.final("First answer.");
+    c.note("Tidying up.");
+    c.final("Second answer.");
+    c.call("call_1");
+    c.note("And the rest.");
+    c.done(1000);
+    const [row] = read(c.file(), "codex").turns;
+    expect(reply(row)).toBe("First answer.\n\nSecond answer.");
+    expect(row.steps.map((st) => (st.k === "group" ? st.count : st.t))).toEqual(["First answer.", "Tidying up.", "Second answer.", 1, "And the rest."]);
+  });
+
+  // Red on the base and at c37c64f3: the note is in the reply.
+  test("Codex: a note after the last of two answers is work, with a call between the answers or not", () => {
+    const c = codex();
+    c.prompt("Why does the cart test fail?");
+    c.final("First answer.");
+    c.call("call_1");
+    c.final("Second answer.");
+    c.note("Tidying up.");
+    c.abort();
+    const [row] = read(c.file(), "codex").turns;
+    expect([reply(row), worked(row), row.interrupted]).toEqual(["First answer.\n\nSecond answer.", ["Tidying up."], true]);
+  });
+
+  // Red on the base and at c37c64f3: the cut text is in the reply.
+  test("Claude Code: a text cut at the length limit right after an answer is work", () => {
+    const t = claudeReplied("First answer.");
+    t.say("m3", "A half that was cut", "max_tokens");
+    t.duration(7000);
+    const [row] = read(t.file()).turns;
+    expect([reply(row), worked(row)]).toEqual(["First answer.", ["A half that was cut"]]);
+  });
+
+  // Green on the base and after: no answer comes before it.
+  test("Codex: a note before the first answer, with no call between, stays with it", () => {
+    const c = codex();
+    c.prompt("Why does the cart test fail?");
+    c.call("call_1");
+    c.note("Here it is.");
+    c.final("First answer.");
+    c.final("And its end.");
+    c.done(1000);
+    const [row] = read(c.file(), "codex").turns;
+    expect([reply(row), worked(row)]).toEqual(["Here it is.\n\nFirst answer.\n\nAnd its end.", []]);
+  });
+
+  // Red on the base and at c37c64f3: one message of all three, with no row of its own.
+  test("a note between two answers keeps its place in the trajectory, the ledger and the export", () => {
+    const c = codex();
+    c.prompt("One");
+    c.final("First answer.");
+    c.note("Tidying up.");
+    c.final("Second answer.");
+    c.done(1000);
+    const s = read(c.file(), "codex");
+    const [tr] = trajectories(s);
+    expect(tr.groups.flatMap((g) => g.cells).map((x) => x.text)).toEqual(["One", "First answer.", "Tidying up.", "Second answer."]);
+    expect(ledgerTurn(s, s.turns[0], 0).steps.map((r) => [r.lk, r.text])).toEqual([["you", "One"], ["reply", "First answer."], ["text", "Tidying up."], ["reply", "Second answer."]]);
+    expect(said(atif(s, { agent: "codex" }), 1)).toEqual(["First answer.", "Tidying up.", "Second answer."]);
+  });
+
+  // Red on the base and at c37c64f3: the reasoning before the note is the second answer's.
+  test("the export keeps each reasoning with the answer or the note it came before", () => {
+    const s = newSession("s", "f");
+    const ts = (n) => new Date(Date.UTC(2026, 10, 1, 9, 0, n)).toISOString();
+    for (const e of [
+      { k: "p", o: "human", t: "One", ts: ts(0) },
+      { k: "h", t: "R1", ts: ts(1) }, { k: "t", t: "First answer.", a: 1, ts: ts(2) },
+      { k: "h", t: "R2", ts: ts(3) }, { k: "h", w: 1, ts: ts(3) }, { k: "t", t: "Tidying up.", ts: ts(4) },
+      { k: "h", t: "R3", ts: ts(5) }, { k: "t", t: "Second answer.", a: 1, ts: ts(6) },
+      { k: "d", ms: 7000, ts: ts(7) },
+    ]) apply(s, e);
+    const [row] = s.turns;
+    expect(row.steps.map((st) => [st.k, st.t, st.r ?? null, st.h ?? 0, st.at])).toEqual([
+      ["final", "First answer.", "R1", 0, Date.parse(ts(2))], ["text", "Tidying up.", "R2", 1, Date.parse(ts(4))]]);
+    expect([row.after, row.reasoning, row.held ?? 0, row.afterAt]).toEqual([["Second answer."], ["R3"], 0, Date.parse(ts(6))]);
+  });
+
+  // Red on the base and at c37c64f3: the note is in a message with the answer.
+  test("the export keeps a background update's note apart from its answers", () => {
+    const t = claudeReplied("One.");
+    t.wake();
+    t.say("m3", "The build is green.");
+    t.say("m4", "Half of a note", "max_tokens");
+    t.say("m5", "And the tests.");
+    t.hooks();
+    const s = newSession("s", "f");
+    s.keepWakes = true;
+    expect(said(atif(read(t.file(), "claude", 1 << 20, s), { agent: "claude" }), 1)).toEqual(["One.", "The build is green.", "Half of a note", "And the tests."]);
+  });
+
   // Red on the base: the first is a step of 3,400 characters.
   test("Codex: two long answers are both whole", () => {
     const c = codex();
