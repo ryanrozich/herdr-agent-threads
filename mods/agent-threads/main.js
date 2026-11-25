@@ -6219,7 +6219,8 @@ export default class Threads extends View {
     const sig = `${this.linksVer}|${this.repoSig()}|${segs.map((x) => `${x.kind}${x.text.length}`).join(",")}`;
     const memo = (this.linkMemo ??= new Map());
     const m = memo.get(key);
-    if (m?.sig === sig) return m.out;
+    // The texts too: a running answer can be another text of the same length.
+    if (m?.sig === sig && m.segs.every((x, i) => x.text === segs[i].text)) return m.out;
     const ctx = this.linkCtx();
     let chars = 20000;
     let matches = 25;
@@ -6231,7 +6232,7 @@ export default class Threads extends View {
       return r;
     });
     if (memo.size > 200) memo.clear();
-    memo.set(key, { sig, out });
+    memo.set(key, { sig, segs, out });
     return out;
   }
   // An interim text with the link rules applied, kept for the step until the rules or the
