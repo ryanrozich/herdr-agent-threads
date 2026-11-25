@@ -3528,8 +3528,16 @@ export default class Threads extends View {
     const [si, n] = key.split(":").map(Number);
     const s = this.sessions[si];
     // In the middle of a read an OpenCode turn is not there yet (rewindTail): as it was.
-    if (s?.loaded && s.partial) return true;
+    if (this.midRead(key)) return true;
     return Boolean(s?.turns[n - 1]) && this.isLive(s, si, n - 1);
+  }
+  // Whether the turn of key is in a session read only in part, in the middle of a read of its
+  // running turn (OpenCode makes it again at each read, rewindTail): the newest session only, as
+  // a read left half way in another one is never finished.
+  midRead(key) {
+    const si = Number(key.split(":")[0]);
+    const s = this.sessions[si];
+    return Boolean(s?.loaded && s.partial) && si === this.sessions.length - 1;
   }
   isLiveKey(key) { const i = this.baseIndex?.get(key); return i != null && Boolean(this.baseRows?.[i]?.live); }
   // A step group is open by the person's choice, else when it is a running turn's subagents.
@@ -5164,6 +5172,8 @@ export default class Threads extends View {
     const ver = `${this.linksVer}|${this.links.length}|${this.repoSig()}|${this.remote.owner ?? ""}`;
     const known = this.cutKept;
     if (known?.ver === ver && known.text === text) return known;
+    // In the middle of a read the answer can be half there: the cut stays as it was.
+    if (known?.ver === ver && known.key === key && this.midRead(key)) return known;
     const segs = segments(text);
     if (this.links.length && (this.shapeSpent ?? 0) > this.shapeMax()) {
       this.shapeLeft = (this.shapeLeft ?? 0) + 1;
@@ -5769,6 +5779,8 @@ export default class Threads extends View {
       const keys = [...this.codeDue];
       this.codeDue.clear();
       for (const k of keys) {
+        // In the middle of a read the answer can be half there: its editors wait for the end.
+        if (this.midRead(k)) { this.codeDue.add(k); continue; }
         const live = this.runs(k);
         if (this.open.has(k) || (live && this.liveCode?.has(k))) this.makeCode(k);
         else if (this.liveCode?.has(k)) this.dropCode(`${k}:`);
