@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, rewindTail, parseChunk, nextChunk, replaced, reply, updatesText, matches, threadMatches } from "../mods/agent-threads/core/turns.js";
+import { newSession, apply, rewindTail, parseChunk, nextChunk, replaced, reply, answered, updatesText, matches, threadMatches } from "../mods/agent-threads/core/turns.js";
 import { trajectories } from "../mods/agent-threads/core/trajectory.js";
 import { hash, turnId, turnIds } from "../mods/agent-threads/core/ids.js";
 import { atif } from "../mods/agent-threads/core/atif.js";
@@ -800,6 +800,20 @@ describe("B: work that starts by itself after a row ended", () => {
     expect(prompts(read(t.file()))).toEqual(["Why does the cart test fail?", "/check"]);
   });
 
+  // Red before its cure: the tick's row is answered together with the prompt's, and a search for
+  // that reply finds it.
+  test("Claude Code: a tick's row with no reply is not answered by a prompt typed while it works", () => {
+    const t = claudeReplied("One.");
+    t.tick();
+    t.tool("m3");
+    t.prompt("And the checkout?");
+    t.say("m4", "Both are fixed.");
+    t.hooks();
+    const s = read(t.file());
+    expect([prompts(s), s.turns.map((x) => x.answeredBy)]).toEqual([["Why does the cart test fail?", "", "And the checkout?"], [null, null, null]]);
+    expect(threadMatches(s.turns, s.turns[1], "both are fixed")).toBe(false);
+  });
+
   // Red before its cure: the row is "Scheduled", with no prompt.
   test("Claude Code: /compact typed after a tick's line that did nothing is the row, once it has a count", () => {
     const t = claudeReplied("One.");
@@ -819,11 +833,11 @@ describe("B: work that starts by itself after a row ended", () => {
     t.say("m4", "Nothing new.");
     t.hooks();
     // A real notification queued, not a scheduled line: its state is read, as before.
-    t.queued(notice, "task-notification");
+    t.queued(notice.replace("a1b2c3", "d4e5f6"), "task-notification");
     const file = t.file();
     const s = read(file);
     expect([replies(s), senders(s)]).toEqual([["One.", "Nothing new."], ["you", "scheduled"]]);
-    expect(parseChunk(execFileSync("sh", [extractor, file, "0", String(1 << 20), "claude"], { encoding: "utf8" })).events.filter((e) => e.k === "n").map((e) => e.a)).toEqual(["a1b2c3"]);
+    expect(parseChunk(execFileSync("sh", [extractor, file, "0", String(1 << 20), "claude"], { encoding: "utf8" })).events.filter((e) => e.k === "n").map((e) => e.a)).toEqual(["d4e5f6"]);
   });
 
   // Red on the base: noticeTurn knows a task notification only, and "goal" reads "Background agent".
@@ -1025,6 +1039,17 @@ describe("C: more than one marked answer in a row", () => {
     ]) apply(s, e);
     expect([reply(row), row.reasoning]).toEqual(["Looking.\n\nFirst answer.\n\nSecond answer.", ["R1", "R2"]]);
     expect(row.steps.map((st) => [st.k, st.t])).toEqual([["final", "Looking.\n\nFirst answer."]]);
+  });
+
+  // Red before its cure: "Looking." is the answer while the row runs, and stays one after the call.
+  test("a marked text of spaces after one with no mark makes neither an answer", () => {
+    const s = newSession("s", "f");
+    const ts = (n) => new Date(Date.UTC(2026, 10, 1, 9, 0, n)).toISOString();
+    for (const e of [{ k: "p", o: "human", t: "One", ts: ts(0) }, { k: "t", t: "Looking.", ts: ts(1) }, { k: "t", t: "  ", a: 1, ts: ts(2) }]) apply(s, e);
+    const [row] = s.turns;
+    expect(answered(row)).toBe(false);
+    for (const e of [{ k: "u", n: "Bash", id: "c1", ts: ts(3) }, { k: "t", t: "The answer.", a: 1, ts: ts(4) }, { k: "d", ms: 5000, ts: ts(5) }]) apply(s, e);
+    expect([reply(row), worked(row)]).toEqual(["The answer.", ["Looking."]]);
   });
 
   // Red on the base and at c37c64f3: the note is in a message with the answer.
@@ -1705,6 +1730,72 @@ describe("the pane", () => {
     v.sel = before;
     v.syncSel();
     expect(state.shared["threads.turnSel"][v.terminal]).toMatchObject({ key: before, id: id(before), pane: "chat" });
+  });
+
+  // Red before its cure: the same number is not sent again, and one no turn has is sent with no id.
+  test("a selection is sent again when another turn comes in under its number, and not before its turn is read", async () => {
+    const t = claudeReplied("One.");
+    t.prompt("Next question");
+    t.say("m5", "Two.");
+    t.hooks();
+    const { v, cx } = await pane(t.file());
+    settleRows(v, cx);
+    state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+    state.shared["threads.trajByTerminal"] = { [v.terminal]: { pane: "p3" } };
+    const [key] = v.turnKeys(v.rows());
+    v.sel = key;
+    v.syncSel();
+    const sent = () => state.shared["threads.turnSel"][v.terminal];
+    const first = sent().id;
+    // Another turn at that number (a file read again from its start), the selection where it was.
+    const turn = v.findTurn(key);
+    turn.prompt = "Another question";
+    v.syncSel();
+    expect([sent().key, sent().id === first, sent().id]).toEqual([key, false, turnId(v.current().turns, turn)]);
+    // A turn not read yet is not sent until it is.
+    v.sel = "0:9";
+    v.syncSel();
+    expect(sent().key).toBe(key);
+  });
+
+  // Red before its cure: a draw in the middle of a read cuts the half-read answer and lets the
+  // editor go.
+  test("OpenCode: a draw in the middle of a read keeps the running answer's editor and its cut", async () => {
+    const o = oc();
+    o.prompt("msg_u1", "Why does the cart test fail?", 0);
+    o.reply("msg_a1", "msg_u1", 100, "stop");
+    o.say("msg_a1", "First answer.");
+    o.reply("msg_a2", "msg_u1", 200, "stop");
+    o.say("msg_a2", "```js\nconst a = 1;\n```");
+    o.reply("msg_a3", "msg_u1", 300, null);
+    o.tool("msg_a3", "call_3");
+    const { v, cx } = await pane(claudeReplied().file());
+    const s = o.read();
+    s.loaded = true;
+    v.sessions = [s];
+    v.sel = null;
+    v.rowsKey = null;
+    state.terminals[0].status = "working";
+    const shown = () => { settleRows(v, cx); cx.flush(0); v.sel = null; return v.rows().filter((r) => r.kind === "md" && r.turn).map((r) => r.src.trim()); };
+    expect([shown(), v.code.has("0:1:1")]).toEqual([["First answer."], true]);
+    const { st } = v.code.get("0:1:1");
+    const { cutReply } = Object.getPrototypeOf(v);
+    let cuts = 0;
+    v.cutReply = function (...a) { cuts++; return cutReply.apply(this, a); };
+    // A read stopped where the first answer is in again and the second is not yet.
+    const events = o.events();
+    const at = events.findIndex((e) => e.k === "t" && e.t.startsWith("```"));
+    s.partial = true;
+    rewindTail(s);
+    for (const e of events.slice(0, at)) apply(s, e);
+    expect([reply(s.turns[0]), shown(), cuts, v.code.get("0:1:1")?.st === st]).toEqual(["First answer.", ["First answer."], 0, true]);
+    for (const e of events.slice(at)) apply(s, e);
+    s.partial = false;
+    expect([shown(), cuts, v.code.get("0:1:1")?.st === st]).toEqual([["First answer."], 0, true]);
+    // A read left half way in a session that is not the newest: its turn runs no more.
+    v.sessions = [s, newSession("ses_0002demo", "other")];
+    s.partial = true;
+    expect(v.runs("0:1")).toBe(false);
   });
 
   // Red on the base: one row, opened to "No final reply." with the answer in the Worked part.

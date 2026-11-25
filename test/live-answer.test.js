@@ -390,6 +390,24 @@ test("a prompt a limit cut off says where it is answered, with a row that starte
   expect(v.firstChanged(s.turns.slice(2, 4), 2, 0)).toBe(1);
 });
 
+// Red before its cure: the link rules' memo is kept by the lengths of the texts, so it gives the
+// old text back.
+test("a running answer rewritten to a text of the same length shows the new one, linked", async () => {
+  const { v, cx, s } = await live([PROMPT, call(), answer("See ACME-12."), call()]);
+  v.applyPrefs(JSON.stringify({ links: [{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.example/ACME-$1" }] }));
+  dropTimers(v, cx);
+  settleRows(v, cx);
+  v.sel = null;
+  const shown = () => mine(v).filter((r) => r.kind === "md").map((r) => r.md).join("\n");
+  expect(shown()).toContain("https://linear.example/ACME-12");
+  const turn = s.turns[0];
+  turn.finals[0].t = "See ACME-34.";
+  turn.v = ++s.version;
+  settleRows(v, cx);
+  v.sel = null;
+  expect([shown().includes("https://linear.example/ACME-34"), shown().includes("ACME-12")]).toEqual([true, false]);
+});
+
 // Red at c37c64f3: no row says what is left out.
 test("an answer past what an open reply shows says how much is left out, with no Collapse", async () => {
   const { v, cx } = await live([PROMPT, call(), answer(long(2600)), call()]);
