@@ -161,10 +161,10 @@ test("timeline view: a change under 1 px in the list's height that takes or give
   };
   const four = 98 + 4 * 24;
   // Hidden or shown, what is measured is the list's own height: 98 px less with the strip over it.
-  expect([tall(four), tall(four - 98), tall(four - 98 - 0.5)]).toEqual([[1, true, 4], [0, true, 4], [1, false, 3]]);
-  expect([tall(four - 0.5), tall(four - 0.75), tall(four)]).toEqual([[0, false, 3], [0, false, 3], [1, true, 4]]);
+  expect([tall(four), tall(four - 98), tall(four - 98 - 0.5)]).toEqual([[1, true, 4], [1, true, 4], [1, false, 3]]);
+  expect([tall(four - 0.5), tall(four - 0.75), tall(four)]).toEqual([[1, false, 3], [0, false, 3], [1, true, 4]]);
   // One that moves no row is not taken.
-  expect([tall(four - 98), tall(four - 98 + 0.4), tall(four - 98 + 0.9)]).toEqual([[0, true, 4], [0, true, 4], [0, true, 4]]);
+  expect([tall(four - 98), tall(four - 98 + 0.4), tall(four - 98 + 0.9)]).toEqual([[1, true, 4], [0, true, 4], [0, true, 4]]);
   // Shown by b, and then hidden by b, it stays so.
   for (const on of [false, true]) {
     b.key(keyEv("b"), cb);
@@ -183,12 +183,11 @@ test("timeline view: a list whose height with the strip is under 1 px off what i
     handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 1440, height: on ? h - 98 - off : h }, cb);
     return on;
   };
-  for (const off of [0.2, -0.2]) {
-    // 0.1 px over four rows, then 0.1 px under.
-    for (const h of [four + 0.1, four - 0.1, four + 0.1]) {
+  // 0.1 px over four rows, then 0.1 px under, then over again, 12 frames each.
+  for (const [off, shows] of [[0.2, [true, false, true]], [-0.2, [true, true, true]]]) {
+    for (const [i, h] of [four + 0.1, four - 0.1, four + 0.1].entries()) {
       const seen = Array.from({ length: 12 }, () => lay(h, off));
-      const ends = seen.slice(4);
-      expect(new Set(ends).size).toBe(1);
+      expect([...new Set(seen.slice(4))]).toEqual([shows[i]]);
     }
   }
 });
