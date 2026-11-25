@@ -229,7 +229,7 @@ test("a running answer's editor stays when the turn ends open, and a turn that r
   add({ k: "p", o: "human", t: "Next", ts: at(20) }, call(21), answer(code, 22));
   cx.flush(0);
   expect([...v.code.keys()]).toEqual(["0:2:1"]);
-  // Two turns with code end in one read: neither keeps an editor.
+  // It ends and the next begins in one read.
   add({ ...done, ts: at(30) }, { k: "p", o: "human", t: "And", ts: at(31) }, call(32), answer(code, 33));
   cx.flush(0);
   expect([...v.code.keys()]).toEqual(["0:3:1"]);
@@ -271,7 +271,7 @@ test("a turn stopped after its answer shows the answer closed, pinned and open",
   const { v, cx, s } = await live([PROMPT, answer("First answer."), call(), { k: "i", ts: at(5) }]);
   const turn = s.turns[0];
   const row = v.rows().find((r) => r.kind === "turn");
-  expect([turn.interrupted, row.shape.tone, row.shape.md]).toEqual([true, "reply", "First answer."]);
+  expect([turn.interrupted, row.shape.tone, row.shape.reply.join("\n").trim()]).toEqual([true, "reply", "First answer."]);
   const pin = v.pinShape(turn);
   expect([pin.tone, pin.reply]).toEqual(["reply", "First answer."]);
   v.toggle(A, cx);

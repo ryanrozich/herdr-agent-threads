@@ -495,6 +495,9 @@ const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (sca
 const WORD_END = new RegExp(`(?<=[\\s${HYPHEN_BREAK}])`);
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
+// The rows a running turn can have under its own ("wrow" or "working"): its steps, and the answer
+// it has given so far.
+const LIVE_PARTS = new Set(["itext", "grp", "call", "cout", "oall", "wspin", "md", "codehead", "code", "codeall", "mview", "seltext", "fold"]);
 const CARD = new Set(["head", "imgs", "you", "ustrip", "rhead", "itext", "grp", "call", "cout", "wspin", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
 // The line limit of a collapsed row's prompt and reply when long messages are not shortened
@@ -2777,9 +2780,9 @@ export default class Threads extends View {
     if (this.rowsKey !== key || !this.baseRows) this.buildStep(status, key, rest, other);
     // Only the running turn depends on the selection (one-line row, or the card when
     // selected), and it is always the last item, so moving the selection rebuilds nothing.
-    // The running turn's own row: last, or followed by its open steps.
+    // The running turn's own row: last, or followed by its open steps and its answer so far.
     let li = this.baseRows.length - 1;
-    while (li > 0 && !this.baseRows[li].live && ["itext", "grp", "call", "cout", "wspin"].includes(this.baseRows[li].kind)) li--;
+    while (li > 0 && !this.baseRows[li].live && LIVE_PARTS.has(this.baseRows[li].kind)) li--;
     const lr = this.baseRows[li];
     if (lr?.live && lr.kind !== "line") {
       const kind = this.sel === lr.key ? "working" : "wrow";
@@ -3439,10 +3442,12 @@ export default class Threads extends View {
     if (split) out.push({ ...item, kind: "wtop", key: `imgs:${item.key}`, turnKey: item.key, live: false });
     out.push({ ...item, kind: "wrow", split, shape: this.shape(item.turn, true) });
     // Open while it runs: the steps as they arrive, newest at the bottom, then "Working…".
-    if (this.lineIsOpen(item.key, true)) {
-      this.stepRows(item, out, true);
-      if (this.status() === "working") out.push({ ...item, live: false, kind: "wspin", key: `ws:${item.key}` });
-    }
+    const open = this.lineIsOpen(item.key, true);
+    if (open) this.stepRows(item, out, true);
+    // An answer the agent has given is shown where it will be when the turn ends, under the
+    // steps, with the line open or not.
+    if (answered(item.turn)) this.replyRows({ ...item, live: false }, this.replyText(item.turn), out, { running: true });
+    if (open && this.status() === "working") out.push({ ...item, live: false, kind: "wspin", key: `ws:${item.key}` });
   }
 
   // Level 1's steps, in order: each interim text, and each group's line; an open group
@@ -5030,56 +5035,7 @@ export default class Threads extends View {
     // turn's numbers are on the Turn card (i, or the info icon on the line).
     if (this.lineIsOpen(key, false)) this.stepRows(item, out);
     if (!text) out.push({ ...item, kind: "noreply", key: `nr:${key}` });
-    let used = 0;
-    let left = 0;
-    const segs = segments(text);
-    // Editors cannot be made while drawing: note the turn, and flushCode() makes them
-    // on the next tick.
-    const stale = segs.some((seg, i) => seg.kind === "code" && this.code.get(`${key}:${i}`)?.text !== seg.text)
-      || [...this.code.keys()].some((k) => k.startsWith(`${key}:`) && segs[Number(k.slice(key.length + 1))]?.kind !== "code");
-    if (stale) (this.codeDue ??= new Set()).add(key);
-    const selecting = this.selecting === key && this.selEditor?.key === key && text;
-    const linked = selecting ? null : this.linkedSegs(key, segs);
-    if (selecting) {
-      const per = Math.max(8, Math.floor((this.inner() - 26) / SELECT_CHAR));
-      const lines = wrappedLines(this.selEditor.text.slice(0, SELECT_CHARS), per);
-      out.push({ ...item, kind: "seltext", key: `sx:${key}`, lines, boxH: Math.min(lines * 18 + 14, 2400) });
-    }
-    // An open turn shows the whole reply, up to FULL_REPLY_CHARS.
-    if (!selecting) segs.forEach((seg, i) => {
-      if (used >= FULL_REPLY_CHARS) { left += seg.text.length; return; }
-      if (seg.kind === "md") {
-        let md = seg.text;
-        if (used + md.length > FULL_REPLY_CHARS) {
-          md = cutMd(md, FULL_REPLY_CHARS - used);
-          left += Math.max(0, seg.text.length - md.length);
-        }
-        used += md.length;
-        // Herdr draws nothing for a Markdown block over 4,096 characters, so a long run of
-        // prose (no code fence to split it) becomes several list items of at most MD_MAX,
-        // split at paragraphs (mdChunks): "md:<turn>:<segment>.<n>". Each is one Markdown view,
-        // so a drag can select across the paragraphs in one item but not across items, and
-        // the list draws only the items in view. Link rules run on the text shown; heights use
-        // the text as written. A return to a pin lands at the start of its item.
-        // A table is an item of its own ("table"), so it can run wider than the reading line.
-        const parts = mdChunks(md).flatMap((src) => splitTables(src));
-        parts.forEach(({ text: src, table }, j) => {
-          const lk = parts.length === 1 && linked?.[i] && src === seg.text ? linked[i] : this.linkOne(src);
-          const sub = parts.length === 1 ? `${i}` : `${i}.${j}`;
-          push({ ...item, kind: "md", key: `md:${key}:${sub}`, md: lk.md, src, links: lk.links, ...(j ? { gap: this.paraGap() } : {}), ...(table ? { table: true } : {}) });
-        });
-      } else {
-        used += seg.text.length;
-        push({ ...item, kind: "codehead", key: `cc:${key}:${i}`, seg, i });
-        const cs = this.codeShape(seg.text, this.full.has(`c:${key}:${i}`));
-        out.push({ ...item, kind: "code", key: `code:${key}:${i}`, seg, i, ...cs });
-        if (cs.more) out.push({ ...item, kind: "codeall", key: `ca:${key}:${i}`, i, all: cs.all, left: cs.rows - CODE_LINES });
-        // A Mermaid block: View diagram, which opens it drawn as text in the output viewer.
-        if (isDiagram(seg.lang)) out.push({ ...item, kind: "mview", key: `mv:${key}:${i}`, i, seg });
-      }
-    });
-    // A long reply ends in a quiet Collapse (Esc) row, with what the cap left out.
-    if (!selecting && (text.length > LONG_REPLY || left)) out.push({ ...item, kind: "fold", key: `fold:${key}`, left });
+    this.replyRows(item, text, out, { push });
     // What the agent said in its background updates, every one in order (updatesText), when
     // that is not the reply.
     const late = updatesText(turn);
@@ -5103,6 +5059,101 @@ export default class Threads extends View {
       out.push({ ...item, kind: "latest", key: `lt:${key}`, all, whole, text, estLines: l.lines.length + (l.cut ? 1 : 0), md, left });
     }
     out.push({ ...item, kind: "copy", key: `cp:${key}`, part: "bottom" });
+  }
+
+  // The reply's rows: an open turn's, and (running) those of an answer given by a turn that still
+  // runs. Both have the same keys, so they stay in place, and measured, when the turn ends.
+  replyRows(item, text, out, { push = (row) => out.push(row), running = false } = {}) {
+    const { key, turn } = item;
+    const kept = running ? this.keptCut(key, turn, text) : null;
+    const segs = kept ? kept.segs : segments(text);
+    // Editors cannot be made while drawing: note the turn, and flushCode() makes them
+    // on the next tick.
+    const stale = segs.some((seg, i) => seg.kind === "code" && this.code.get(`${key}:${i}`)?.text !== seg.text)
+      || [...this.code.keys()].some((k) => k.startsWith(`${key}:`) && segs[Number(k.slice(key.length + 1))]?.kind !== "code");
+    if (stale) (this.codeDue ??= new Set()).add(key);
+    // A turn that is not open and runs no more lets its editors go (flushCode).
+    if (running && segs.some((seg) => seg.kind === "code")) (this.liveCode ??= new Set()).add(key);
+    const selecting = this.selecting === key && this.selEditor?.key === key && text;
+    if (selecting) {
+      const per = Math.max(8, Math.floor((this.inner() - 26) / SELECT_CHAR));
+      const lines = wrappedLines(this.selEditor.text.slice(0, SELECT_CHARS), per);
+      out.push({ ...item, kind: "seltext", key: `sx:${key}`, lines, boxH: Math.min(lines * 18 + 14, 2400) });
+      return;
+    }
+    // An open turn shows the whole reply, up to FULL_REPLY_CHARS.
+    const { cut, left } = kept ?? this.cutReply(key, segs);
+    for (const { seg, i, parts } of cut) {
+      if (parts) {
+        parts.forEach(({ src, table, lk }, j) => {
+          const sub = parts.length === 1 ? `${i}` : `${i}.${j}`;
+          push({ ...item, kind: "md", key: `md:${key}:${sub}`, md: lk.md, src, links: lk.links, ...(j ? { gap: this.paraGap() } : {}), ...(table ? { table: true } : {}) });
+        });
+        continue;
+      }
+      push({ ...item, kind: "codehead", key: `cc:${key}:${i}`, seg, i });
+      const cs = this.codeShape(seg.text, this.full.has(`c:${key}:${i}`));
+      out.push({ ...item, kind: "code", key: `code:${key}:${i}`, seg, i, ...cs });
+      if (cs.more) out.push({ ...item, kind: "codeall", key: `ca:${key}:${i}`, i, all: cs.all, left: cs.rows - CODE_LINES });
+      // A Mermaid block: View diagram, which opens it drawn as text in the output viewer.
+      if (isDiagram(seg.lang)) out.push({ ...item, kind: "mview", key: `mv:${key}:${i}`, i, seg });
+    }
+    // A long reply ends in a quiet Collapse (Esc) row, with what the cap left out. A running turn
+    // does not collapse, so it has the row only for what is left out.
+    if (running ? left : text.length > LONG_REPLY || left) out.push({ ...item, kind: "fold", key: `fold:${key}`, left, ...(running ? { bare: true } : {}) });
+  }
+
+  // A reply's segments as the rows take them, up to FULL_REPLY_CHARS, and how much is left out.
+  // plain: with no link rules run.
+  cutReply(key, segs, plain = false) {
+    const linked = plain ? null : this.linkedSegs(key, segs);
+    const cut = [];
+    let used = 0;
+    let left = 0;
+    segs.forEach((seg, i) => {
+      if (used >= FULL_REPLY_CHARS) { left += seg.text.length; return; }
+      if (seg.kind !== "md") {
+        used += seg.text.length;
+        cut.push({ seg, i });
+        return;
+      }
+      let md = seg.text;
+      if (used + md.length > FULL_REPLY_CHARS) {
+        md = cutMd(md, FULL_REPLY_CHARS - used);
+        left += Math.max(0, seg.text.length - md.length);
+      }
+      used += md.length;
+      // Herdr draws nothing for a Markdown block over 4,096 characters, so a long run of
+      // prose (no code fence to split it) becomes several list items of at most MD_MAX,
+      // split at paragraphs (mdChunks): "md:<turn>:<segment>.<n>". Each is one Markdown view,
+      // so a drag can select across the paragraphs in one item but not across items, and
+      // the list draws only the items in view. Link rules run on the text shown; heights use
+      // the text as written. A return to a pin lands at the start of its item.
+      // A table is an item of its own ("table"), so it can run wider than the reading line.
+      const parts = mdChunks(md).flatMap((src) => splitTables(src));
+      cut.push({ seg, i, parts: parts.map(({ text: src, table }) => ({ src, table, lk: plain ? { md: src, links: 0 } : parts.length === 1 && linked?.[i] && src === seg.text ? linked[i] : this.linkOne(src) })) });
+    });
+    return { cut, left };
+  }
+  // A running turn's answer so far, cut: kept until the answer or the link rules change, since
+  // its rows are built again at each event. Out of time for this draw (as stepLinks), it is cut
+  // with no links, not kept, and cut again in a later draw.
+  keptCut(key, turn, text) {
+    const ver = `${key}|${this.linksVer}|${this.links.length}|${this.repoSig()}|${this.remote.owner ?? ""}`;
+    this.cutOf ??= new WeakMap();
+    const known = this.cutOf.get(turn);
+    if (known?.ver === ver && known.text === text) return known;
+    const segs = segments(text);
+    if (this.links.length && (this.shapeSpent ?? 0) > this.shapeMax()) {
+      this.shapeLeft = (this.shapeLeft ?? 0) + 1;
+      this.otherLeft = (this.otherLeft ?? 0) + 1;
+      return { segs, ...this.cutReply(key, segs, true) };
+    }
+    const t0 = now();
+    const made = { text, ver, segs, ...this.cutReply(key, segs) };
+    this.cutOf.set(turn, made);
+    this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
+    return made;
   }
 
   // A code block's box: its rows, 6 px above and below the editor's text, and its bottom
@@ -5685,6 +5736,8 @@ export default class Threads extends View {
   }
 
   flushCode(cx) {
+    // The editors of a running turn's answer go once it runs no more, unless the turn is open.
+    for (const k of this.liveCode ?? []) if (!this.isLiveKey(k)) (this.codeDue ??= new Set()).add(k);
     if (!this.codeDue?.size || this.codeTick) return;
     // The timer is asked for before it is marked as asked for, as in flushCalls: a render Herdr
     // stopped between the two left the mark with no timer to clear it.
@@ -5692,7 +5745,12 @@ export default class Threads extends View {
       this.codeTick = false;
       const keys = [...this.codeDue];
       this.codeDue.clear();
-      for (const k of keys) if (this.open.has(k)) this.makeCode(k);
+      for (const k of keys) {
+        const live = this.isLiveKey(k);
+        if (this.open.has(k) || (live && this.liveCode?.has(k))) this.makeCode(k);
+        else if (this.liveCode?.has(k)) this.dropCode(`${k}:`);
+        if (!live) this.liveCode?.delete(k);
+      }
       cx.notify();
     });
     this.codeTick = true;
@@ -10278,7 +10336,7 @@ export default class Threads extends View {
       case "code": return this.codeBoxH(r);
       case "codeall": return SHOW_ALL_H;
       case "mview": return SHOW_ALL_H;
-      case "fold": return 8 + 26 + (r.left ? 18 : 0);
+      case "fold": return 8 + (r.bare ? 0 : 26) + (r.left ? 18 : 0);
       case "itext": return 6 + this.mdHeight(r.src);
       case "grp": return STEP_GAP + GROUP_H;
       case "call": return (r.one ? STEP_GAP + GROUP_H : CALL_H) + (r.more ? 0 : (this.callShape(r).rows - 1) * CALL_LINE);
@@ -11014,7 +11072,7 @@ export default class Threads extends View {
     const sel = this.sel === key;
     const sh = r.shape;
     const P = PIN_ROW;
-    const st = r.running ? this.liveState(t) : null;
+    const st = r.running ? this.liveState(t, turn) : null;
     const color = sh.tone === "reply" ? t.muted : sh.tone === "why" || sh.tone === "error" ? t.blocked : t.dim;
     const clock = r.running && turn.ts ? fmtClock(Date.now() - turn.ts) : "";
     const ac = this.agentColor(t);
@@ -11229,11 +11287,12 @@ export default class Threads extends View {
     return "Agent";
   }
 
-  liveState(t) {
+  // turn: a running turn, whose answer so far is not "No reply yet".
+  liveState(t, turn = null) {
     const status = this.status();
     if (status === "blocked") return { color: t.blocked, label: "Needs you", icon: "alert", spin: false };
     if (status === "working") return { color: t.working, label: "Working", icon: "spinner", spin: true };
-    return { color: t.dim, label: "No reply yet", icon: "clock", spin: false };
+    return { color: t.dim, label: turn && answered(turn) ? "Not finished" : "No reply yet", icon: "clock", spin: false };
   }
 
   liveIcon(st, size) {
@@ -11257,7 +11316,7 @@ export default class Threads extends View {
   // The live line of a running turn, where a finished turn has its line: its state, the
   // agent, its clock and tool calls so far, in the live colour, over a hairline.
   liveLine(t, turn, tokens = false) {
-    const st = this.liveState(t);
+    const st = this.liveState(t, turn);
     const clock = turn.ts ? fmtClock(Date.now() - turn.ts) : "";
     const s = stats(turn);
     // "Working for 0:48 · 3 tool calls so far"; Needs you and No reply yet keep their words.
@@ -11276,14 +11335,15 @@ export default class Threads extends View {
     const sel = this.sel === key;
     const sh = r.shape;
     const tokens = this.showTokens(stats(turn)) && stats(turn).tokens > 0 ? `${fmtTokens(stats(turn).tokens)}${this.narrow() ? "" : " tokens"}` : null;
+    const none = answered(turn) ? null : "no reply yet";
     const bt = this.bubbleLook(t, turn.agent).theme;
     // A task notification's turn: its quiet line, and no bubble (noticeCut).
-    if (noticeTurn(turn)) return this.rowFrame(t, sel, focusedPanel, true, [this.quietLine(t, turn), this.liveLine(t, turn), this.statsLine(t, [tokens, "no reply yet"].filter(Boolean).join(" · "))], ROW.PAD_T);
+    if (noticeTurn(turn)) return this.rowFrame(t, sel, focusedPanel, true, [this.quietLine(t, turn), this.liveLine(t, turn), this.statsLine(t, [tokens, none].filter(Boolean).join(" · "))], ROW.PAD_T);
     return this.rowFrame(t, sel, focusedPanel, true, [
       ...(!r.split && turn.agent ? [this.senderLine(t, turn)] : []),
       this.youGroup(t, turn, key, sel, [this.bubble(t, turn, [this.promptBlock(bt, this.bubbleLook(t, turn.agent).under, turn, sh, false, key), ...(sh.pMore ? [this.moreLine(bt)] : [])], sh.bubbleW)]),
       this.liveLine(t, turn),
-      this.statsLine(t, [tokens, "no reply yet"].filter(Boolean).join(" · ")),
+      this.statsLine(t, [tokens, none].filter(Boolean).join(" · ")),
     ], r.split ? ROW.GAP : ROW.PAD_T);
   }
 
@@ -11323,7 +11383,8 @@ export default class Threads extends View {
     const lines = sh ? Math.max(1, sh.p) : Math.max(1, Math.min(6, this.wrapped(prompt, tw, this.charW(YOU_CHAR))));
     const promptH = lines * this.rt().line + (sh?.pMore ? ROW.MORE : 0);
     const st = this.status();
-    const noteText = st === "blocked" ? `${this.agent().short} is waiting for you in the terminal.`
+    const noteText = answered(turn) ? `${this.agent().short} has answered${st === "blocked" ? " and is waiting for you in the terminal." : st === "working" ? " and is still working." : ". This turn may have been stopped."}`
+      : st === "blocked" ? `${this.agent().short} is waiting for you in the terminal.`
       : st === "working" ? `No final reply yet. It appears here when ${this.agent().short} finishes this turn.`
         : "This turn has no final reply yet. It may have been stopped.";
     const note = this.wrapped(noteText, this.inner(), 6.0);
@@ -11572,8 +11633,8 @@ export default class Threads extends View {
         return v_flex().mt(8)
           .when(r.left > 0, (el) => el.child(div().h(18).text_size(11.5).line_height("18px").truncate().text_color(t.dim)
             .child(`${r.left.toLocaleString()} more characters are left out here. c copies the whole reply.`)))
-          .child(h_flex().h(26).gap(5).items_center().text_size(12).text_color(t.dim)
-            .child(svg(ICON("chevron-up")).size(12)).child("Collapse").child(div().text_size(11).font_family(mono).child("Esc")));
+          .when(!r.bare, (el) => el.child(h_flex().h(26).gap(5).items_center().text_size(12).text_color(t.dim)
+            .child(svg(ICON("chevron-up")).size(12)).child("Collapse").child(div().text_size(11).font_family(mono).child("Esc"))));
       case "imgs": return v_flex().pt(8).child(this.thumbStrip(t, turn, tkey));
       case "itext":
         // The agent's interim text, as Markdown at the reading size, between step groups.
