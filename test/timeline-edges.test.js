@@ -521,7 +521,7 @@ test("timeline model: an event in the running turn that keeps its places counts 
 // only with no strip; a strip shown is of that draw's heads, with their places; the press and
 // the numbers answer. At the end: every build ends in 400 draws; a strip with no running turn is a
 // whole build's, field for field; with one, its places are under 3 TL_SLACK px from a whole
-// build's and what is laid on them is what a whole layout lays.
+// build's, and the spans, marks, ticks, breaks and growing bars on them a whole layout's there.
 // Not covered: zoomed views, the steps scale, the pane's frame and paint, a stopped draw,
 // subagents and more than one call at a time.
 const FUZZ_SEED = 299;
@@ -618,7 +618,7 @@ test("timeline seeded fuzz: 320 made-up sessions, the empty and the one-turn one
       for (let k = ri(13); k > 0; k--) {
         const op = ["on", "off", "event", "event", "end", "add", "clear", "pick", "width", "tick", "tick", "far"][ri(12)];
         plan.push(op);
-        if (J && op in seen) seen[op]++;
+        if (J && ["add", "clear", "pick", "off"].includes(op)) seen[op]++;
         if (op === "width") cw = widths[ri(5)];
         else s.ops[op]();
         for (let j = ri(4); j > 0; j--) draw();
