@@ -1418,7 +1418,7 @@ test("timeline steps: a heading and its steps hold no path back to the heading, 
   expect(steps.length).toBeGreaterThan(3);
   // The heading's keys, all of them: a second copy of its steps under any name is caught here.
   expect(Object.keys(h).sort()).toEqual([
-    "agent", "calls", "cnt", "failKeys", "fails", "going", "interrupted", "key", "kind", "lastAt", "n", "partial", "reading",
+    "agent", "calls", "cnt", "dropped", "failKeys", "fails", "going", "interrupted", "key", "kind", "lastAt", "n", "partial", "reading",
     "si", "span", "stale", "steps", "t0", "timed", "tokens", "total", "ts", "turn", "userKeys",
   ]);
   // And their values: no copy of a step row (an object with a kind of step, lk) is reached
