@@ -514,7 +514,7 @@ test("timeline press: in one turn too, of the bars under the press the one drawn
   expect(hit(b, 30000)).toBe(keyOf(b, "Read"));
 });
 
-test("timeline press: looks at the turns that start within 4 px right of the press and no further, so at 5,600 turns it reads as many turns at turn 10 as at turn 5,000", () => {
+test("timeline press: looks at the turns that start within 4 px right of the press, and the turns under 2 px drawn to it from the left, and no further, so at 5,600 turns it reads as many turns at turn 10 as at turn 5,000", () => {
   const one = head(turn(4, ["a", [["Bash", "x", 1000, 2000]]]));
   const heads = Array.from({ length: 5600 }, (_, i) => ({ ...one, key: `0:${i + 1}`, n: i + 1, t0: T0 + i * 120000 }));
   const L = timelineLayout(heads, 1371, "clock", T0 + 1e9);
@@ -529,9 +529,11 @@ test("timeline press: looks at the turns that start within 4 px right of the pre
   };
   const pitch = L.turns[1].x - L.turns[0].x;
   const [early, late] = [cost(10), cost(5000)];
-  // The halving takes 12 or 13 looks; then the turn and those within 4 px right of the press.
+  // The halving takes 12 or 13 looks; then the turn, those within 4 px right of the press (two
+  // reads each), and those before it whose 1 px span reaches it, which start within 1 px left of
+  // it (five reads each: a turn under 2 px is read for its steps), and the one that ends the look.
   expect(Math.abs(early - late)).toBeLessThanOrEqual(2);
-  expect(late).toBeLessThan(14 + 2 * Math.ceil(4 / pitch + 2) + 6);
+  expect(late).toBeLessThan(14 + 2 * Math.ceil(4 / pitch + 2) + 5 * Math.ceil(1 / pitch + 2) + 6);
 });
 
 test("timeline press: on turns under 2 px, drawn as one span per lane from the turn's x and at least 1 px wide, a press on a span gets that turn, and its failed call where the span is drawn red", () => {
@@ -1061,7 +1063,7 @@ function marksBy(turns, by) {
 const breaksRule = (marks, centres) => marks.some((m, k) => k > 0 && m - marks[k - 1] < 6 - 1e-9) || centres.some((c) => !marks.some((m) => Math.abs(m - c) <= 6 + 1e-9));
 
 test("timeline seeded mixed turns: the failure marks keep both rules, and every press gets the bar drawn on top there, or the nearest of the turn drawn there", () => {
-  const seen = { x: 0, own: 0 };
+  const seen = { x: 0, own: 0, deep: 0 };
   for (const [n, cw, seed] of [[1000, 1440, 3], [2500, 1440, 5], [700, 1143, 7]]) {
     const heads = mixedSession(n, seed);
     const L = timelineLayout(heads, cw, "clock", T0 + 1e12);
@@ -1120,8 +1122,12 @@ test("timeline seeded mixed turns: the failure marks keep both rules, and every 
         if (on.length) {
           covered++;
           const top = on.reduce((m, b) => (b.r > m.r || (b.r === m.r && b.w < m.w) ? b : m));
-          const ok = on.filter((b) => b.r === top.r && b.w === top.w).map((b) => b.key);
+          const okBars = on.filter((b) => b.r === top.r && b.w === top.w);
+          const ok = okBars.map((b) => b.key);
           if (on.some((b) => b.ti < lo0)) thin++;
+          // Only a span of a turn two or more before the one starting under the press is on top
+          // there: a press that looked back at one turn only would miss it.
+          if (okBars.every((b) => b.ti <= lo0 - 2)) seen.deep++;
           if (!ok.includes(got.key)) expect([n, x, lane, got.key]).toEqual([n, x, lane, ok]);
         } else {
           // No bar under it: the turn drawn there, as wide as drawn (at least 1 px under 2 px),
@@ -1144,5 +1150,5 @@ test("timeline seeded mixed turns: the failure marks keep both rules, and every 
     // the next turn.
     expect([n, covered > 1000, thin > 20, moved > 20]).toEqual([n, true, true, true]);
   }
-  expect(seen.x > 0 && seen.own > 0).toBe(true);
+  expect([seen.x > 0, seen.own > 0, seen.deep > 100]).toEqual([true, true, true]);
 }, 120000);

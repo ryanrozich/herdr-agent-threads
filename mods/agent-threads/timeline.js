@@ -520,7 +520,12 @@ export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
   // to the press are looked at too, nearest first, and one of their spans under the press
   // answers when it is drawn on top. A turn 2 px or wider ends before the next begins, so the
   // first turn before whose drawn end is left of the press ends the look: at most the turns
-  // that start within 1 px left of the press.
+  // that start within 1 px left of the press, and the one that stops it. Drawn ends only grow
+  // left to right (each turn starts at or past the one before's own end and is drawn at least
+  // 1 px wide), so none before the stop reaches the press. On the clock a turn and its break
+  // take at least 0.45 of the strip over the number of turns (timelineGeo: 0.3 and 0.15), so
+  // that is at most floor(n / (0.45 * cw * z)) + 1 turns read: 9 at 5,600 turns across 1,440 px,
+  // 31 at 20,000. By steps the break alone is 0.15 of it, so at most three times that.
   for (let j = lo - 1; j >= 0; j--) {
     const tw = T[j].w * z;
     if (T[j].x * z - x0 + Math.max(tw, 1) < x) break;
