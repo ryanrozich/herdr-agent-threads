@@ -146,6 +146,57 @@ test("timeline view: it starts hidden when fewer than 4 rows would be left under
   expect(sheet({}).some((x) => x.startsWith("b:"))).toBe(false);
 });
 
+// Every way into the timeline works here and is not a move of the Chat's list: the key, its
+// command, its button, and a press on its lanes, which picks a row of the Trajectory's own list.
+// Each must do its work (the strip shown or hidden, the row picked) for its zero to mean something.
+const WAYS_IN = {
+  "the Trajectory's own pane": async () => {
+    const { b, cb } = await dockPane(fixture("--open", "--extra", "30"), "bottom", 1440);
+    return { v: b, cx: cb };
+  },
+  "the Chat's own pane, made wider than 540 px while the Trajectory is in it": async () => {
+    const { v, cx } = await pane(fixture("--open", "--extra", "30"));
+    v.paneW = 400;
+    v.width = 400;
+    v.action("trajectory", cx);
+    v.tdetail = false;
+    v.paneW = 800;
+    v.width = 800;
+    return { v, cx };
+  },
+};
+for (const [where, make] of Object.entries(WAYS_IN)) test(`timeline view: b, its command, its button and a press on its lanes each work and count nothing as the reader's, in ${where}`, async () => {
+  const { v, cx } = await make();
+  shownFrame(v, cx);
+  const got = {};
+  const step = (name, f) => {
+    const n0 = v.readerMoves ?? 0;
+    const shown = v.tlShown();
+    const sel = v.tsel;
+    v.scrollTo = null;
+    f();
+    got[name] = { moves: (v.readerMoves ?? 0) - n0, toggled: v.tlShown() !== shown, picked: v.tsel !== sel, scrollTo: v.scrollTo };
+    shownFrame(v, cx);
+  };
+  step("b", () => v.key(keyEv("b"), cx));
+  step("b again", () => v.key(keyEv("b"), cx));
+  step("command", () => v.command("timeline", cx));
+  step("command again", () => v.command("timeline", cx));
+  const button = () => own(frame(v, cx), "th-traj-timeline").find((e) => e[0] === "on_click").at(-1)({}, cx);
+  step("button", button);
+  step("button again", button);
+  // A step of the turn before the last, drawn as a bar.
+  const key = v.tlModel.heads.at(-2).steps.find((r) => r.start != null && LEDGER_KINDS[r.lk]?.lane)?.key;
+  const { box, lane } = barOf(v, key);
+  v.tsel = null;
+  step("press", () => press(v, cx, (box.x0 + box.x1) / 2, lane * 16 + 8));
+  const toggle = { moves: 0, toggled: true, picked: false, scrollTo: null };
+  expect(got).toEqual({
+    b: toggle, "b again": toggle, command: toggle, "command again": toggle, button: toggle, "button again": toggle,
+    press: { moves: 0, toggled: false, picked: true, scrollTo: null },
+  });
+});
+
 test("timeline view: while the rows are built its slot keeps 98 px and holds one dim line saying it waits for the session, then the timeline", async () => {
   const { b, cb } = await dockPane(fixture("--extra", "3"), "bottom", 1440);
   listTall(b, cb, 400);
