@@ -800,6 +800,16 @@ describe("B: work that starts by itself after a row ended", () => {
     expect(prompts(read(t.file()))).toEqual(["Why does the cart test fail?", "/check"]);
   });
 
+  // Red before its cure: the row is "Scheduled", with no prompt.
+  test("Claude Code: /compact typed after a tick's line that did nothing is the row, once it has a count", () => {
+    const t = claudeReplied("One.");
+    t.tick();
+    t.user("<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>", {}, 1);
+    t.message("m3", [{ type: "thinking", thinking: "Summing up." }], "end_turn");
+    const s = read(t.file());
+    expect([prompts(s), senders(s)]).toEqual([["Why does the cart test fail?", "/compact"], ["you", "you"]]);
+  });
+
   // Red on the base and at c37c64f3: the work joins the row above, and the line's text is read.
   test("Claude Code: a queued scheduled line whose text begins as a task notification starts a row", () => {
     const notice = "<task-notification>\n<task-id>a1b2c3</task-id>\n<status>completed</status>\n</task-notification>";
@@ -938,6 +948,20 @@ describe("C: more than one marked answer in a row", () => {
     t.duration(7000);
     const [row] = read(t.file()).turns;
     expect([reply(row), worked(row)]).toEqual(["First answer.", ["A half that was cut"]]);
+  });
+
+  // Red before its cure: in neither the reply nor the work until a call or an end.
+  test("Claude Code: a note after the answer of a row that has ended is work at once", () => {
+    const t = claudeReplied("First answer.");
+    t.say("m3", "One more look.", "tool_use");
+    const row = () => { const [r] = read(t.file()).turns; return [reply(r), worked(r), groups(r), r.after]; };
+    expect(row()).toEqual(["First answer.", ["One more look."], [1], []]);
+    t.say("m4", "And another.", "tool_use");
+    expect(row()).toEqual(["First answer.", ["One more look.", "And another."], [1], []]);
+    t.tool("m5");
+    t.say("m6", "Second answer.");
+    t.hooks();
+    expect(row()).toEqual(["First answer.\n\nSecond answer.", ["One more look.", "And another."], [1, 1], ["Second answer."]]);
   });
 
   // Green on the base and after: no answer comes before it.
@@ -1606,6 +1630,46 @@ describe("the pane", () => {
     settleRows(v, cx);
     const row = v.rows().find((r) => r.kind === "turn" && r.turn.n === 1);
     expect([row.shape.tone, row.shape.md]).toEqual(["reply", "First answer."]);
+  });
+
+  // Red before its cure: a cut at each read, since each makes the running turn again (rewindTail).
+  test("OpenCode: a running turn's answer is cut and its editor made once, though each read makes the turn again", async () => {
+    const o = oc();
+    const text = "First answer.\n\n```js\nconst a = 1;\n```";
+    o.prompt("msg_u1", "Why does the cart test fail?", 0);
+    o.reply("msg_a1", "msg_u1", 100, "stop");
+    o.say("msg_a1", text);
+    const step = (i) => { o.reply(`msg_a${i}`, "msg_u1", i * 100, null); o.tool(`msg_a${i}`, `call_${i}`); };
+    step(2);
+    const { v, cx } = await pane(claudeReplied().file());
+    const s = o.read();
+    s.loaded = true;
+    v.sessions = [s];
+    const shown = () => { settleRows(v, cx); cx.flush(0); return v.rows().filter((r) => r.kind === "md" && r.turn).map((r) => r.src.trim()); };
+    expect([shown(), v.code.has("0:1:1")]).toEqual([["First answer."], true]);
+    const { st } = v.code.get("0:1:1");
+    const { cutReply } = Object.getPrototypeOf(v);
+    let cuts = 0;
+    v.cutReply = function (...a) { cuts++; return cutReply.apply(this, a); };
+    for (const i of [3, 4, 5]) {
+      const before = s.turns[0];
+      step(i);
+      o.read(s);
+      expect([s.turns[0] === before, reply(s.turns[0]), shown(), cuts, v.code.get("0:1:1")?.st === st]).toEqual([false, text, ["First answer."], 0, true]);
+    }
+    // In the middle of a read the turn is not there yet, and runs on.
+    s.partial = true;
+    rewindTail(s);
+    v.flushCode(cx);
+    cx.flush(0);
+    expect([v.cutKept.text, v.code.get("0:1:1")?.st === st]).toEqual([text, true]);
+    o.read(s);
+    s.partial = false;
+    expect([shown(), cuts]).toEqual([["First answer."], 0]);
+    // It ends: nothing of the cut is kept.
+    s.turns[0].done = true;
+    v.flushCode(cx);
+    expect(v.cutKept).toBe(null);
   });
 
   // Red on the base: the entry with no id is taken. One written before an update names a turn by

@@ -352,10 +352,40 @@ test("a draw Herdr stops in the cut of a running answer keeps nothing of it, and
   v.cutReply = function (...a) { if (!stops) { stops++; throw STOP; } return cutReply.apply(this, a); };
   apply(s, answer("Second answer.", 5));
   try { v.render(cx); } catch (e) { if (e !== STOP) throw e; v.renderOpen = true; }
-  expect([stops, v.cutOf.get(s.turns[0]).text]).toEqual([1, "First answer."]);
+  expect([stops, v.cutKept.text]).toEqual([1, "First answer."]);
   settleRows(v, cx);
   v.sel = null;
   expect([md(v), kinds(v)]).toEqual(["First answer.\n\nSecond answer.", ["wrow", "grp", "md", "wspin"]]);
+});
+
+// Red before its cure: #2 keeps the row it had, with its error. The rows from the last day's band
+// on are built again, and the row that started by itself was taken to mean that all above it stays.
+test("a prompt a limit cut off says where it is answered, with a row that started by itself on a later day between", async () => {
+  const on = (day, s) => new Date(Date.UTC(2026, 10, day, 9, 0, s)).toISOString();
+  const { v, cx, s } = await live([
+    PROMPT, answer("One."), done,
+    { k: "p", o: "human", t: "And the checkout?", ts: on(2, 0) }, { k: "e", t: "You've hit your session limit" }, { k: "d", ms: 1000, ts: on(2, 1) },
+    { k: "w", o: "scheduled", ts: on(3, 0) }, { k: "t", a: 1, t: "Nothing new.", ts: on(3, 1) }, { k: "d", ms: 1000, ts: on(3, 2) },
+    { k: "p", o: "human", t: "Try again", ts: on(3, 9) }, { k: "u", n: "Bash", ts: on(3, 10) },
+  ]);
+  const tone = () => v.rows().find((r) => r.kind === "turn" && r.turn.n === 2).shape.tone;
+  const job = { from: { own: true, si: 0, ti: 2 }, sessions: v.sessions, vers: [s.version], lens: [s.turns.length] };
+  const from = () => [v.keptFrom(v.rowBuild.rest).ti, v.jobGoesOn(job)];
+  expect([s.turns.map((t) => t.self ?? false), tone(), from()]).toEqual([[false, false, true, false], "error", [2, true]]);
+  // Work that goes on changes no row above the one that started by itself.
+  apply(s, { k: "u", n: "Bash", ts: on(3, 11) });
+  expect(from()).toEqual([2, true]);
+  settleRows(v, cx);
+  job.vers = [s.version];
+  apply(s, { k: "t", a: 1, t: "The answer.", ts: on(3, 12) });
+  apply(s, { k: "d", ms: 1000, ts: on(3, 13) });
+  expect([s.turns[1].answeredIn, from()]).toEqual([4, [1, false]]);
+  settleRows(v, cx);
+  expect(tone()).toBe("note");
+  // Said once, it is not built again for what comes after.
+  apply(s, { k: "w", o: "scheduled", ts: on(3, 20) });
+  apply(s, { k: "u", n: "Bash", ts: on(3, 21) });
+  expect(v.keptFrom(v.rowBuild.rest).ti).toBe(2);
 });
 
 // Red at c37c64f3: no row says what is left out.
