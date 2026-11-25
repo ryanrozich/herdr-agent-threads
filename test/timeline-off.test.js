@@ -60,6 +60,9 @@ function session(kind, n = 300) {
     off = { ...base, span: 1800000, going: false, steps };
     now = t0 + 2400000;
   }
+  // Over TL_BUILD_BARS steps: at that many or fewer the strip is placed whole in the frame, and
+  // no build runs.
+  expect(heads.reduce((a, h) => a + h.steps.length, off.steps.length)).toBeGreaterThan(TL.TL_BUILD_BARS);
   return { on: [...heads, on], off: [...heads, off], now };
 }
 const made = () => ({ ...TL.TL_MADE });
@@ -114,8 +117,10 @@ test("timeline working off, drawn: the off draw starts the bounded build and tak
     expect(st.wait).toBe(false);
     expect(st.J).toBeTruthy();
     expect([st.J.total, st.J.cw, st.J.heads === off]).toEqual([0, CW, true]);
+    const J = st.J;
     const { s, shown } = drawOut(st, off, CW, now, c);
-    expect(s.J).toBe(null);
+    expect([kind, s.J === null]).toEqual([kind, true]);
+    expect([kind, J.total > 0]).toEqual([kind, true]);
     // Over more than one draw, and each draw before the last showed the old strip.
     expect(shown.length).toBeGreaterThan(1);
     for (const x of shown.slice(0, -1)) expect(x.M.L).toBe(st.M.L);
@@ -167,7 +172,7 @@ test("timeline working off, a width change while the build runs: the build start
   const m = made();
   const w = TL.tlDraw(st.M, st.J, off, 1143, now, c.until(), c.clock);
   expect(since(m)).toEqual({ geo: 0, layout: 0, tail: 0 });
-  expect(w.J).not.toBe(st.J);
+  expect(w.J !== st.J).toBe(true);
   expect([w.J.cw, w.J.total]).toEqual([1143, 0]);
   expect(w.M.L).toBe(st.M.L);
   expect(w.M.cw).toBe(CW);
@@ -196,10 +201,10 @@ test("timeline working off, the heads change while the build runs: an event in t
     const ev = [...off.slice(0, -1), { ...last, steps: [...last.steps, row(last.key, 3, "you", 30000, null)] }];
     const { s, shown } = drawOut(st, ev, CW, now, c);
     expect(shown.length).toBeGreaterThan(1);
-    expect(J.heads).toBe(off);
-    expect(J.model?.heads).toBe(off);
-    for (const x of shown) expect(x.M.heads).toBe(ev);
-    for (const x of shown) expect(x.M.L.turns).toBe(x.M.geo.turns);
+    expect(J.heads === off).toBe(true);
+    expect(J.model?.heads === off).toBe(true);
+    for (const x of shown) expect(x.M.heads === ev).toBe(true);
+    for (const x of shown) expect(x.M.L.turns === x.M.geo.turns).toBe(true);
     expect(s.M.heads.at(-1).steps).toHaveLength(4);
     // Field for field but the step count and the zoom limit from it (geo.steps, L.zmax): the
     // path that lays out only the last turn keeps the placing's count, one step short here.
@@ -217,8 +222,8 @@ test("timeline working off, the heads change while the build runs: an event in t
     const m = made();
     const d = TL.tlDraw(st.M, st.J, nt, CW, now, c.until(), c.clock);
     expect(since(m).geo).toBe(1);
-    expect(d.J).toBe(null);
-    expect(d.M.heads).toBe(nt);
+    expect(d.J === null).toBe(true);
+    expect(d.M.heads === nt).toBe(true);
     sameStrip(d.M, TL.timelineModel(null, nt, CW, "clock", now, null));
   }
   // Working on again before the build ends: each draw shows the running heads; the builds end.
@@ -227,7 +232,7 @@ test("timeline working off, the heads change while the build runs: an event in t
     const { on, off, now, st } = offBuilding(kind, c);
     const back = [...off.slice(0, -1), on.at(-1)];
     const { s, shown } = drawOut(st, back, CW, now, c);
-    expect(s.J).toBe(null);
+    expect([kind, s.J === null]).toEqual([kind, true]);
     for (const x of shown) expect([kind, x.M.heads === back]).toEqual([kind, true]);
     expect(s.M.geo.stale).toBeUndefined();
     expect(s.M.heads.at(-1).going).toBe(true);
@@ -249,8 +254,10 @@ test("timeline working off, the width changing every draw while the build runs: 
   }
   // Settled: with a step budget the build fits, the next draw ends it.
   const cw = widths.at(-1);
+  const J = st.J;
   st = TL.tlDraw(st.M, st.J, off, cw, now, Infinity, c.clock);
-  expect(st.J).toBe(null);
+  expect(st.J === null).toBe(true);
+  expect(J.total).toBeGreaterThan(0);
   sameStrip(st.M, TL.timelineModel(null, off, cw, "clock", now, null));
 });
 
@@ -261,7 +268,7 @@ test("timeline from nothing, a width change while the build runs: the build star
   expect([a.M, a.wait, a.J.cw]).toEqual([null, true, CW]);
   expect(a.J.total).toBeGreaterThan(0);
   const b = TL.tlDraw(null, a.J, off, 1143, now, c.until(), c.clock);
-  expect(b.J).not.toBe(a.J);
+  expect(b.J !== a.J).toBe(true);
   expect(b.J.cw).toBe(1143);
   let s = b;
   for (let k = 0; k < 500 && s.wait; k++) s = TL.tlDraw(s.M, s.J, off, 1143, now, c.until(), c.clock);
@@ -295,8 +302,10 @@ test("timeline working on, the running turn's room growing a step: that draw pla
     const st = TL.tlDraw(prev, null, on, CW, b, c.until(), c.clock);
     expect(since(m2)).toEqual({ geo: 0, layout: 0, tail: 1 });
     expect([st.J?.total, st.M.geo.stale]).toEqual([0, true]);
+    const J = st.J;
     const { s, shown } = drawOut(st, on, CW, b, c);
-    expect(s.J).toBe(null);
+    expect([n, s.J === null]).toEqual([n, true]);
+    expect([n, J.total > 0]).toEqual([n, true]);
     expect(shown.length).toBeGreaterThan(1);
     for (const x of shown.slice(0, -1)) expect(x.M.L).toBe(st.M.L);
     sameStrip(s.M, TL.timelineModel(null, on, CW, "clock", b, null));
@@ -337,7 +346,7 @@ test("timeline working on, the room growing step after step for 16 days: the ste
         const now = t0 + dt;
         st = TL.tlDraw(st.M, st.J, heads, cw, now, Infinity, () => 0);
         if (st.J) st = TL.tlDraw(st.M, st.J, heads, cw, now, Infinity, () => 0);
-        expect(st.J).toBe(null);
+        expect(st.J === null).toBe(true);
         const F = TL.timelineGeo(heads, cw, "clock", now);
         const G = st.M.geo;
         let d = 0;
@@ -445,6 +454,8 @@ async function openPane(n, w = 1440) {
   b.ledgerMemo = null;
   settleStrip(b, cb);
   expect(b.tlModel.heads.at(-1).going).toBe(true);
+  // Over TL_BUILD_BARS steps, so working off runs the build (session, above).
+  expect(b.tlModel.geo.steps).toBeGreaterThan(TL.TL_BUILD_BARS);
   return { b, cb };
 }
 // Herdr says idle: the off frame.
@@ -474,6 +485,7 @@ test("timeline view: working off at 400 turns, the off frame places nothing and 
     expect(b.tlModel.geo.turns.slice(0, -1).every((t, ti) => t === prev.geo.turns[ti])).toBe(true);
     expect(b.tlJob).toBeTruthy();
     expect(b.tlJob.total).toBe(0);
+    const J = b.tlJob;
     // A frame is asked for, so the build goes on.
     expect(cb.timers.some((x) => x.ms === 0)).toBe(true);
     const frames = slowNow(() => {
@@ -487,6 +499,7 @@ test("timeline view: working off at 400 turns, the off frame places nothing and 
     expect(frames.length).toBeGreaterThan(1);
     for (const f of frames.slice(0, -1)) expect(f).toEqual({ lanes: true, wait: false, stale: true });
     expect(frames.at(-1)).toEqual({ lanes: true, wait: false, stale: false });
+    expect(J.total).toBeGreaterThan(0);
     const M = b.tlModel;
     sameStrip(M, TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null));
   } finally {
@@ -502,6 +515,7 @@ test("timeline view: a press while the build runs selects the step under it on t
     slowNow(() => frame(b, cb));
     const J = b.tlJob;
     expect(J).toBeTruthy();
+    expect(J.total).toBeGreaterThan(0);
     const M = b.tlModel;
     expect(M.geo.stale).toBe(true);
     const ti = 120;
@@ -517,7 +531,7 @@ test("timeline view: a press while the build runs selects the step under it on t
     });
     expect(b.turnOfRow(b.tsel)).toBe(h.key);
     expect(b.tsel).not.toBe(h.key);
-    expect(b.tlJob).toBe(J);
+    expect(b.tlJob === J).toBe(true);
   } finally {
     setSystemTime();
     H.state.terminals[0].status = "idle";
@@ -531,12 +545,13 @@ test("timeline view: a selection change while the build runs outlines the step's
     slowNow(() => frame(b, cb));
     const J = b.tlJob;
     expect(J).toBeTruthy();
+    expect(J.total).toBeGreaterThan(0);
     const ti = 200;
     const h = b.tlModel.heads[ti];
     const si = h.steps.findIndex((r) => r.lk === "tool" && r.start != null && r.dur > 0);
     b.tsel = h.steps[si].key;
     const c = slowNow(() => frame(b, cb));
-    expect(b.tlJob).toBe(J);
+    expect(b.tlJob === J).toBe(true);
     const M = b.tlModel;
     expect(M.geo.stale).toBe(true);
     const box = TL.tlBar(M.L, M.heads, ti, si);
@@ -554,13 +569,14 @@ test("timeline view: a width change while the build runs starts it again at the 
     slowNow(() => frame(b, cb));
     const J = b.tlJob;
     expect(J).toBeTruthy();
+    expect(J.total).toBeGreaterThan(0);
     const L0 = b.tlModel.L;
     b.width = 1200;
     b.paneW = 1200;
     const m = made();
     slowNow(() => frame(b, cb));
     expect(since(m)).toEqual({ geo: 0, layout: 0, tail: 0 });
-    expect(b.tlJob).not.toBe(J);
+    expect(b.tlJob !== J).toBe(true);
     expect([b.tlJob.cw, b.tlJob.total]).toEqual([TL.tlStrip(1200), 0]);
     expect(b.tlModel.L).toBe(L0);
     slowNow(() => { for (let k = 0; k < 400 && b.tlJob; k++) frame(b, cb); });
@@ -580,6 +596,12 @@ test("timeline view: a width change while the build runs starts it again at the 
 function stopIn(J) {
   const g = J.gen;
   g.next = () => { delete g.next; return g.throw(new Error("stopped by the interrupt")); };
+}
+// Herdr's stop runs no catch, so renderOpen stays set after it; here render's catch ran and
+// cleared it. Set again, as the stop leaves it: the next render takes it for a stopped one.
+function leftOpen(b) {
+  expect(b.renderOpen).toBe(false);
+  b.renderOpen = true;
 }
 // Frames until the strip's build ends, each look at the clock 3 ms later: none may throw.
 function framesOut(b, cb) {
@@ -601,15 +623,16 @@ test("timeline view: a stop inside a step of the working-off build: that frame t
     const L0 = b.tlModel.L;
     stopIn(J);
     expect(() => slowNow(() => frame(b, cb))).toThrow("stopped by the interrupt");
-    expect(b.tlJob).not.toBe(J);
+    leftOpen(b);
+    expect(b.tlJob !== J).toBe(true);
     // The next frame draws the strip it had and starts a new build.
     const c = slowNow(() => frame(b, cb));
     expect(own(c, "th-tl-lanes")).not.toBe(null);
     expect(b.tlModel.L).toBe(L0);
     expect(b.tlJob).toBeTruthy();
-    expect(b.tlJob).not.toBe(J);
+    expect(b.tlJob !== J).toBe(true);
     expect(framesOut(b, cb)).toBeGreaterThan(0);
-    expect(b.tlJob).toBe(null);
+    expect(b.tlJob === null).toBe(true);
     const M = b.tlModel;
     sameStrip(M, TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null));
   } finally {
@@ -631,13 +654,14 @@ test("timeline view: a stop inside a step of the build from nothing: that frame 
   expect(J.total).toBeGreaterThan(0);
   stopIn(J);
   expect(() => slowNow(() => frame(b, cb))).toThrow("stopped by the interrupt");
-  expect(b.tlJob).not.toBe(J);
+  leftOpen(b);
+  expect(b.tlJob !== J).toBe(true);
   const c = slowNow(() => frame(b, cb));
   expect(own(c, "th-tl-wait")).not.toBe(null);
   expect(b.tlJob).toBeTruthy();
-  expect(b.tlJob).not.toBe(J);
+  expect(b.tlJob !== J).toBe(true);
   framesOut(b, cb);
-  expect(b.tlJob).toBe(null);
+  expect(b.tlJob === null).toBe(true);
   const M = b.tlModel;
   expect(M).toBeTruthy();
   sameStrip(M, TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null));
@@ -657,6 +681,7 @@ test("timeline view: the pane's width changing every frame while the working-off
     offFrame(b, cb);
     slowNow(() => frame(b, cb));
     expect(b.tlJob).toBeTruthy();
+    expect(b.tlJob.total).toBeGreaterThan(0);
     const L0 = b.tlModel.L;
     const cw0 = b.tlModel.cw;
     expect(cw0).toBe(TL.tlStrip(1440));
@@ -680,7 +705,7 @@ test("timeline view: the pane's width changing every frame while the working-off
     expect(seen.filter((x) => x.cut).map((x) => x.w)).toEqual([640, 560, 640]);
     // Settled at 1,700: the next frame ends the build.
     stillNow(() => frame(b, cb));
-    expect(b.tlJob).toBe(null);
+    expect(b.tlJob === null).toBe(true);
     const M = b.tlModel;
     expect(M.cw).toBe(TL.tlStrip(1700));
     sameStrip(M, TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null));
@@ -756,6 +781,17 @@ function denseTurn(i, t0, notes, calls, len) {
   const tools = steps.filter((r) => r.lk === "tool" || r.failed).length;
   return { kind: "trh", key, n: i + 1, t0, total: len, span: len, going: false, cnt: { steps: steps.length, input: 1, model: notes + 1, tools, failed, user: 1, agent: 0 }, steps };
 }
+// A turn of n notes of len ms, len ms apart, listed in clock order, then the n - 1 notes between
+// them, listed in clock order. Notes, so all are in one key's spans whatever the tracks.
+function fillTurn(i, t0, n, len) {
+  const key = `0:${i}`;
+  const end = (2 * n - 1) * len;
+  const steps = [row(key, 0, "you", 0, null)];
+  for (let k = 0; k < n; k++) steps.push(row(key, steps.length, "text", 2 * k * len, (2 * k + 1) * len));
+  for (let k = 0; k < n - 1; k++) steps.push(row(key, steps.length, "text", (2 * k + 1) * len, (2 * k + 2) * len));
+  steps.push(row(key, steps.length, "reply", end - 10, end));
+  return { kind: "trh", key, n: i + 1, t0, total: end, span: end, going: false, cnt: { steps: steps.length, input: 1, model: 2 * n, tools: 0, failed: 0, user: 1, agent: 0 }, steps };
+}
 // The span lists' entries a build reads, counted from outside: while fn runs, the global Map
 // is one whose get hands out each span list (a key with "|", an array of spans) behind a Proxy
 // that counts each entry read, onRead(the list's length). So the join's walk back, and each
@@ -819,7 +855,7 @@ function touchedSteps(heads, cw, now) {
   return { per, perT, perJ, longest, M, W: TL.timelineModel(null, wrapped, cw, "clock", now, null) };
 }
 
-test("timeline build: no step touches more than 1,024 bars and span entries together, or 260 turns, on 20 turns of 3,000 calls, one turn of 20,000, 5,600 ordinary turns, 20,000 turns and one turn of 300 calls apart, and it ends as a whole build", () => {
+test("timeline build: no step touches more than 1,024 bars and span entries together, or 260 turns, on 20 turns of 3,000 calls, one turn of 20,000, 5,600 ordinary turns, 20,000 turns, one turn of 300 calls apart and one of 100 notes apart with 99 that fill the gaps, and it ends as a whole build", () => {
   const cases = {
     dense: Array.from({ length: 20 }, (_, i) => denseTurn(i, T0 + i * 700000, 0, 3000, 600000)),
     one: [denseTurn(0, T0, 0, 20000, 3600000), denseTurn(1, T0 + 3700000, 2, 2, 60000)],
@@ -830,6 +866,10 @@ test("timeline build: no step touches more than 1,024 bars and span entries toge
     // 300 calls a second apart in a turn some 1,300 px wide: bars 3 px wide and over 1 px apart,
     // listed newest first, so each one's join walks back over every span of its key so far.
     apart: [denseTurn(0, T0, 0, 300, 300000), denseTurn(1, T0 + 310000, 2, 2, 60000)],
+    // 100 notes apart, each some 6 px wide, then the 99 that fill the gaps between them, left to
+    // right: each joins the span left of it and reaches the one right of it, so its splice moves
+    // every span after that one.
+    joined: [fillTurn(0, T0, 100, 1500), denseTurn(1, T0 + 310000, 2, 2, 60000)],
   };
   for (const [name, heads] of Object.entries(cases)) {
     const { per, perT, perJ, longest, M, W } = touchedSteps(heads, 1440, T0 + 1e10);

@@ -633,8 +633,10 @@ test("timeline view: working on and off on the last turn at 2,000 turns places n
     expect(b.trajReport().timeline.made).toEqual({ ...TL.TL_MADE });
     // The bounded build (test/timeline-off.test.js) from the next frame: exact once it ends.
     expect(m2.geo.stale).toBe(true);
-    expect(b.tlJob).toBeTruthy();
+    const J = b.tlJob;
+    expect(J).toBeTruthy();
     for (let k = 0; k < 400 && b.tlJob; k++) frame(b, cb);
+    expect(J.total).toBeGreaterThan(0);
     const m3 = b.tlModel;
     expect(m3.geo.stale).toBeUndefined();
     expect(m3.geo).toEqual(TL.timelineModel(null, m3.heads, m3.cw, "clock", Date.now(), null).geo);
