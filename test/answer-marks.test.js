@@ -614,6 +614,20 @@ describe("B: work that starts by itself after a row ended", () => {
     expect([prompts(s), replies(s)]).toEqual([["Why does the cart test fail?"], ["One."]]);
   });
 
+  // Red on the base: the command's line becomes a row and takes the tick's work from there on.
+  test("Claude Code: a local command typed while a tick works is no row, and the tick keeps its work", () => {
+    const t = claudeReplied("One.");
+    t.tick();
+    t.tool("m3");
+    t.user("<command-name>/usage</command-name>\n<command-message>usage</command-message>\n<command-args></command-args>", {}, 1);
+    t.tool("m4");
+    t.say("m5", "The tick's reply.");
+    t.hooks();
+    const s = read(t.file());
+    expect([prompts(s), replies(s), senders(s)]).toEqual([["Why does the cart test fail?", ""], ["One.", "The tick's reply."], ["you", "scheduled"]]);
+    expect(s.turns[1].tools).toBe(2);
+  });
+
   // Red on the base: noticeTurn knows a task notification only, and "goal" reads "Background agent".
   test("a row that started by itself is a quiet line that says what started it", () => {
     const goal = read(goalRollout().file(), "codex").turns[1];

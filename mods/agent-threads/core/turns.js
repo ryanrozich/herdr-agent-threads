@@ -536,7 +536,7 @@ function applyOne(s, e) {
   }
   // Only between turns: a command line logged during a turn (a local /usage), with no text
   // of its own for the model, is not what the model is working on, so it never takes a row.
-  if (s.pendingCmd && onlySelf(s) && !s.followActive && (e.k === "t" || e.k === "h" || e.k === "u" || e.k === "m" || e.k === "e")) { endSelf(s); promote(s); }
+  if (s.pendingCmd && !s.open.length && !s.followActive && (e.k === "t" || e.k === "h" || e.k === "u" || e.k === "m" || e.k === "e")) promote(s);
   if (s.pendingCmd && e.k !== "c" && e.k !== "title" && e.k !== "an" && e.k !== "r" && e.k !== "n" && e.k !== "x") s.pendingCmd = null;
   if (s.pendingSelf) {
     const above = s.turns[s.turns.length - 1];
