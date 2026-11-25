@@ -259,8 +259,8 @@ function newTurn(s, e) {
     sender,
     agent: sender.kind !== "you",
     cmd: Boolean(e.cmd),
-    // The texts said since the last call. after.marked: how many of them, from the first, the
-    // last one marked as the answer ends (say). It sits on the list, so it goes with it.
+    // The texts said since the last call. after.marked: how many, when the last is marked as the
+    // answer (say). It sits on the list, so it goes with it.
     after: [],
     tools: 0,
     // Tool calls in background wake-ups after the reply (not in tools), and in the latest one.
@@ -325,25 +325,29 @@ export const STEP_MAX = 300;
 // A subagent call's name, as ui.js toolKind sees it (kept here: turns.js imports nothing).
 const AGENT_CALL = /^(task|agent|subagent|spawn(_\w+)?|delegate(_\w+)?)$/i;
 
-// A text since the last call, marked as the answer (e.a) or not. restAt: when the text after the
-// last marked one began; thought and held: how much reasoning came before it (the export only).
+// A text since the last call, marked as the answer (e.a) or not. One that is not, right after
+// an answer, is a note (after.note): the answer is set apart first, so the two are never one
+// list, and an answer after a note makes the note a step. marked: how many texts, when they are
+// an answer; thought and held: how much reasoning came before the last (the export only).
 function say(w, e) {
+  if (!e.a && w.after.marked) {
+    takeFinal(w);
+    w.after.note = true;
+  } else if (e.a && w.after.note) noteStep(w);
   const after = w.after;
   if (!after.length) w.afterAt = ms(e.ts);
-  else if (after.length === after.marked) after.restAt = ms(e.ts);
   after.push(e.t);
-  if (!e.a) return;
-  after.marked = after.length;
+  if (e.a) after.marked = after.length;
+  if (!e.a && !after.note) return;
   after.thought = w.reasoning?.length ?? 0;
   after.held = w.held ?? 0;
 }
 
-// Before a call: the texts up to the last marked one leave `after` as one final, whole. What was
-// said after it stays, as the text before the call.
+// Before a call, or a note: the marked texts leave `after` as one final, whole.
 function takeFinal(w) {
-  const { marked, restAt, thought, held } = w.after;
+  const { marked, thought, held } = w.after;
   if (!marked) return;
-  const t = w.after.slice(0, marked).join("\n\n").trim();
+  const t = w.after.join("\n\n").trim();
   if (t) {
     const reason = w.reasoning?.slice(0, thought).join("\n\n") || "";
     const step = { k: "final", t, ...(reason ? { r: reason } : {}), ...(held ? { h: held } : {}), ...(w.afterAt != null ? { at: w.afterAt } : {}) };
@@ -352,8 +356,23 @@ function takeFinal(w) {
     if (w.reasoning) w.reasoning = w.reasoning.slice(thought);
     if (w.held) w.held -= held;
   }
-  w.after = w.after.slice(marked);
-  w.afterAt = w.after.length ? restAt ?? null : null;
+  w.after = [];
+  w.afterAt = null;
+}
+
+// A note that another answer follows, with no call between: a step of the work, with the
+// reasoning that came before it and not what came since.
+function noteStep(w) {
+  const { thought, held } = w.after;
+  const since = w.reasoning?.slice(thought);
+  const more = (w.held ?? 0) - held;
+  if (w.reasoning) w.reasoning = w.reasoning.slice(0, thought);
+  if (w.held) w.held = held;
+  const left = textStep(w, w.after.join("\n\n").trim(), w.reasoning?.join("\n\n") || "") + more;
+  if (since) w.reasoning = since;
+  if (left || w.held) w.held = left;
+  w.after = [];
+  w.afterAt = null;
 }
 
 // The text since the last call as a step of the work. Returns what reasoning the step does not
