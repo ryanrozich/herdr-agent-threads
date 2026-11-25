@@ -310,7 +310,12 @@ test("every way to an older turn moves the window to it: #n, a search step, the 
   noPins();
   const { v, cx } = await capSession(150, SMALL);
   const asked = scrollsOf(v);
-  const reached = (k) => asked.includes(k) || v.landed?.key === k;
+  // A landing at a place is planned before it is asked for (landed), and can go by another row
+  // (an earlier one at the top). So its own row is asked for after the plan: the plan alone says
+  // nothing of the asks. Any other jump asks for the turn's row itself.
+  let plan = null;
+  Object.defineProperty(v, "landed", { get: () => plan, set(p) { plan = p && { ...p, row: v.rowsMemo[p.j].key, from: asked.length }; } });
+  const reached = (k) => (plan?.key === k ? asked.slice(plan.from).includes(plan.row) : asked.includes(k));
   const fresh = () => {
     if (v.outlined()) v.action("outline:off", cx);
     v.query = "";
@@ -931,6 +936,13 @@ function shownIn(v, f) {
   for (const x of f.sizes) pre.push(pre[pre.length - 1] + x);
   return f.keys.filter((_k, i) => pre[i + 1] > f.off && pre[i] < f.off + v.listH);
 }
+// Where a frame's view is by its offset: true at the list's bottom (the offset at its greatest,
+// within a px), false with the list's end not drawn, else how far the bottom is below. The rows
+// drawn reach two past the view (simList), so the end among them (end) is not yet the bottom.
+function endOf(v, f) {
+  const short = Math.max(0, f.sizes.reduce((x, y) => x + y, 0) - v.listH) - f.off;
+  return short <= 1 ? true : f.end ? `${Math.round(short)} px short` : false;
+}
 
 test("past the cap, down from an open turn cut below lands on the next turn in the first frame, though the list is cut anew around it", async () => {
   // 80 turns, turn #41's reply of 40 paragraph and table pairs open: past a cap of 60 items
@@ -1322,7 +1334,7 @@ test("latest while a jump waits for the rows to reshape shows the end in the nex
   probeFrame(v, cx);
   v.action("latest", cx);
   const ends = [];
-  for (let k = 0; k < 5; k++) { probeFrame(v, cx); ends.push(sim.last().end); }
+  for (let k = 0; k < 5; k++) { probeFrame(v, cx); ends.push(endOf(v, sim.last())); }
   expect(ends).toEqual([true, true, true, true, true]);
   fastRows(v);
   settleList(v, cx, sim);
@@ -1355,7 +1367,7 @@ test("after a render Herdr stopped, a wheel still drops the jump that waits and 
     slowRows(v, cx);
     v.action("latest", cx);
     probeFrame(v, cx);
-    expect([sim.last().end, v.toBottom]).toEqual([true, true]);
+    expect([endOf(v, sim.last()), v.toBottom]).toEqual([true, true]);
     v.renderOpen = true;
     const at = Math.round(sim.last().off) - 600;
     sim.wheel(600);
@@ -1373,7 +1385,7 @@ test("after a render Herdr stopped, a wheel still drops the jump that waits and 
     v.renderOpen = true;
     v.action("latest", cx);
     got.latest = [];
-    for (let k = 0; k < 4; k++) { probeFrame(v, cx); got.latest.push([sim.last().end, v.scrollTo?.key ?? null]); }
+    for (let k = 0; k < 4; k++) { probeFrame(v, cx); got.latest.push([endOf(v, sim.last()), v.scrollTo?.key ?? null]); }
     want.latest = [[true, null], [true, null], [true, null], [true, null]];
     fastRows(v);
     H.listWindow = null;
@@ -3401,7 +3413,7 @@ test("a key to the session's end with the bottom already asked for still ends at
     expect([v.sel, v.follow]).toEqual(["0:40", true]);
     const fs = settleList(v, cx, sim);
     expect(fs.length).toBeGreaterThan(0);
-    expect({ away: fs.filter((f) => !f.end).length, end: sim.last().end, toBottom: v.toBottom, follow: v.follow }).toEqual({ away: 0, end: true, toBottom: false, follow: true });
+    expect({ away: fs.map((f) => endOf(v, f)).filter((at) => at !== true), toBottom: v.toBottom, follow: v.follow }).toEqual({ away: [], toBottom: false, follow: true });
   } finally {
     H.listWindow = null;
   }
@@ -3764,13 +3776,13 @@ for (const [where, n, cap] of [["in a window", 150, SMALL], ["under the cap", 60
     expect([v.follow, sim.last().end]).toEqual([false, false]);
     v.jumpLatest(true);
     jumpFrames(v, cx, sim);
-    expect({ shows: shownIn(v, sim.last()).includes(`0:${n}`), end: sim.last().end, sel: v.sel, follow: v.follow }).toEqual({ shows: true, end: true, sel: `0:${n}`, follow: true });
+    expect({ shows: shownIn(v, sim.last()).includes(`0:${n}`), end: endOf(v, sim.last()), sel: v.sel, follow: v.follow }).toEqual({ shows: true, end: true, sel: `0:${n}`, follow: true });
   }, 30000);
   test(`control, ${where}: the end brought on screen by a wheel, with no jump after it, follows again on the newest turn`, async () => {
     const { v, cx, sim } = await backAtEnd(n, cap);
     v.sel = "0:5";
     jumpFrames(v, cx, sim);
-    expect({ shows: shownIn(v, sim.last()).includes(`0:${n}`), end: sim.last().end, sel: v.sel, follow: v.follow }).toEqual({ shows: true, end: true, sel: `0:${n}`, follow: true });
+    expect({ shows: shownIn(v, sim.last()).includes(`0:${n}`), end: endOf(v, sim.last()), sel: v.sel, follow: v.follow }).toEqual({ shows: true, end: true, sel: `0:${n}`, follow: true });
   }, 30000);
   test(`control, ${where}: a rail jump from the chat's end, with no step left and no end asked for, lands on its turn`, async () => {
     noPins();

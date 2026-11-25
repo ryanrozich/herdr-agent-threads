@@ -52,7 +52,8 @@ async function hold(file, every, cost) {
     const top = f.sizes.slice(0, i).reduce((x, y) => x + y, 0) - f.off;
     return { shown: i >= 0 && top + f.sizes[i] > 0 && top < v.listH, off: Math.abs(top + f.sizes[i] / 2 - v.listH / 2) };
   };
-  const got = { presses: 0, draws: 0, lost: 0 };
+  // held: the draws made while the key is held.
+  const got = { presses: 0, draws: 0, held: 0, lost: 0 };
   let busy = 0;
   let next = 0;
   for (; t < 2600; t++) {
@@ -68,6 +69,7 @@ async function hold(file, every, cost) {
     if (dirty && t % 16 === 0) {
       dirty = false;
       got.draws++;
+      if (t < 2000) got.held++;
       frame(v, cx);
       busy = t + cost;
       // The first draw's own ask comes after it: the list is still at the chat's end there.
@@ -97,6 +99,6 @@ test("a key held down for 2 s asks the list for its turns as often as main at d9
 test("a key held down with a press every 16 ms: every frame drawn while it is held, but the first, shows the turn it has reached", async () => {
   const file = chat300();
   const got = {};
-  for (const cost of COSTS) { const r = await hold(file, 16, cost); got[cost] = [r.draws > 60, r.lost]; }
+  for (const cost of COSTS) { const r = await hold(file, 16, cost); got[cost] = [r.held > 60, r.lost]; }
   expect(got).toEqual(Object.fromEntries(COSTS.map((c) => [c, [true, 0]])));
 }, 60000);
