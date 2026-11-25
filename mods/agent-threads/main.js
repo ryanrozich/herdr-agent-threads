@@ -96,7 +96,7 @@ import {
   BAR_W, BAR_H, BAR_SLANT, trajLayout, rowsLeft,
 } from "./ledger.js";
 import {
-  timelineHit, tlBox, tornPoints, polyRows, tlStrip, hatchLines, tlNumbers, tlBar, tlRow, tlPathOf, tlDraw, TL_MADE,
+  timelineHit, tlBox, tornPoints, polyRows, tlStrip, hatchLines, tlNumbers, tlBar, tlOver, tlRow, tlPathOf, tlDraw, TL_MADE,
   TL_LANES, TL_MIN_W, TL_H, TL_GUT, TL_AX, TL_TK, TL_LT, TL_LANE, TL_PT, TL_ROWS_MIN,
 } from "./timeline.js";
 import { VERSION, versionLine, parseBuild } from "./version.js";
@@ -12354,19 +12354,17 @@ export default class Threads extends View {
     const kids = [];
     const hatch = this.hatchLayer(T.gaps, t.border, cw, laneH);
     if (hatch) kids.push(hatch);
-    // Half-height bars over full ones, failed ones over the rest.
-    const order = (k) => (k.endsWith("|1") ? 1 : 0) + (k.includes("|failed|") ? 2 : 0);
-    for (const [k, spans] of [...T.spans.entries()].sort(([a], [b]) => order(a) - order(b))) {
-      const s = at(k);
+    // Each lane's layers in the order a press reads them (timeline.js tlOver), then the running
+    // turn's unfinished bars, at now, torn, in that order too.
+    const inOrder = (layers) => Array.from(layers, ([k, spans]) => ({ spans, s: at(k) })).sort((a, b) => tlOver(a.s.ink, a.s.half) - tlOver(b.s.ink, b.s.half));
+    for (const { s, spans } of inOrder(T.spans)) {
       if (s.li < 0) continue;
       kids.push(this.rectLayer(spans, color(s.ink), `th-tl-${s.lane}-${s.ink}-${s.track}`, cw, s.li * TL_LANE + (s.half ? 8 : 2), s.half ? 6 : 12));
     }
-    // The running turn's unfinished bars, at now, torn.
     const grow = new Map();
     for (const g of M.grow) { if (!grow.has(g.k)) grow.set(g.k, []); grow.get(g.k).push([g.x0, g.x1, 1]); }
     let gi = 0;
-    for (const [k, spans] of grow) {
-      const s = at(k);
+    for (const { s, spans } of inOrder(grow)) {
       kids.push(this.rectLayer(spans, color(s.ink), `th-tl-grow-${gi++}`, cw, s.li * TL_LANE + (s.half ? 8 : 2), s.half ? 6 : 12));
     }
     // The selected row: its turn's band and, for a step, its bar's outline.

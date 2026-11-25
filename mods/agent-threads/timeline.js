@@ -886,14 +886,21 @@ export function tlBar(L, heads, ti, si, nowMs = Date.now()) {
   const upTo = ti === L.geo?.live && h.t0 != null && wall > 0 ? growEnd(T.x, T.w, wall, h.t0, nowMs) : null;
   return barAt(h, si, T.x, T.w, wall, L.scale, stepN(h), upTo, tracksOf(L, h, T.w));
 }
+// What is drawn over what in a lane, the higher number on top: the view draws its layers in this
+// order and a press takes the bar on top by it (nearStep), so both read this one place. The
+// running turn's growing bars over all; then failed calls over the rest; then half height over
+// full; then, on one track, an ordinary call over a subagent's and that over a "more calls" bar,
+// and in the Input lane the user's message over an agent's and that over a background update.
+const TL_OVER = Object.freeze({ context: 0, agent: 1, sub: 1, user: 2, model: 2, tools: 2 });
+export const tlOver = (ink, half, growing = false) => (growing ? 16 : 0) + (ink === "failed" ? 8 : 0) + (half ? 4 : 0) + (TL_OVER[ink] ?? 0);
 // Turn ti's step for a press at px x of the view in a lane, ly px down it (null: any):
 // { ti, i, top, d, r, w } (i null for none). With bars under the press (top; a full bar is 2 to
 // 14 px down its lane, a half one 8 to 14, the view's rectLayer), the one drawn on top: r, the
-// running turn's growing bars over all (4; the view draws them last), failed over the rest (2),
-// half height over full (1), the view's order; then the narrowest, w. Else the nearest bar
+// view's order (tlOver); then, of bars in one layer, the narrowest, w. Else the nearest bar
 // within 4 px, the first listed at equal distance. A turn under 2 px is drawn as one span per
-// lane, from its x and at least 1 px wide (barAt), so each of its bars is that span
-// here: the press answers what is drawn, its failed call where the span is red.
+// lane, from its x and at least 1 px wide (barAt), so each of its bars is that span here, its
+// tool calls in the ordinary call's ink (layTurn): the press answers what is drawn, its failed
+// call where the span is red.
 function nearStep(L, h, ti, x, lane, nowMs, ly) {
   const z = L.z ?? 1;
   const wall = L.geo?.walls[ti] ?? wallOf(h);
@@ -907,11 +914,12 @@ function nearStep(L, h, ti, x, lane, nowMs, ly) {
   for (let i = 0; i < len; i++) {
     const k = LEDGER_KINDS[h.steps[i].lk];
     // A row with no lane (an interrupted turn's Interrupted row) is no bar.
-    if (!laneKeys(h.steps[i]) || (lane && k?.lane !== lane)) continue;
+    if (!laneKeys(h.steps[i]) || (lane && k.lane !== lane)) continue;
     const b = barAt(h, i, tx, tw, wall, L.scale, len, upTo, tk);
     if (!b) continue;
     const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
-    const r = upTo != null && b.open ? 4 : (b.track ? 1 : 0) + (k?.ink === "failed" ? 2 : 0);
+    const ink = tw < 2 && k.lane === "tools" && k.ink !== "failed" ? "tools" : k.ink;
+    const r = tlOver(ink, b.track, upTo != null && b.open);
     const w = b.x1 - b.x0;
     if (d === 0 && (ly == null || (ly >= (b.track ? 8 : 2) && ly <= 14))) {
       if (!out.top || r > out.r || (r === out.r && w < out.w)) Object.assign(out, { i, top: true, d, r, w });
