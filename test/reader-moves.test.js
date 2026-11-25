@@ -398,6 +398,28 @@ test("no scroll the pane makes itself counts as the reader's", () => {
   expect(found).toEqual(Object.fromEntries(PANE.map((n) => [n, "no"])));
 });
 
+// ownAsk counts a row ask as the pane's own (askN), so every one is made there: askScroll is
+// named in the code in two places, its own line and ownAsk's. Any other naming fails, in
+// whatever form (a call, ["askScroll"]), a comment after code and a block comment too. Read a
+// line at a time: over the whole file the strip above loses its place and leaves comments in.
+// A line the strip takes the name out of must be a comment from its start, so a regex it
+// misreads cannot hide a call.
+function namings(src, name) {
+  const lines = src.split("\n").filter((l) => l.includes(name));
+  return lines.filter((l) => code(l).includes(name) || !/^\s*\/\//.test(l)).map((l) => l.trim().split("(")[0]);
+}
+test("askScroll is called only from ownAsk", () => {
+  const cases = {
+    call: "  bodyNow() {\n    this.askScroll(i, how);\n  }",
+    bracket: "    this[\"askScroll\"](i, how);",
+    afterRegex: "    if (/a\\//.test(u)) this.askScroll(i, how);",
+    trailing: "    this.x = 1; // askScroll",
+    comment: "    // askScroll is not called here",
+  };
+  expect(Object.fromEntries(Object.entries(cases).map(([k, src]) => [k, namings(src, "askScroll").length]))).toEqual({ call: 1, bracket: 1, afterRegex: 1, trailing: 1, comment: 0 });
+  expect(namings(SRC, "askScroll")).toEqual(["askScroll", "ownAsk"]);
+});
+
 test("the pane's own scrolls leave the count: a reply growing while following, a build, and a stopped render's scroll asked for again", async () => {
   const { v, cx } = await pane(fixture("--extra", "20"));
   settleRows(v, cx);

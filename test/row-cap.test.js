@@ -2763,3 +2763,56 @@ test("a build Herdr stops in noteRows, before or after its note, ends as an unst
   expect([got.none.sel, got.none.due]).toEqual(["0:300", null]);
   expect(got.none.built).toBeLessThan(300);
 }, 60000);
+
+// A splice (a card closed) notes each run's change inside the part where the rows, their sizes
+// and their index change together (splicing). A stop in that note, left as Herdr leaves it, is
+// followed by a build of every row, once, and ends as an unstopped run does.
+test("a splice Herdr stops in noteRows is followed by one build of every row, and ends as an unstopped run does", async () => {
+  const STOP = new Error("stopped by Herdr");
+  const got = {};
+  for (const stop of [false, true]) {
+    const { v, cx } = await runningSession(300, SMALL);
+    v.jumpLatest(true);
+    frames(v, cx);
+    v.toggle("0:295", cx);
+    frames(v, cx);
+    const opened = v.open.has("0:295");
+    let built = 0;
+    const turnRows = v.turnRows;
+    v.turnRows = function (...a) { built++; return turnRows.apply(this, a); };
+    let armed = stop;
+    let inSplice = false;
+    let notes = 0;
+    const splice = v.spliceRows;
+    v.spliceRows = function (...a) { inSplice = true; const done = splice.apply(this, a); inSplice = false; return done; };
+    const note = v.noteRows;
+    v.noteRows = function (...a) {
+      if (inSplice) notes++;
+      if (armed && inSplice) { armed = inSplice = false; throw STOP; }
+      return note.apply(this, a);
+    };
+    v.toggle("0:295", cx);
+    let stops = 0;
+    for (let k = 0; k < 40; k++) {
+      try { draw(v, cx); } catch (e) { if (e !== STOP) throw e; stops++; v.renderOpen = true; }
+      cx.flush(150);
+    }
+    delete v.turnRows;
+    delete v.spliceRows;
+    delete v.noteRows;
+    got[stop] = {
+      opened, closed: !v.open.has("0:295"), stops, notes, built, splicing: Boolean(v.splicing),
+      end: {
+        keyed: v.rowsKey != null, index: v.baseRows.every((r, i) => v.baseIndex.get(r.key) === i) && v.baseIndex.size === v.baseRows.length,
+        rows: v.baseRows.map((r) => r.key), sizes: v.baseSizes.slice(), list: v.rows().map((r) => r.key), slots: v.slotsMemo.slice(),
+        win: [v.win.at?.a, v.win.at?.z], outside: expectOutsideRight(v), sel: v.sel,
+      },
+    };
+  }
+  const { end: e0, ...none } = got.false;
+  const { end: e1, ...one } = got.true;
+  expect(none).toEqual({ opened: true, closed: true, stops: 0, notes: 1, built: 1, splicing: false });
+  // The stopped splice's one turn, then every turn once.
+  expect(one).toEqual({ opened: true, closed: true, stops: 1, notes: 1, built: 301, splicing: false });
+  expect(e1).toEqual(e0);
+}, 60000);
