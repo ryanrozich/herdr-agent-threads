@@ -17,7 +17,7 @@ import { atif } from "../mods/agent-threads/core/atif.js";
 import { seenOf } from "../mods/agent-threads/pins.js";
 import { detailOf, ledgerTurn } from "../mods/agent-threads/ledger.js";
 import { agentReplied, noticeTurn, senderLabel } from "../mods/agent-threads/ui.js";
-import { pane, settleRows, setup, state } from "./render-harness.js";
+import { pane, settle, settleRows, setup, state } from "./render-harness.js";
 
 setup();
 
@@ -1922,8 +1922,9 @@ describe("the pane", () => {
     const old = v.current();
     v.pick({ path: claudeReplied("Two.").file() }, cx);
     expect(v.selIdMemo).toBeNull();
-    // The new transcript's read ends before the test does.
-    for (let i = 0; i < 3; i++) { const p = cx.pending; cx.pending = []; await Promise.all(p); }
+    // The new transcript's read ends before the test does. Not cx.pending: it holds the watch
+    // and command loops, which never end.
+    await settle(v);
     expect([v.current() === old, v.selIdMemo]).toEqual([false, null]);
   });
 
