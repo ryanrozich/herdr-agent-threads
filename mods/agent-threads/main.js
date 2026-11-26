@@ -5911,8 +5911,9 @@ export default class Threads extends View {
   // A mod cannot read a highlight, and it never sees ⌘C once Herdr's copy action has handled
   // it. So the clipboard is noted at each press in the list: text that arrived after the press
   // and comes from an open reply is what ⌘C copied, and q quotes it.
-  // How far the pointer has gone from the last press, in window px. The list's click
-  // arrives on the release, so a drag that selected text arrives as a click too.
+  // How far the pointer has gone from the press while it is held, in window px. The list's
+  // click arrives on the release, so a drag that selected text arrives as a click too; that
+  // click ends the press (click), and a move after it changes nothing here.
   notePointer(at, cx) {
     if (!this.pressAt || !at) return;
     this.pressMoved = Math.max(this.pressMoved ?? 0, Math.hypot(at.x - this.pressAt.x, at.y - this.pressAt.y));
@@ -6205,6 +6206,10 @@ export default class Threads extends View {
   }
 
   click(key, cx) {
+    // The release that sent this click ends the press: a move after it is no drag (notePointer).
+    // Left set, the pointer going on more than DRAG_SLOP within OPEN_WAIT_MS read as a drag and
+    // dropped the pending open, so a click on a closed pin or turn showed only its row.
+    this.pressAt = null;
     // The list drawn hidden under the loading state takes no press.
     if (this.openActive()) return;
     this.readerMoved();
