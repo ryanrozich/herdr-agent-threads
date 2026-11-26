@@ -2100,6 +2100,36 @@ test("a step press right after a new search from a turn it does not match, whose
   expect(runs).toEqual(["olderMatch", "newerMatch"].map((press) => ({ press, found: 0, stayed: true, sel: true, right: true })));
 }, 180000);
 
+// The same press from another turn the search does not match than the one it started from (a
+// pin or a jump can select one while the search counts): the new search's selection does not
+// apply there, so the press itself goes on until a match is found, and lands on the newest.
+test("a step press from another turn the search does not match, with no match found yet, goes on by itself and lands on the newest match", async () => {
+  const runs = [];
+  for (const press of ["olderMatch", "newerMatch"]) {
+    const { v, cx, s } = await longPane(600);
+    // Two matches, then 3,400 turns with none: more than two slices check at 1x.
+    for (let i = 0; i < 3402; i++) asked(s, i < 2 ? `Tail ${i}: the quokka list.` : `Tail ${i}: nothing here.`);
+    settleRows(v, cx);
+    v.sel = `0:${s.turns.length}`;
+    const base = s.turns.length - 3402;
+    const other = `0:${s.turns.length - 1}`;
+    const r = { press };
+    priced(v, () => {
+      v.action("search:quokka", cx);
+      v.sel = other;
+      r.from = !v.selMatches();
+      v.action(press, cx);
+      r.found = v.hitsNow().top - v.hitsNow().bot;
+      r.stayed = v.sel === other;
+      for (let k = 0; k < 80 && counting(v); k++) drawOnce(v, cx);
+    });
+    r.sel = v.sel === `0:${base + 2}`;
+    r.right = JSON.stringify(places(v)) === JSON.stringify(want(v, "quokka"));
+    runs.push(r);
+  }
+  expect(runs).toEqual(["olderMatch", "newerMatch"].map((press) => ({ press, from: true, found: 0, stayed: true, sel: true, right: true })));
+}, 180000);
+
 // A turn left open with no reply while later ones start, then answered together with a later
 // one: its match comes from that reply (answeredBy). It is before the last turn done with a
 // reply, so the tail from that turn on does not hold it; the count still counts it.
