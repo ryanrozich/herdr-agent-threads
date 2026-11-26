@@ -1847,6 +1847,68 @@ test("a step with the newest place half taken off by a stop in the tail's pop go
   expect(r).toEqual({ older: true, newer: true, whole: true });
 }, 120000);
 
+// ---- the places in two arrays ----
+// The set keeps each match's key by its place in two arrays (Places in main.js): up for the
+// places from 0 up, dn for those from -1 down. With a Map keyed by the place, one tail check of
+// a 1,990- or 2,490-turn tail took 10.2 to 14.4 ms on the rig (Herdr 0.1.18, the median of the
+// later checks in a run); with the two arrays, 1.9 to 2.3 ms. A dropped place is written
+// undefined and no array gets shorter, so a place written next to the oldest one after it was
+// dropped lands at the array's end, never past it (a hole).
+const holes = (a) => { let n = 0; for (let i = 0; i < a.length; i++) if (!(i in a)) n++; return n; };
+
+test("the set's places in two arrays: each place on either side of 0 reads back its key, a dropped place reads as none, and a place written after the oldest was dropped leaves no hole", async () => {
+  const { v, cx } = await longPane(600);
+  v.action("search:rename", cx);
+  const b = new v.hits.by.constructor();
+  for (const p of [0, 1, 2]) b.set(p, `0:${p + 10}`);
+  for (const p of [-1, -2, -3]) b.set(p, `0:${p + 5}`);
+  const r = { arrays: Array.isArray(b.up) && Array.isArray(b.dn) };
+  r.read = [-3, -2, -1, 0, 1, 2].map((p) => b.get(p));
+  // The newest place dropped (a tail check's pop), place 0, and the oldest (a cut back).
+  b.delete(2);
+  b.delete(0);
+  b.delete(-3);
+  r.dropped = [b.get(2), b.has(2), b.get(0), b.has(0), b.get(-3), b.has(-3), b.get(-1), b.has(1), b.has(-2)];
+  // One older than the oldest, and the newest again.
+  b.set(-4, "0:1");
+  b.set(2, "0:13");
+  r.after = [b.get(-4), b.get(-3), b.get(2)];
+  r.lengths = [b.up?.length, b.dn?.length];
+  r.holes = r.arrays ? [holes(b.up), holes(b.dn)] : null;
+  // A drop past either end changes nothing.
+  b.delete(9);
+  b.delete(-9);
+  r.past = [b.up?.length, b.dn?.length];
+  expect(r).toEqual({
+    arrays: true,
+    read: ["0:2", "0:3", "0:4", "0:10", "0:11", "0:12"],
+    dropped: [undefined, false, undefined, false, undefined, false, "0:4", true, true],
+    after: ["0:1", undefined, "0:13"],
+    lengths: [3, 4],
+    holes: [0, 0],
+    past: [3, 4],
+  });
+});
+
+// A search counted going back from the newest turn has its places from -1 down; turns that come
+// in with matches are placed from the newest place up, past 0. Both arrays then hold their side.
+test("a search's places on both sides of 0, after turns come in with matches, are in their two arrays with no hole, and agree with the matches", async () => {
+  const { v, cx, s } = await longPane(600);
+  v.sel = `0:${s.turns.length}`;
+  priced(v, () => {
+    v.action("search:please look", cx);
+    for (let k = 0; k < 200 && counting(v); k++) drawOnce(v, cx);
+    tailMore(s, 100);
+    for (let k = 0; k < 200 && (k < 1 || counting(v)); k++) drawOnce(v, cx);
+  });
+  const h = v.hitsNow();
+  const arrays = Array.isArray(h.by.up) && Array.isArray(h.by.dn);
+  const r = { sides: [h.bot < 0, h.top > 0], arrays, holes: arrays ? [holes(h.by.up), holes(h.by.dn)] : null, unsound: arrays ? unsound(h, true) : null };
+  expect(r).toEqual({ sides: [true, true], arrays: true, holes: [0, 0], unsound: [] });
+  expect(counting(v)).toBe(false);
+  expect(places(v)).toEqual(want(v, "please look"));
+}, 120000);
+
 // A turn with no reply: a prompt and its end.
 const asked = (s, t) => {
   const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
