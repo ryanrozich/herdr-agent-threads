@@ -989,6 +989,49 @@ test("a stop between the writes of one place leaves no empty place to step onto,
   expect(runs).toEqual(runs.map((r) => ({ side: r.side, which: r.which, after: r.after, stopped: true, landed: `${r.which} ${r.after ? "after" : "before"}`, inside: [], sel: true, cut: [], right: true })));
 }, 300000);
 
+// A stop planted in the cut (hitsCut), at the first of the two deletes of one place (its key
+// by place, or its place by key), after that delete is done. The cut is then done again from
+// the start, as the next slice does it.
+function plantDrop(h) {
+  const maps = [["by", h.by], ["at", h.at]];
+  for (const [name, m] of maps) {
+    const real = m.delete;
+    m.delete = function (key) {
+      real.call(this, key);
+      for (const [, x] of maps) delete x.delete;
+      landed = `${name} first`;
+      throw new Error("interrupted");
+    };
+  }
+}
+// A place left half made by a stopped slice is dropped by the next cut, its place by key
+// first and then its key by place: a stop between the two leaves the key by place, which the
+// cut done again finds and drops. The other way round, the key by place was gone, so the cut
+// done again could not find the place by key, which stayed outside the set.
+test("a stop between the two deletes of a half-made place in the cut leaves nothing outside the set once the cut is done again", async () => {
+  const { v, cx, s } = await longPane(2000);
+  v.sel = `0:${s.turns.length}`;
+  const r = {};
+  priced(v, () => {
+    v.action("search:ar", cx);
+    landed = null;
+    plantWrite(v.hits, "at", 3, true);
+    r.stopped = drawOnce(v, cx).stopped;
+    r.half = landed;
+    const h = v.hits;
+    r.halfMade = h.by.get(h.bot - 1) !== undefined && h.at.get(h.by.get(h.bot - 1)) === h.bot - 1;
+    landed = null;
+    plantDrop(h);
+    try { v.hitsCut(h); r.cutStopped = null; } catch (e) { r.cutStopped = e.message; }
+    r.first = landed;
+    v.hitsCut(h);
+    r.cut = unsound(h, true);
+    for (let k = 0; k < 60 && counting(v); k++) drawOnce(v, cx);
+  });
+  expect(r).toEqual({ stopped: true, half: "at after", halfMade: true, cutStopped: "interrupted", first: "at first", cut: [] });
+  expect(places(v)).toEqual(want(v, "ar"));
+}, 120000);
+
 // Hidden matches (agent messages with no reply) are counted apart from the places: hidOld for
 // the older sessions, and hidL, the newest session's turn indexes. A stop in a slice that has
 // counted some is cut back to the slice's start, so each is counted once.
