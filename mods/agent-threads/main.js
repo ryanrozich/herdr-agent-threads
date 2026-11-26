@@ -2680,7 +2680,6 @@ export default class Threads extends View {
   }
   paneWeight() { return PANE_WEIGHT[this.win?.kind ?? "chat"]; }
   heldBytes() { const w = this.paneWeight(); let n = 0; for (const x of this.sessions) n += sessionBytes(x, w); return n; }
-  // A side pane lets the session go and shows why (refusedView) until Retry.
   refuse(s) {
     this.refused = { file: s.file };
     this.restart(s, true);

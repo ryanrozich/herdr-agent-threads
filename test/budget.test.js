@@ -302,3 +302,28 @@ test("a pane that closes, or that a newer copy of the mod replaces, empties its 
   expect(b.v.forgotten).toBe(true);
   expect(windowState().panes.size).toBe(0);
 }, 20000);
+
+test("a reload of the same code: the copy it replaced in this Herdr pane, its timers stopped, is emptied by the new copy's 1 s timer, and a copy still beating is left alone", async () => {
+  const file = fixture("--extra", "3");
+  const tick = (p) => { for (const x of p.cx.everies) if (x.ms === 1000) x.fn(p.cx); };
+  const a = openPane(file);
+  await settle(a.v);
+  tick(a);
+  const where = a.v.win.pane;
+  expect(where).toBeTruthy();
+  const turns = a.v.current().turns;
+  // The new copy, in the same Herdr pane, while the old one still beats: both stay.
+  const b = openPane(file);
+  await settle(b.v);
+  tick(b);
+  tick(b);
+  expect(b.v.win.pane).toBe(where);
+  expect(a.v.forgotten).toBeUndefined();
+  // The old copy's timers stopped (Herdr cancelled them): the new copy's next beat empties it.
+  a.v.win.beat = Date.now() - 2 * GHOST_MS;
+  tick(b);
+  expect(a.v.forgotten).toBe(true);
+  expect(turns.length).toBe(0);
+  expect([...windowState().panes]).toEqual([b.v.win]);
+  expect(b.v.current().turns.length).toBeGreaterThan(0);
+}, 20000);

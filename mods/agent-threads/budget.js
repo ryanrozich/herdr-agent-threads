@@ -92,7 +92,6 @@ export function measure(s, until = Infinity) {
   return m;
 }
 const weigh = (text, fixed, w) => text + w * fixed;
-// A pane's bytes for a session at weight w.
 export function sessionBytes(s, w) {
   const m = META.get(s);
   return m ? weigh(m.text, m.fixed, w) : 0;
@@ -168,7 +167,6 @@ export function windowState() {
 }
 const deref = (e) => (typeof e.ref?.deref === "function" ? e.ref.deref() : e.ref);
 
-// A pane joins as it starts and leaves as it closes. kind: "chat", "pinned" or "trajectory".
 export function joinWindow(pane, kind) {
   const e = { gen: GEN, ref: typeof WeakRef === "function" ? new WeakRef(pane) : pane, kind, bytes: 0, pane: null, beat: Date.now() };
   windowState().panes.add(e);
@@ -179,7 +177,6 @@ export function leaveWindow(e) {
   w.panes.delete(e);
   dropRead(e);
 }
-// Every pane's bytes but one.
 export function windowBytes(except = null) {
   let n = 0;
   for (const e of windowState().panes) if (e !== except) n += e.bytes;
