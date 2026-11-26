@@ -228,7 +228,7 @@ async function searchRun(n, x, seed = 0) {
           q, typed, counted: countedAt, frames: draws.length, stops: draws.filter((d) => d.stopped).length,
           firstReturn: firstReturn < 0 ? null : firstReturn + 1, settled: settled(v),
           maxMs: Math.max(...draws.map((d) => d.ms)), maxChecks: Math.max(...draws.map((d) => d.checks)),
-          still, count: v.filterCount(), want, landed,
+          still, count: v.filterCount(), total: v.matchPlace().n, want, landed,
           exact: rnd ? JSON.stringify(places(v)) === JSON.stringify(wantOf(v, q, real)) : null,
         });
       }
@@ -237,15 +237,12 @@ async function searchRun(n, x, seed = 0) {
   } finally { X = 1; }
 }
 
-// The field's total once counted, read whole: "N of M · ...", "M match(es) ..." or "No
-// matches ...", M as a number (0 for no match); null for any other text, a count still going
-// on ("M+") among them.
-const fieldTotal = (text) => {
-  const t = String(text).replace(/,/g, "");
-  if (/^No matches( ·|$)/.test(t)) return 0;
-  const m = t.match(/^\d+ of (\d+)( ·|$)/) ?? t.match(/^(\d+) match(es)?( ·|$)/);
-  return m ? Number(m[1]) : null;
-};
+// A count still going on, as the field shows it: "Counting…", or a total with a "+". The
+// total itself is read as a number (matchPlace), not from the field's text, whose digits
+// are grouped by the machine's locale ("1,680", "1.680", "1 680").
+const partial = (text) => text === "Counting…" || String(text).includes("+");
+// A number as the test names write it, 2,000 or 5,600, whatever the machine's locale.
+const grouped = (n) => String(n).replace(/\B(?=(\d{3})+$)/g, ",");
 // Each pane's figures once, for the tests that read them.
 const runs = new Map();
 const figures = (n, x, seed = 0) => { const k = `${n}x${x}s${seed}`; if (!runs.has(k)) runs.set(k, searchRun(n, x, seed)); return runs.get(k); };
@@ -254,7 +251,7 @@ const figures = (n, x, seed = 0) => { const k = `${n}x${x}s${seed}`; if (!runs.h
 const HANDLER_MS = 6.5;
 
 for (const x of [1, 2]) for (const n of [2000, 5600]) {
-  const at = `at ${n.toLocaleString()} turns${x === 1 ? "" : `, at ${x}x the prices`}`;
+  const at = `at ${grouped(n)} turns${x === 1 ? "" : `, at ${x}x the prices`}`;
   test(`search ${at}: one letter checks no turn and leaves the list as it was`, async () => {
     const r = await figures(n, x);
     expect(r.one).toEqual({ typed: 0, draws: [0, 0, 0], stops: 0, sameRows: true, text: "Type 2 or more characters" });
@@ -270,7 +267,7 @@ for (const x of [1, 2]) for (const n of [2000, 5600]) {
     // The rows are built and the matches counted within 40 draws.
     for (const st of r.steps) expect([st.q, st.counted != null && st.counted <= 40]).toEqual([st.q, true]);
     // The final count is every matching shown turn.
-    expect(r.steps.map((st) => [st.q, fieldTotal(st.count)])).toEqual(r.steps.map((st) => [st.q, st.want]));
+    expect(r.steps.map((st) => [st.q, st.total, partial(st.count)])).toEqual(r.steps.map((st) => [st.q, st.want, false]));
   }, 300000);
   // After a stop the rows wait out the light draws (CUT_MS) to be reshaped, on a timer that
   // flush(0) does not run: these runs are judged built and counted, not shaped.
@@ -279,7 +276,7 @@ for (const x of [1, 2]) for (const n of [2000, 5600]) {
     if (process.env.THREADS_SEARCH_FIGURES) console.log(JSON.stringify(r));
     expect(r.steps.map((st) => ({ q: st.q, stops: st.stops, landed: st.landed, exact: st.exact }))).toEqual(QUERIES.map((q) => ({ q, stops: 1, landed: "scan", exact: true })));
     for (const st of r.steps) expect([st.q, st.counted != null && st.counted <= 40]).toEqual([st.q, true]);
-    expect(r.steps.map((st) => [st.q, fieldTotal(st.count)])).toEqual(r.steps.map((st) => [st.q, st.want]));
+    expect(r.steps.map((st) => [st.q, st.total, partial(st.count)])).toEqual(r.steps.map((st) => [st.q, st.want, false]));
   }, 300000);
   test(`search ${at}: a draw with nothing changed checks no turn, no draw runs past Herdr's time, and the command and each letter take one slice`, async () => {
     const r = await figures(n, x);
