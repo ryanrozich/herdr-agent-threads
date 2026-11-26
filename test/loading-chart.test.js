@@ -293,7 +293,10 @@ test("the pane: the chart has its rows from the first paint, fills from the firs
   draw(v, cx);
   expect(o.chart).toBe(kept);
   // The counts in two rows, the tokens with the cache share.
-  expect(said.join("|")).toMatch(/So far: \d+ prompts? · \d+ tool calls?/);
+  // (Each digit is drawn in a cell of its own, so the pieces are joined.)
+  const joined = said.join("");
+  expect(joined).toMatch(/So far: \d+ prompts? · \d+ tool calls?(Newest|\d)/);
+  expect(joined).toMatch(/\d(\.\d)?k tokens · cache \d+(\.\d)?%/);
   go(() => false);
   await settle(v);
   expect(s.loaded).toBe(true);
