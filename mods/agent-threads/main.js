@@ -9461,8 +9461,12 @@ export default class Threads extends View {
   // first; this is a guard).
   stepHit(h, older) {
     // A press is the reader's own step: a new search's selection still to come (hitsSelect) is
-    // called off, so a slice run here does not move the turn the step goes from.
+    // called off while it runs, so a slice run here does not move the turn the step goes from.
+    // A press that leaves a turn the search does not match where it was (no match found yet)
+    // gives it back: the new search still selects its newest match once one is found.
+    const select = this.hitsSelect;
     this.hitsSelect = null;
+    const giveBack = () => { if (select && !this.selMatches()) this.hitsSelect = select; };
     while (h.top > h.bot && !h.by.has(h.top - 1)) h.top--;
     const next = () => {
       const p = h.at.get(this.sel);
@@ -9476,7 +9480,7 @@ export default class Threads extends View {
     // move since then calls it off (scanStep).
     const draws = h.step?.draws ?? 0;
     const moves = h.step?.moves ?? this.readerMoves ?? 0;
-    const keep = () => { h.step = { key: this.sel, older, draws, moves }; return true; };
+    const keep = () => { giveBack(); h.step = { key: this.sel, older, draws, moves }; return true; };
     // An older step from a match in a tail being checked again, not placed yet: the turns back
     // from it to the tail's next turn, not checked again yet, are checked here, one slice at
     // most (tailBack). It lands on the first match there; a slice that ends first keeps the
@@ -9517,7 +9521,7 @@ export default class Threads extends View {
       j = next();
       if (j >= h.top && h.cur.tail) return keep();
     }
-    if (h.top === h.bot) return !h.done;
+    if (h.top === h.bot) { giveBack(); return !h.done; }
     if (j < h.bot || j >= h.top) return true;
     this.sel = h.by.get(j);
     this.follow = false;
