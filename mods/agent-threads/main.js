@@ -6932,6 +6932,8 @@ export default class Threads extends View {
     this.open.clear();
     this.full.clear();
     this.sel = null;
+    // The selected turn's id holds its session: let it go with the list.
+    this.selIdMemo = null;
     this.res = { kind: "resolving" };
     this.resolve(cx);
     cx.notify();
