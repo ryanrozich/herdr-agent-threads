@@ -26,7 +26,9 @@ import { problems } from "../atif-schema.js";
 // Antigravity record that is not USER_INPUT, PLANNER_RESPONSE or GENERIC is not read (a
 // CODE_ACTION result, a SYSTEM error record) · R21 Antigravity records are read as written, not
 // replaced by step_index, and a turn's planner texts make one reply · R22 an Antigravity
-// created_at written as a number is not read as a time.
+// created_at written as a number is not read as a time · R23 a completed OpenCode message's
+// text is a marked answer, so the turn's reply step joins those texts in order, apart from
+// the calls' steps (TRD-164).
 export const EXPECTED_DIFFERENCES = [
   { id: "claude: agent_steps_carry_llm_call_count", reason: "R6", kind: "not handled", note: "Agent Threads never writes llm_call_count; token totals go on the turn's last step." },
   { id: "claude: byte_faithful_property_across_inputs[0]", reason: "R3", kind: "by design", note: "An empty prompt makes no turn in Agent Threads." },
@@ -94,11 +96,11 @@ export const EXPECTED_DIFFERENCES = [
   { id: "codex: user_messages_are_never_grouped", reason: "R6", kind: "not handled", note: "Agent Threads never writes llm_call_count on a step." },
   { id: "opencode: cache_tokens_in_metrics", reason: "R11", kind: "not handled", note: "The 200 cache-write tokens are in prompt_tokens (705, not 505) and kept as metrics.extra.cache_creation_input_tokens with the turn's scope, not as cache_write_tokens." },
   { id: "opencode: multiple_reasoning_events_are_joined", reason: "R13", kind: "not handled", note: "Agent Threads does not read OpenCode's reasoning parts, so the step has no reasoning_content." },
-  { id: "opencode: multiple_turns", reason: "R8", kind: "not handled", note: "Steps and token totals match; Agent Threads writes no total_cost_usd." },
+  { id: "opencode: multiple_turns", reason: "R8", kind: "not handled", note: "The call step and the token totals match; both messages completed with finish stop, so both texts are marked answers of the one turn, joined in order as its reply step (R23), where Harbor keeps one step per message; Agent Threads writes no total_cost_usd." },
   { id: "opencode: no_user_step_without_instruction_or_event", reason: "R3", kind: "by design", note: "Without a prompt the session has no turn, so the export prints no trajectory; Harbor writes the agent step alone." },
   { id: "opencode: reasoning_content_is_captured", reason: "R13", kind: "not handled", note: "Agent Threads does not read OpenCode's reasoning parts, so the step has no reasoning_content." },
   { id: "opencode: text_only_turn", reason: "R8", kind: "not handled", note: "The step and its tokens match; Agent Threads writes no cost_usd." },
-  { id: "opencode: tool_call_turn", reason: "R15", kind: "not handled", note: "The call, its id and its result match, but OpenCode's calls.sh prints no arguments, so arguments is {} with extra.arguments_unread." },
+  { id: "opencode: tool_call_turn", reason: "R15", kind: "not handled", note: "The call, its id and its result match, but OpenCode's calls.sh prints no arguments, so arguments is {} with extra.arguments_unread; the message completed with finish stop, so its text is the reply step, apart from the call's step (R23)." },
   { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[0]", reason: "R14", kind: "by design", note: "The failed call (a text error, no output; a 1.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
   { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[1]", reason: "R14", kind: "by design", note: "The failed call (a text error, no output; a 2.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
   { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[2]", reason: "R14", kind: "by design", note: "The failed call (an error object, no output; a 1.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success. Its content is the error's message, not Python's text of the object." },

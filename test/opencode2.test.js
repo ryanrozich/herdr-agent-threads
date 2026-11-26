@@ -101,6 +101,37 @@ test("2.x: builds a finished turn from session_message", () => {
   expect(s.offset).toBe(1);
 });
 
+test("2.x: marks text from completed non-tool assistant messages", () => {
+  // As 1.x: a message that completed with a finish other than tool-calls, and no error, is a
+  // marked answer, so a call after it in the same turn cannot move it into Worked or cut it.
+  // An aborted message and a provider error never qualify.
+  const o = open();
+  user(o, "msg_u1", "Fix the cart total", 0);
+  assistant(o, "msg_a1", 100, [text("Counting the lines."), tool("shell")], { finish: "tool-calls", usage: tokens(50, 10, 20, 5, 3) });
+  assistant(o, "msg_a2", 2000, [text("The total rounds each line.")], { finish: "stop", done: 4000, usage: tokens(60, 20, 40, 0) });
+  assistant(o, "msg_a3", 5000, [tool("read")], { finish: "tool-calls", done: 6000, usage: tokens(70, 5, 30, 0) });
+  const s = read(o);
+  expect(s.turns.length).toBe(1);
+  const [t] = s.turns;
+  expect(reply(t)).toBe("The total rounds each line.");
+  expect(t.answers.map((a) => a.parts.join("\n\n"))).toEqual(["The total rounds each line."]);
+  expect(t.steps.map((st) => st.k)).toEqual(["text", "group"]);
+  expect(t.steps[0].t).toBe("Counting the lines.");
+  expect(t.tools).toBe(2);
+  expect(JSON.stringify(t.steps)).not.toContain("The total rounds each line.");
+  expect(t.done).toBeFalsy();
+
+  const o2 = open();
+  user(o2, "msg_u1", "Stop me", 0);
+  assistant(o2, "msg_a1", 100, [text("Rivers are")], { finish: "error", done: 300, error: { type: "aborted", message: "Step interrupted" } });
+  idle(o2, "msg_i1", 310, "interrupted");
+  user(o2, "msg_u2", "Fail me", 5000);
+  assistant(o2, "msg_a2", 5100, [text("Reaching the provider.")], { finish: "error", done: 5200, error: { type: "provider.error", message: "bad key" }, usage: tokens(0, 0) });
+  idle(o2, "msg_i2", 5210, "failed");
+  const s2 = read(o2);
+  expect(s2.turns.map((x) => x.answers)).toEqual([[], []]);
+});
+
 test("2.x: 1.x's old tables, left behind by the migration, are not read", () => {
   const s = read(session({ old: true }));
   expect(s.title).toBe("Cart rounding");

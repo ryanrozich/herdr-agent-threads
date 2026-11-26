@@ -2,6 +2,10 @@
 -- Bound by the caller: :sid the session, :off the settled prompts to skip, :win how many prompts
 -- to read. Prints the "chunk" line, the title, then each prompt's events in order. Selects named
 -- fields only: reasoning, tool input and output, and image data never leave the database.
+-- A "t" event carries f: 1 and the message's id when its message completed (time.completed, a
+-- finish other than tool-calls) with no error: a marked answer, the turn's reply wherever later
+-- work in the same turn follows it. The mark is computed from the current records, so a message
+-- that completes promotes its text on the next read of the unsettled tail.
 with users as (
   select id, time_created t, row_number() over (order by time_created, id) - 1 n
   from message where session_id=:sid and json_extract(data,'$.role')='user'),
@@ -43,9 +47,17 @@ ev as (
     (select count(*) from parts x where x.message_id = m.id and x.ty = 'compaction') comp
   from msgs m where m.role = 'user'
   union all
-  -- A reply's text and tool calls, in order.
+  -- A reply's text and tool calls, in order. Text of a message that completed with a finish
+  -- other than tool-calls, and no error, is a marked answer (f, with the message's id), so a
+  -- call after it in the same turn cannot move it into Worked or cut it.
   select m.un, m.ut, m.uid, 1, m.mt, m.id, x.id,
-    case x.ty when 'text' then json_object('k','t','t', substr(json_extract(x.data,'$.text'), 1, 200000))
+    case x.ty when 'text' then
+      json_patch(json_object('k','t','t', substr(json_extract(x.data,'$.text'), 1, 200000)),
+        case when json_extract(m.data,'$.error.name') is null
+          and json_extract(m.data,'$.time.completed') is not null
+          and json_extract(m.data,'$.finish') is not null
+          and json_extract(m.data,'$.finish') <> 'tool-calls'
+        then json_object('f', 1, 'id', m.id) else '{}' end)
       else json_object('k','u','n', json_extract(x.data,'$.tool'), 'id', json_extract(x.data,'$.callID')) end, null, 0
   from msgs m join parts x on x.message_id = m.id
   where m.role = 'assistant' and x.ty in ('text','tool')

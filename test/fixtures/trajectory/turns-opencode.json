@@ -10,11 +10,18 @@
   },
   "agent": false,
   "cmd": false,
-  "after": [
-   "Renamed `useCart` to `useBasket` in 14 files, including the hook's own file and its tests. The old name is gone from `src/`."
+  "after": [],
+  "answers": [
+   {
+    "parts": [
+     "Renamed `useCart` to `useBasket` in 14 files, including the hook's own file and its tests. The old name is gone from `src/`."
+    ],
+    "at": null,
+    "end": null,
+    "id": "msg_a1"
+   }
   ],
-  "answers": [],
-  "lastMsg": null,
+  "lastMsg": "msg_a1",
   "tools": 2,
   "followTools": 0,
   "wakeTools": 0,
@@ -74,11 +81,18 @@
   },
   "agent": false,
   "cmd": false,
-  "after": [
-   "The README's **Cart state** example now imports `useBasket`."
+  "after": [],
+  "answers": [
+   {
+    "parts": [
+     "The README's **Cart state** example now imports `useBasket`."
+    ],
+    "at": null,
+    "end": null,
+    "id": "msg_a2"
+   }
   ],
-  "answers": [],
-  "lastMsg": null,
+  "lastMsg": "msg_a2",
   "tools": 1,
   "followTools": 0,
   "wakeTools": 0,

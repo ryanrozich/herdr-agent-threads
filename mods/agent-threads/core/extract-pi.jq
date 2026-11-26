@@ -2,7 +2,9 @@
 # compact events as extract.jq out, one JSON object per line, in file order:
 #   ctx    the model chosen for the turns after it  {m, e}
 #   p      a prompt  {o: "human", ts, t}, with pasted images {img: [media types], ids, src, u: "<entry id>"}
-#   t      assistant text  {t}
+#   t      assistant text  {t}, with f: 1 and the entry's id when the message's stopReason is
+#          "stop" or "length" (a marked answer: the turn's reply, kept wherever later work in
+#          the same turn follows it; toolUse, error and aborted never qualify)
 #   u      tool call  {n: tool name}
 #   m      token use of one model response  {id, m, e, u: {i,o,cr,cc}, ts}
 #   e      error message  {t}
@@ -60,7 +62,12 @@ def prompt($l; $m):
 
 def reply($l; $m):
   ( $m.content[]? | select(type == "object")
-    | if .type == "text" and ((.text // "") | length) > 0 then {k: "t", t: (.text | cap)}
+    | if .type == "text" and ((.text // "") | length) > 0 then
+        # A message that ended the turn by stopping, or hit its length limit, is the turn's
+        # final answer: its text is a marked answer (f, with the entry's id), so a call after
+        # it in the same turn cannot move it into Worked or cut it.
+        {k: "t", t: (.text | cap)}
+        + (if $m.stopReason == "stop" or $m.stopReason == "length" then {f: 1, id: $l.id} else {} end)
       elif .type == "toolCall" then {k: "u", n: (.name // "tool"), id: .id}
       else empty end ),
   # input leaves out the cached tokens already, and output counts reasoning.

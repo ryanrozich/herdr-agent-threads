@@ -113,6 +113,49 @@ test("builds turns from a Pi session file", () => {
   expect(failed.compactions).toBe(1);
 });
 
+// A session whose last message stopped, with a call still to come in the same turn: the stop
+// record's text is the answer the fold keeps, and the toolUse and failure texts never are.
+function markSession() {
+  n = 0;
+  second = 0;
+  parent = null;
+  const dir = mkdtempSync(join(tmpdir(), "threads-pi-mark-"));
+  const file = join(dir, NAME);
+  writeFileSync(file, [
+    `${JSON.stringify({ type: "session", version: 3, id: ID, timestamp: ts(), cwd: "/home/dev/shop" })}\n`,
+    user([text("Fix the cart total")]),
+    said([text("Counting the lines."), call("bash")], "toolUse", usage(50, 10, 20, 5)),
+    result(),
+    said([text("The total rounds each line."), call("read")], "stop", usage(70, 20, 40, 0)),
+    user([text("Summarise the whole log")]),
+    said([text("The log's first 40 lines, cut off mid-sentence.")], "length", usage(30, 8, 10, 0)),
+    user([text("Try again")]),
+    said([], "error", usage(0, 0), { errorMessage: "429 rate limited" }),
+  ].join(""));
+  return file;
+}
+
+test("Pi marks stop text and keeps tool and failure text out of the reply", () => {
+  const s = read(markSession(), 1 << 20);
+  expect(s.turns.map((t) => t.prompt)).toEqual(["Fix the cart total", "Summarise the whole log", "Try again"]);
+  const [plain, limited, failed] = s.turns;
+  // The stop record's text is the reply, whole, and never a Worked step, even with a call
+  // after it in the same turn. The toolUse text stays work.
+  expect(reply(plain)).toBe("The total rounds each line.");
+  expect(plain.answers.map((a) => a.parts.join("\n\n"))).toEqual(["The total rounds each line."]);
+  expect(plain.steps.map((st) => st.k)).toEqual(["text", "group"]);
+  expect(plain.steps[0].t).toBe("Counting the lines.");
+  expect(plain.tools).toBe(2);
+  expect(JSON.stringify(plain.steps)).not.toContain("The total rounds each line.");
+  // A length record's text is marked too, kept as written.
+  expect(reply(limited)).toBe("The log's first 40 lines, cut off mid-sentence.");
+  expect(limited.answers.map((a) => a.parts.join("\n\n"))).toEqual(["The log's first 40 lines, cut off mid-sentence."]);
+  // A failure marks no answer: no reply of its own, and the error stays.
+  expect(failed.answers).toEqual([]);
+  expect(reply(failed)).toBe("");
+  expect(failed.errors).toEqual(["429 rate limited"]);
+});
+
 test("small chunks give the same turns as one read", () => {
   const file = session();
   const whole = read(file, 1 << 20);

@@ -148,6 +148,75 @@ test("an undone turn removed with nothing after it leaves the pane", () => {
   expect(s.turns.map((t) => t.prompt)).toEqual(["Why does the cart test fail?"]);
 });
 
+test("OpenCode marks text from completed non-tool assistant messages", () => {
+  // A message that completed (time.completed, a finish other than tool-calls) with no error
+  // is a marked answer: a call after it in the same turn cannot move it into Worked or cut
+  // it, and the row shows the reply while it keeps working. A tool-call message, an aborted
+  // one and a provider error never qualify.
+  const o = open();
+  user(o, "msg_u1", "Fix the cart total", 0);
+  assistant(o, "msg_a1", "msg_u1", 100, { finish: "tool-calls" });
+  part(o, "msg_a1", { type: "text", text: "Counting the lines." });
+  part(o, "msg_a1", { type: "tool", tool: "bash", callID: "call_b1", state: { status: "completed", input: { command: "bun test cart" }, output: "1 fail" } });
+  assistant(o, "msg_a2", "msg_u1", 2000, { finish: "stop", done: 4000, usage: tokens(60, 20, 40, 0) });
+  part(o, "msg_a2", { type: "text", text: "The total rounds each line." });
+  // The turn keeps working after the answer: another message with a call, still no prompt.
+  assistant(o, "msg_a3", "msg_u1", 5000, { finish: "tool-calls", done: 6000, usage: tokens(70, 5, 30, 0) });
+  part(o, "msg_a3", { type: "tool", tool: "read", callID: "call_r1", state: { status: "completed", input: { filePath: "cart/total.ts" }, output: "export function lineTax" } });
+  const s = read(o);
+  expect(s.turns.length).toBe(1);
+  const [t] = s.turns;
+  expect(reply(t)).toBe("The total rounds each line.");
+  expect(t.answers.map((a) => a.parts.join("\n\n"))).toEqual(["The total rounds each line."]);
+  expect(t.steps.map((st) => st.k)).toEqual(["text", "group"]);
+  expect(t.steps[0].t).toBe("Counting the lines.");
+  expect(t.tools).toBe(2);
+  expect(JSON.stringify(t.steps)).not.toContain("The total rounds each line.");
+  // The turn is still working (its last message wants tools) yet already shows its answer.
+  expect(t.done).toBeFalsy();
+
+  const o2 = open();
+  user(o2, "msg_u1", "Stop me", 0);
+  assistant(o2, "msg_a1", "msg_u1", 100, { finish: null, done: null, error: { name: "MessageAbortedError", data: { message: "aborted" } } });
+  part(o2, "msg_a1", { type: "text", text: "Starting." });
+  user(o2, "msg_u2", "Fail me", 5000);
+  assistant(o2, "msg_a2", "msg_u2", 5100, { finish: null, done: 5200, error: { name: "ProviderAuthError", data: { message: "bad key" } } });
+  part(o2, "msg_a2", { type: "text", text: "Reaching the provider." });
+  const s2 = read(o2);
+  expect(s2.turns.map((x) => x.answers)).toEqual([[], []]);
+  expect(s2.turns[0].interrupted).toBe(true);
+  expect(s2.turns[1].errors ?? [s2.turns[1].error]).toContain("bad key");
+});
+
+test("a rewritten OpenCode tail promotes the final answer once", () => {
+  const o = session();
+  const s = read(o);
+  user(o, "msg_u2", "Now fix it", 10000);
+  assistant(o, "msg_a3", "msg_u2", 10100, { finish: null, done: null, usage: tokens(0, 0) });
+  part(o, "msg_a3", { type: "text", text: "Working on" });
+  read(o, s);
+  expect(s.turns.length).toBe(2);
+  // While the message streams (no finish), its text is still only the position-inferred tail.
+  expect(reply(s.turns[1])).toBe("Working on");
+
+  // The message completes as a real answer, and the turn keeps working: a call follows it.
+  o.db.run("update part set data = ? where message_id = 'msg_a3'", [JSON.stringify({ type: "text", text: "Fixed the rounding." })]);
+  o.db.run("update message set data = ? where id = 'msg_a3'", [JSON.stringify({ role: "assistant", parentID: "msg_u2", modelID: "m", finish: "stop", tokens: tokens(5, 5), time: { created: T0 + 10100, completed: T0 + 11000 } })]);
+  assistant(o, "msg_a4", "msg_u2", 11500, { finish: "tool-calls", done: 12000, usage: tokens(6, 2) });
+  part(o, "msg_a4", { type: "tool", tool: "bash", callID: "call_v1", state: { status: "completed", input: { command: "bun test cart" }, output: "214 pass" } });
+  read(o, s);
+  // The answer was promoted once: whole, the row's reply, and never a Worked step.
+  expect(s.turns.length).toBe(2);
+  expect(reply(s.turns[1])).toBe("Fixed the rounding.");
+  expect(s.turns[1].answers.map((a) => a.parts.join("\n\n"))).toEqual(["Fixed the rounding."]);
+  expect(s.turns[1].tools).toBe(1);
+  expect(JSON.stringify(s.turns[1].steps)).not.toContain("Fixed the rounding.");
+  // A fresh read of the same database from the top gives the same replies.
+  const fresh = read(o);
+  expect(fresh.turns.map(reply)).toEqual(s.turns.map(reply));
+  expect(fresh.turns.map((x) => x.answers.map((a) => a.parts.join("\n\n")))).toEqual(s.turns.map((x) => x.answers.map((a) => a.parts.join("\n\n"))));
+});
+
 test("a queued prompt keeps its own reply", () => {
   const o = open();
   user(o, "msg_u1", "First", 0);

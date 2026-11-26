@@ -4,7 +4,10 @@
 -- assistant, idle, system or compaction, in seq order. A reply has no parent id: it belongs to
 -- the prompt before it. A queued prompt gets its row only once the turn before it ends, and an
 -- "idle" row follows the last turn of a run. Selects named fields only: reasoning, tool input
--- and output, and image data never leave the database.
+-- and output, and image data never leave the database. A "t" event carries f: 1 and the
+-- message's id when its message completed (time.completed, a finish other than tool-calls)
+-- with no error: a marked answer, the turn's reply wherever later work in the same turn
+-- follows it, computed from the current records on each read of the unsettled tail.
 with msg as (
   select id, seq, type, time_created t, data from session_message where session_id=:sid),
 -- A prompt, or a compaction, which takes a prompt's place as it did in 1.x.
@@ -38,7 +41,14 @@ done as (
     or (wtype = 'compaction' and cstatus = 'completed')),
 settled as (select coalesce(max(un), :off - 1) un from done),
 items as (
-  select m.un, m.seq, m.id, c.key ord, json_extract(c.value,'$.type') ty, c.value v
+  select m.un, m.seq, m.id, c.key ord, json_extract(c.value,'$.type') ty, c.value v,
+    -- 1 when the message completed with a finish other than tool-calls, and no error: its
+    -- text is a marked answer.
+    case when json_extract(m.data,'$.error.type') is null
+      and json_extract(m.data,'$.time.completed') is not null
+      and json_extract(m.data,'$.finish') is not null
+      and json_extract(m.data,'$.finish') <> 'tool-calls'
+    then 1 else 0 end fin
   from msgs m, json_each(m.data,'$.content') c
   where m.type = 'assistant' and json_extract(c.value,'$.type') in ('text','tool')),
 ev as (
@@ -52,9 +62,12 @@ ev as (
     w.type wtype
   from win w
   union all
-  -- A reply's text and tool calls, in order.
+  -- A reply's text and tool calls, in order. Text of a message that completed with a finish
+  -- other than tool-calls, and no error, is a marked answer (f, with the message's id).
   select x.un, x.seq, 1, printf('%06d', x.ord), x.id,
-    case x.ty when 'text' then json_object('k','t','t', substr(json_extract(x.v,'$.text'), 1, 200000))
+    case x.ty when 'text' then
+      json_patch(json_object('k','t','t', substr(json_extract(x.v,'$.text'), 1, 200000)),
+        case when x.fin = 1 then json_object('f', 1, 'id', x.id) else '{}' end)
       else json_object('k','u','n', json_extract(x.v,'$.name'), 'id', json_extract(x.v,'$.id')) end, null, ''
   from items x
   where x.ty <> 'text' or length(json_extract(x.v,'$.text')) > 0

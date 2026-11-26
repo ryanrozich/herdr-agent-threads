@@ -10,11 +10,18 @@
   },
   "agent": false,
   "cmd": false,
-  "after": [
-   "Three pages still load `legacy-analytics.js`:\n\n1. `pages/checkout.tsx`\n2. `pages/account/orders.tsx`\n3. `pages/help.tsx`"
+  "after": [],
+  "answers": [
+   {
+    "parts": [
+     "Three pages still load `legacy-analytics.js`:\n\n1. `pages/checkout.tsx`\n2. `pages/account/orders.tsx`\n3. `pages/help.tsx`"
+    ],
+    "at": null,
+    "end": null,
+    "id": "00000005"
+   }
   ],
-  "answers": [],
-  "lastMsg": null,
+  "lastMsg": "00000005",
   "tools": 1,
   "followTools": 0,
   "wakeTools": 0,
@@ -81,11 +88,18 @@
   },
   "agent": false,
   "cmd": false,
-  "after": [
-   "Removed the script tag from all three pages. Nothing else imports it, so `legacy-analytics.js` can go too."
+  "after": [],
+  "answers": [
+   {
+    "parts": [
+     "Removed the script tag from all three pages. Nothing else imports it, so `legacy-analytics.js` can go too."
+    ],
+    "at": null,
+    "end": null,
+    "id": "00000007"
+   }
   ],
-  "answers": [],
-  "lastMsg": null,
+  "lastMsg": "00000007",
   "tools": 0,
   "followTools": 0,
   "wakeTools": 0,

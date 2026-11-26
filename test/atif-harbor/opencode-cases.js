@@ -244,12 +244,16 @@ export const OPENCODE_CASES = [
     files: session(() => [stepStart("s1", "m1"), text("s1", "m1", "Let me create that file."), toolUse("s1", "m1", "write", { filePath: "/app/hello.txt", content: "Hello!" }, "Wrote file successfully.", "toolu_abc"), stepFinish("s1", "m1", { cost: 0.02, input: 200, output: 80 })], { prompt: ADDED }),
     diff: { reason: "R15", kind: "not handled", check: (t) => {
       const steps = agentSteps(t);
-      assert.equal(steps.length, 1);
+      // The message completed with finish stop, so its text is a marked answer (R23): the call
+      // is one step, the answer the turn's reply step, where Harbor keeps them in one.
+      assert.equal(steps.length, 2);
+      assert.equal(steps[0].message, "");
       assert.equal(steps[0].tool_calls[0].tool_call_id, "toolu_abc");
       assert.equal(steps[0].tool_calls[0].function_name, "write");
       assert.deepEqual(steps[0].tool_calls[0].arguments, {});
       assert.equal(steps[0].tool_calls[0].extra.arguments_unread, "not read");
       assert.equal(steps[0].observation.results[0].content, "Wrote file successfully.");
+      assert.equal(steps[1].message, "Let me create that file.");
     } },
     facts: (t) => {
       const steps = agentSteps(t);
@@ -318,7 +322,9 @@ export const OPENCODE_CASES = [
       assert.equal(steps.length, 2);
       assert.equal(steps[0].tool_calls.length, 1);
       assert.equal(steps[1].tool_calls, undefined);
-      assert.equal(steps[1].message, "File created successfully.");
+      // Both messages completed with finish stop, so both texts are marked answers of the one
+      // turn, joined in order as its reply (R23), where Harbor keeps one step per message.
+      assert.equal(steps[1].message, "I'll write the file.\n\nFile created successfully.");
       assert.equal(t.final_metrics.total_cost_usd, undefined);
       assert.equal(t.final_metrics.total_completion_tokens, 80);
       assert.equal(t.final_metrics.total_cached_tokens, 100);
