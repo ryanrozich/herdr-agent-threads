@@ -9353,13 +9353,15 @@ export default class Threads extends View {
   // The set cut back to where its last whole slice ended (cur): the places below cur.bot,
   // from cur.tail.top up, and the hidden matches past cur's counts are from a slice that was
   // stopped. A place a stop left half made (its key or place written, the edge not yet moved)
-  // is just outside the set, at bot - 1 or at top, and is cut too. Safe to stop and do again.
+  // is just outside the set, at bot - 1 or at top, and is cut too. Safe to stop and do again:
+  // a place's key by place goes last, so a stop between its two deletes leaves the key for
+  // the cut done again to find the place by key with.
   hitsCut(h) {
     const c = h.cur;
     const drop = (p) => {
       const k = h.by.get(p);
-      h.by.delete(p);
       if (k !== undefined && h.at.get(k) === p) h.at.delete(k);
+      h.by.delete(p);
     };
     for (let p = h.bot - 1; p < c.bot; p++) drop(p);
     h.bot = c.bot;
