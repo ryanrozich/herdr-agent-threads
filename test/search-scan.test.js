@@ -2043,6 +2043,44 @@ test("a newer step from a match in a long tail being checked again, the newer ma
   expect(places(v)).toEqual(want(v, "zebra"));
 }, 120000);
 
+// The same newer step, kept, with Herdr's stop in the slice the step runs in the next draw
+// (planted at its first check): the step is still kept after the stopped draw, and the draws
+// after it go on with it and land on the newer match.
+test("a newer step kept while a tail is checked again, its draw stopped inside the step's own slice, is still kept and lands on the newer match", async () => {
+  const { v, cx, s } = await longPane(600);
+  const base = s.turns.length;
+  for (let i = 0; i < 2400; i++) asked(s, i === 10 || i === 2000 ? `Tail ${i}: the zebra list.` : `Tail ${i}: nothing here.`);
+  settleRows(v, cx);
+  v.sel = `0:${s.turns.length}`;
+  const from = `0:${base + 11}`;
+  const newer = `0:${base + 2001}`;
+  const r = {};
+  X = 2;
+  try { priced(v, () => {
+    v.action("search:zebra", cx);
+    for (let k = 0; k < 200 && counting(v); k++) drawOnce(v, cx);
+    v.sel = from;
+    asked(s, "A new turn: nothing here.");
+    for (let k = 0; k < 80; k++) {
+      drawOnce(v, cx);
+      const h = v.hitsNow();
+      if (h.cur.tail && h.at.has(from) && !h.at.has(newer)) break;
+    }
+    v.action("newerMatch", cx);
+    r.stayed = v.sel === from && v.hits.step != null;
+    landed = null;
+    plant = { scan: 1 };
+    r.stopped = drawOnce(v, cx).stopped;
+    r.landed = landed;
+    r.kept = v.hits.step != null && v.sel === from;
+    for (let k = 0; k < 80 && v.sel === from; k++) drawOnce(v, cx);
+    r.sel = v.sel;
+    for (let k = 0; k < 80 && counting(v); k++) drawOnce(v, cx);
+  }); } finally { X = 1; plant = null; }
+  expect(r).toEqual({ stayed: true, stopped: true, landed: "scan", kept: true, sel: newer });
+  expect(places(v)).toEqual(want(v, "zebra"));
+}, 120000);
+
 // An older press (n) made right after a new search, before any draw, from a turn the search
 // does not match: the command's slice found nothing, and the press's own slice finds two
 // matches. The press goes to the newest of them, as n with no match selected does; the new
