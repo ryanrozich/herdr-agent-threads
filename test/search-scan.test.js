@@ -2071,6 +2071,35 @@ test("an older press right after a new search from a turn it does not match, who
   expect(places(v)).toEqual(want(v, "quokka"));
 }, 120000);
 
+// n or Shift n pressed right after a new search, before any draw, from a turn the search does
+// not match, with the first match further back than the command's slice and the press's own
+// together: the press finds nothing and leaves the selection where it is. The new search's
+// selection of the newest match (hitsSelect) still comes, once the draws find it.
+test("a step press right after a new search from a turn it does not match, whose own slice finds no match, leaves the new search to select the newest match", async () => {
+  const runs = [];
+  for (const press of ["olderMatch", "newerMatch"]) {
+    const { v, cx, s } = await longPane(600);
+    // Two matches, then 3,400 turns with none: more than two slices check at 1x.
+    for (let i = 0; i < 3402; i++) asked(s, i < 2 ? `Tail ${i}: the quokka list.` : `Tail ${i}: nothing here.`);
+    settleRows(v, cx);
+    const start = `0:${s.turns.length}`;
+    v.sel = start;
+    const base = s.turns.length - 3402;
+    const r = { press };
+    priced(v, () => {
+      v.action("search:quokka", cx);
+      v.action(press, cx);
+      r.found = v.hitsNow().top - v.hitsNow().bot;
+      r.stayed = v.sel === start;
+      for (let k = 0; k < 80 && counting(v); k++) drawOnce(v, cx);
+    });
+    r.sel = v.sel === `0:${base + 2}`;
+    r.right = JSON.stringify(places(v)) === JSON.stringify(want(v, "quokka"));
+    runs.push(r);
+  }
+  expect(runs).toEqual(["olderMatch", "newerMatch"].map((press) => ({ press, found: 0, stayed: true, sel: true, right: true })));
+}, 180000);
+
 // A turn left open with no reply while later ones start, then answered together with a later
 // one: its match comes from that reply (answeredBy). It is before the last turn done with a
 // reply, so the tail from that turn on does not hold it; the count still counts it.
