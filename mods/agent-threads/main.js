@@ -8150,14 +8150,15 @@ export default class Threads extends View {
   // one with no match left that way is dimmed, takes no press, and its tooltip says so.
   stepButtons(t) {
     const { at, n } = this.matchPlace();
-    // While the matches are counted the older step stays on: more can come (scanStep).
+    // While the matches are counted the older step stays on: more can come (scanStep). So does
+    // the newer one while a tail is checked again, oldest first (stepHit).
     const more = this.view !== "pinned" && this.hits && !this.hits.done;
     const step = (id, icon, tip, name, off, none) => off
       ? div().id(id).flex_none().size(24).flex().items_center().justify_center().opacity(0.35).text_color(t.dim).tooltip(none).child(svg(ICON(icon)).size(14))
       : this.iconButton(t, id, icon, tip, (_e, cx) => { this.action(name, cx); cx.notify(); });
     return [
       step("th-match-older", "chevron-up", "Older match (n)", "olderMatch", at === n && !more, "No older match"),
-      step("th-match-newer", "chevron-down", "Newer match (Shift n)", "newerMatch", at === 1, "No newer match"),
+      step("th-match-newer", "chevron-down", "Newer match (Shift n)", "newerMatch", at === 1 && !(more && this.hits.cur.tail), "No newer match"),
     ];
   }
 
@@ -9502,6 +9503,14 @@ export default class Threads extends View {
       this.scanStep();
       j = next();
       if (j < h.bot && !h.done) return keep();
+    }
+    // Past the newest match placed, while a tail is checked again (oldest first): the turns
+    // after it in the tail are not all checked again yet. One slice, here, and the step kept
+    // while the check goes on and that places none.
+    if (!older && j >= h.top && h.cur.tail) {
+      this.scanStep();
+      j = next();
+      if (j >= h.top && h.cur.tail) return keep();
     }
     if (h.top === h.bot) return !h.done;
     if (j < h.bot || j >= h.top) return true;
