@@ -211,6 +211,8 @@ export function reset() {
   for (const list of [mdSources, overlays, closed, views, editors, scrollHandles, settingsWrites]) list.length = 0;
   for (const k of Object.keys(hostReads)) hostReads[k] = 0;
   for (const k of Object.keys(work)) work[k] = 0;
+  // The window's registry (budget.js): no pane of an earlier test counts toward this one's budget.
+  delete globalThis.__agentThreadsWindow;
 }
 // The module stand-ins for gpui-kit, gpui-base and Herdr, and the settings reset. Installed
 // here before main.js is imported, and again by each test file as it starts: another file may

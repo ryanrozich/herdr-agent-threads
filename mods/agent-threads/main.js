@@ -100,6 +100,12 @@ import("./build.js")
   .then((m) => { built = parseBuild(m?.BUILD) ? m.BUILD : null; })
   .catch(() => { built = null; });
 import { isDiagram, drawDiagram } from "./diagram.js";
+import { BUDGET, TIGHT_CHUNK, PANE_WEIGHT, measure, sessionBytes, forgetSize, trim, tailOf, tailNote, gut, joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, beatRead, dropRead } from "./budget.js";
+// A hot reload evaluates this module again in the same VM, beside the old one, and then
+// replaces every copy: the copies it replaces give back what they hold now (budget.js).
+releaseOlder();
+// How often a read waiting for the window's turn (budget.js takeRead) asks again.
+const READ_TURN_MS = 40;
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
 // The turn a list row belongs to, or null (a day band, the spacer, the tail).
@@ -1093,6 +1099,8 @@ export default class Threads extends View {
     this.outlineBack = null;
     this.rootH = 0;
     if (!this.terminal) { this.res = { kind: "none", tried: [] }; return; }
+    // This pane in the window's registry (budget.js): what it holds, its read's turn.
+    this.win = joinWindow(this, this.pinnedPane ? "pinned" : this.trajPane ? "trajectory" : "chat");
     this.commands(cx);
     this.loadPrefs(cx);
     this.readPins(cx);
@@ -1100,6 +1108,7 @@ export default class Threads extends View {
     // While the agent works, re-read every few seconds in case a folder event is missed.
     // While a session id has no transcript yet, look for it. Idle panes do nothing here.
     cx.timer.every(5000, (cx) => {
+      if (this.forgotten) return;
       if (this.status() === "working") { this.read(cx); cx.notify(); }
       if (this.res.kind === "pending" || this.res.pendingId) this.resolve(cx);
       // No folder watch for the settings (the folder could not be watched): read it here.
@@ -1107,6 +1116,7 @@ export default class Threads extends View {
     });
     // The sticky day: redraw once the top of the pane moved into another day.
     cx.timer.every(120, (cx) => {
+      if (this.forgotten) return;
       // A render Herdr stopped left renderOpen set (no timer runs during a render), and
       // Herdr asks for no render after it: ask for one. This timer was set up here, outside
       // any render, since a timer asked for inside a stopped render may never run.
@@ -1120,6 +1130,10 @@ export default class Threads extends View {
     });
     // The running turn's clock, once a second while one is shown.
     cx.timer.every(1000, (cx) => {
+      if (this.forgotten) return;
+      // This copy is alive; an earlier copy in this pane that a reload replaced lets go
+      // (budget.js sweepGhosts), unless this timer itself was held up (a sleep).
+      if (this.win) { const at = Date.now(); if (this.lastTick == null || at - this.lastTick <= TICK_GAP) sweepGhosts(this.win, at); this.win.beat = at; }
       this.watchRead(cx);
       this.poll(cx);
       this.flushCode(cx);
@@ -1155,7 +1169,9 @@ export default class Threads extends View {
       res: { kind: this.res.kind, guess: Boolean(this.res.guess), ended: this.res.ended ?? null, endedAt: this.res.endedAt ?? null, choices: this.res.choices?.length ?? 0, pendingId: this.res.pendingId ?? null, via: this.res.via ?? null },
       banners: this.bannerTitles(),
       tried: (this.res.tried ?? []).map((x) => `${x.ok ? "ok" : "no"} ${x.what}: ${x.detail}`),
-      sessions: this.sessions.map((x) => ({ id: x.id.slice(-4), turns: x.turns.length, loaded: Boolean(x.loaded), clearAt: x.clearAt, error: x.error ?? null, skipped: x.skipped ?? null })),
+      sessions: this.sessions.map((x) => ({ id: x.id.slice(-4), turns: x.turns.length, loaded: Boolean(x.loaded), clearAt: x.clearAt, error: x.error ?? null, skipped: x.skipped ?? null, tail: tailOf(x) })),
+      // The memory guard (budget.js): this pane's estimate and the window's, in MiB.
+      guard: { pane: +((this.win?.bytes ?? 0) / 1048576).toFixed(1), window: +(windowBytes() / 1048576).toFixed(1), budget: BUDGET / 1048576, refused: Boolean(this.refused) },
       rows: rows.map((r) => `${r.kind}${r.turn ? `#${r.turn.n}` : ""}${r.kind === "divider" ? `:${dividerLabel(r.s)}` : ""}`),
       live: this.liveShown ? this.liveState(theme()).label : null, status: this.status(),
       sel: this.sel, query: this.query, count: this.filterCount(),
@@ -1291,6 +1307,20 @@ export default class Threads extends View {
     this.prefsGen = (this.prefsGen ?? 0) + 1;
     this.dropCode();
     this.endSelect();
+    this.forget();
+  }
+
+  // A pane closed, or replaced by a reload (budget.js releaseOlder, sweepGhosts): it leaves the
+  // window's registry and empties its sessions, their turns and its own fields in place, so the
+  // memory comes back now even if something still reaches this object. A copy whose reload
+  // failed keeps running this code: it draws a note (render) and its timers do nothing.
+  forget() {
+    if (this.forgotten) return;
+    if (this.win) leaveWindow(this.win);
+    try { this.dropCode(); this.endSelect(); } catch { /* half-made pane */ }
+    for (const s of this.sessions ?? []) gut(s);
+    for (const k of Object.keys(this)) delete this[k];
+    this.forgotten = true;
   }
 
   // ---- settings (settings.js: $HERDR_APP_HOME/data/agent-threads/settings.json) ----
@@ -2455,7 +2485,10 @@ export default class Threads extends View {
   read(cx) {
     if (this.reading) { this.readAgain = true; return; }
     const s = this.current();
-    if (!s) return;
+    if (!s || this.refused) return;
+    // A Pinned or Trajectory pane on a session another pane found too large for the window
+    // reads none of it (budget.js).
+    if (this.win && this.win.kind !== "chat" && !s.loaded && !s.offset && windowBytes(this.win) + fileBytes(s.file, this.paneWeight()) > BUDGET) { this.refuse(s); return; }
     // Another session while the loading state is up: none of the first one's last write or
     // newest prompt, before its first chunk is read.
     if (this.opening && !this.opening.done && this.opening.list === this.sessions) this.openSwitch(s);
@@ -2496,6 +2529,14 @@ export default class Threads extends View {
           let grew = false;
           while (chunk && live()) {
             let c;
+            // One read at a time in the window (budget.js): its chunk's output, lines and events
+            // are the read's peak.
+            while (this.win && !takeRead(this.win, gen)) {
+              this.readWaiting = true;
+              beat();
+              await cx.sleep(READ_TURN_MS);
+              if (!live()) return;
+            }
             try {
               this.readWaiting = true;
               const r = await exec("sh", readArgs(s.file, s.offset, chunk));
@@ -2542,8 +2583,12 @@ export default class Threads extends View {
             if (c.events.length) grew = true;
             s.offset += c.used;
             s.partial = false;
+            if (this.win) dropRead(this.win, gen);
+            if (this.guard(s)) return;
             if (s.offset < s.size) cap = readCap(cap, c.cut, chunk, CHUNK);
-            chunk = nextChunk(s, c.used, chunk, Math.min(cap, chunk * 2));
+            // Over half the budget, smaller chunks: a smaller peak.
+            const tight = this.win && windowBytes() > BUDGET / 2 ? TIGHT_CHUNK : cap;
+            chunk = nextChunk(s, c.used, chunk, Math.min(cap, chunk * 2, tight));
             if (!s.loaded) cx.notify();
             // Once a session (peek holds the session peeked): another one on the list is
             // statted and peeked again.
@@ -2574,6 +2619,7 @@ export default class Threads extends View {
           s.error = String(e?.message ?? e);
         }
       } finally {
+        if (this.win) dropRead(this.win, gen);
         // A read that was superseded (watchRead, a retry) leaves the flags to the newer one.
         if (this.readGen === gen) {
           this.reading = false;
@@ -2593,8 +2639,43 @@ export default class Threads extends View {
   // progress shows again.
   restart(s, fresh = false) {
     this.dropAnchor();
+    forgetSize(s);
     Object.assign(s, newSession(s.id, s.file), { reason: s.reason, version: s.version + 1, partial: false, clock: s.clock, senders: s.senders });
     if (fresh) { s.loaded = false; s.error = null; s.missing = false; }
+    if (this.win) this.win.bytes = this.heldBytes();
+  }
+
+  // The window's memory guard (budget.js), after each chunk: this pane's estimate in the
+  // registry, and past the budget the Chat keeps the newest turns that fit (with a note over
+  // them, buildRows) while a Pinned or Trajectory pane lets the session go (refuse). True when
+  // the read is to stop.
+  guard(s) {
+    if (!this.win) return false;
+    measure(s);
+    noteFile(s);
+    const w = this.paneWeight();
+    const room = BUDGET - windowBytes(this.win);
+    let mine = this.heldBytes();
+    if (mine > room) {
+      if (this.win.kind !== "chat") { this.refuse(s); return true; }
+      if (trim(s, room - (mine - sessionBytes(s, w)), w)) {
+        // Every turn has a new number: every row and place is built again.
+        this.dropAnchor();
+        this.rowsKey = null;
+        this.rowBuild = null;
+        this.rowJob = null;
+        mine = this.heldBytes();
+      }
+    }
+    this.win.bytes = mine;
+    return false;
+  }
+  paneWeight() { return PANE_WEIGHT[this.win?.kind ?? "chat"]; }
+  heldBytes() { const w = this.paneWeight(); let n = 0; for (const x of this.sessions) n += sessionBytes(x, w); return n; }
+  // A side pane lets the session go and shows why (refusedView) until Retry.
+  refuse(s) {
+    this.refused = { file: s.file };
+    this.restart(s, true);
   }
 
   // On the 1 s timer: a read with no heartbeat for READ_STALL (EXEC_STALL while it awaits
@@ -2612,6 +2693,7 @@ export default class Threads extends View {
     if (gap > TICK_GAP) { this.readBeat = at; return; }
     if (at - this.readBeat < (this.readWaiting ? EXEC_STALL : READ_STALL)) return;
     const s = this.current();
+    if (this.win) dropRead(this.win);
     this.readGen = (this.readGen ?? 0) + 1;
     this.reading = false;
     this.readAgain = false;
@@ -2633,6 +2715,7 @@ export default class Threads extends View {
   retryRead(cx) {
     const s = this.current();
     if (!s) return;
+    this.refused = null;
     this.readGen = (this.readGen ?? 0) + 1;
     this.reading = false;
     this.readAgain = false;
@@ -2682,6 +2765,7 @@ export default class Threads extends View {
     const mine = this.me()?.pane ?? null;
     if (!mine) return;
     this.myPane = mine;
+    if (this.win) this.win.pane = mine;
     const key = this.sideKey() ?? MAP_KEY;
     // A bottom Trajectory pane says so in its entry, so the Chat leaves it out of its row.
     const dock = this.trajPane && this.trajDock === "bottom" ? "bottom" : null;
@@ -3122,6 +3206,9 @@ export default class Threads extends View {
       if (!first && s.reason && s.turns.length === 0 && s.loaded) out.push({ kind: "note", key: `empty:${si}`, text: "No turns in this session yet" });
       // A line skipped before the first turn (noteSkip).
       if (!first && s.skippedHead && !outline && !q) out.push({ kind: "note", key: `skip:${si}:head`, text: skipNote(s.skippedHead) });
+      // Too large for the window: only its newest turns are kept (budget.js trim).
+      const tail = first ? null : tailOf(s);
+      if (tail) out.push({ kind: "note", key: `tail:${si}`, text: tailNote(tail) });
       // The live newest turn (isLive), found once for the session: none while the session is
       // still read, as a later chunk may hold the turn's end (a later session has no opening).
       const liveTi = s.turns.length && this.isLive(s, si, s.turns.length - 1) ? s.turns.length - 1 : -1;
@@ -7320,6 +7407,8 @@ export default class Threads extends View {
   // A render that did not reach its end was stopped by Herdr (an error is caught and clears the
   // mark): the next CUT_MS draw without reshaping or measuring, so the pane gets a frame.
   render(cx) {
+    // A copy a reload replaced, still drawn because the reload failed (forget).
+    if (this.forgotten) return div().size_full().p(16).text_size(13).child("Agent Threads was updated. Close this pane and open it again.");
     if (this.drawingRow) this.rowCut(this.drawingRow);
     // A placement's lift (letGo) is for the one layout that lands it, gone before anything in
     // this frame builds the list's heights.
@@ -9253,7 +9342,7 @@ export default class Threads extends View {
     this.openDrew = false;
     const out = this.bodyNow(t, focusedPanel, cx);
     const s = this.current();
-    if (this.openActive() && !this.openDrew && (!s || s.loaded || s.error)) this.openFinish();
+    if (this.openActive() && !this.openDrew && (!s || s.loaded || s.error || this.refused)) this.openFinish();
     return out;
   }
   bodyNow(t, focusedPanel, cx) {
@@ -9277,6 +9366,7 @@ export default class Threads extends View {
     if (r.kind === "none" && !s) return this.notFound(t, r);
     const noTurns = () => this.empty(t, mark(this.agent().key, 36) ?? "messages", "No turns yet", `Send a prompt to ${this.agent().cmd} in ${this.terminal}. Each prompt and its final reply will show up here.`, "Threads only reads the session. It never types into the terminal.");
     if (r.kind === "pending" && !s) return noTurns();
+    if (this.refused) return this.refusedView(t);
     if (s && !s.loaded && s.error && s.turns.length === 0)
       return this.empty(t, "alert", "Couldn't read this session", s.error, null, [this.retryButton(t), ...this.closeButtons(t)]);
     const gate = this.openGate(t, s, cx);
@@ -9701,6 +9791,14 @@ export default class Threads extends View {
     const pct = this.readPct(s);
     return div().absolute().top(0).left(0).right(0).h(3).bg(t.border)
       .child(pct != null ? div().h_full().w(`${pct}%`).bg(t.accent) : div().h_full().w("30%").bg(t.accent).loop("opacity", { from: 0.3, to: 1, period: 1100 }));
+  }
+
+  // A Pinned or Trajectory pane that read nothing: the session is too large for the window
+  // with the panes already open (budget.js). Retry reads it if room was made.
+  refusedView(t) {
+    return this.empty(t, "info", "This session is too large to show in full",
+      "The Threads panes in this window would run out of memory with this session read here too. The Chat shows its newest turns. Close another Threads pane, then Retry.",
+      null, [this.retryButton(t), ...this.closeButtons(t)]);
   }
 
   retryButton(t) {
@@ -12136,6 +12234,7 @@ export default class Threads extends View {
   // detail (under the ledger, or at its right from 900 px), the key hints and the status line.
   trajFrame(cx) {
     const t = theme();
+    if (this.refused) return v_flex().id("threads-root").track_focus(this.h).on_key_down((e, cx) => this.key(e, cx)).size_full().bg(t.background).text_color(t.foreground).text_size(13).child(this.refusedView(t));
     // The column beside the Trajectory's pane, kept for its close (shareWidth).
     if (this.trajPane) { const col = this.pinnedPaneOpen(); if (col) this.colId = col.pane; }
     const w = this.pw();
