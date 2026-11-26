@@ -9460,6 +9460,9 @@ export default class Threads extends View {
   // top - 1 with no entry: top goes down to it, the pop's last write (hitsNow finishes the pop
   // first; this is a guard).
   stepHit(h, older) {
+    // A press is the reader's own step: a new search's selection still to come (hitsSelect) is
+    // called off, so a slice run here does not move the turn the step goes from.
+    this.hitsSelect = null;
     while (h.top > h.bot && !h.by.has(h.top - 1)) h.top--;
     const next = () => {
       const p = h.at.get(this.sel);
