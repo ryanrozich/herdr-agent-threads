@@ -9726,7 +9726,7 @@ export default class Threads extends View {
     if (!c || c.key !== key || c.b !== b) {
       const m = chartModel(b, { w, h, end, loaded: Boolean(s.loaded), prompts: harnessOfFile(s.file) === "cursor", agent: this.agent().name });
       o.chart = c = { key, b, m, inks: this.chartInks(t), paints: null };
-      c.paints = this.chartPaints(c, w, h);
+      c.paints = this.chartPaints(c, h);
     }
     const { m, inks } = c;
     const label = (text, color = t.dim) => div().flex_none().whitespace_nowrap().text_size(11.5).text_color(color).child(text);
@@ -9737,7 +9737,7 @@ export default class Threads extends View {
       .child(div().id("th-load-plot").relative().h(h + 1).mt(6).flex_none().w(w).overflow_hidden()
         .child(div().absolute().top(0).left(0).w(w).h(1).bg(inks.grid))
         .child(div().absolute().top(h / 2).left(0).w(w).h(1).bg(inks.grid))
-        .children(c.paints ?? [])
+        .children(this.chartPainted(c.paints, w, h))
         .when(fallback, (el) => el.children(this.chartBars(m, inks, h)))
         .child(div().absolute().top(h).left(0).w(Math.max(0, m.base)).h(1).bg(inks.axis))
         .when(m.readX != null, (el) => el.child(div().absolute().top(0).left(m.readX).w(1).h(h).bg(inks.edge))))
@@ -9758,13 +9758,14 @@ export default class Threads extends View {
     const line = [t.accent, t.ansi2 ?? t.accent, t.ansi3 ?? t.working, t.ansi5 ?? t.accent, t.ansi1 && t.ansi3 ? mix(t.ansi1, t.ansi3, 0.5) : t.muted, t.dim, t.accent];
     return { line, fill: line.map((x) => alpha(x, dark ? 0.5 : 0.32)), grid: alpha(t.foreground, dark ? 0.06 : 0.05), axis: alpha(t.foreground, dark ? 0.14 : 0.12), edge: alpha(t.accent, 0.7), fold: t.dim };
   }
-  // The painted parts, one path per area and per top line, the bars as one path, and the
-  // fold marks; null where Herdr has no paths (chartBars draws then).
-  chartPaints(c, w, h) {
+  // The painted parts as [path, colour]: one path per area and per top line, the bars as one
+  // path, and the fold marks; null where Herdr has no paths (chartBars draws then). The paths
+  // are plain frozen data, kept with the chart; each frame paints them as new elements.
+  chartPaints(c, h) {
     const win = globalThis.window;
     if (!PAINT || typeof win?.paint_path !== "function") return null;
     const { m, inks } = c;
-    const at = (el) => div().absolute().top(0).left(0).w(w).h(h + 1).child(el.w(w).h(h + 1));
+    const at = (pb, color) => [pb.build(), color];
     const poly = (pb, xy, close) => {
       pb.move_to(xy[0], xy[1]);
       for (let i = 2; i < xy.length; i += 2) pb.line_to(xy[i], xy[i + 1]);
@@ -9775,7 +9776,7 @@ export default class Threads extends View {
       for (const a of m.areas) {
         const f = PAINT.PathBuilder.fill();
         poly(f, a.fill, true);
-        out.push(at(win.paint_path(f.build(), inks.fill[a.slot])));
+        out.push(at(f, inks.fill[a.slot]));
       }
       // Herdr's stroked paths came with its filled ones; an older one without them keeps the areas.
       const stroke = typeof PAINT.PathBuilder.stroke === "function";
@@ -9783,7 +9784,7 @@ export default class Threads extends View {
         if (!stroke || !a.line.length) continue;
         const l = PAINT.PathBuilder.stroke(1.25);
         for (const seg of a.line) poly(l, seg, false);
-        out.push(at(win.paint_path(l.build(), inks.line[a.slot])));
+        out.push(at(l, inks.line[a.slot]));
       }
       if (m.bars.length) {
         const f = PAINT.PathBuilder.fill();
@@ -9792,16 +9793,25 @@ export default class Threads extends View {
           poly(f, [r.x, h - r.h, r.x + r.w, h - r.h, r.x + r.w, h, r.x, h], true);
           poly(top, [r.x, h - r.h, r.x + r.w, h - r.h, r.x + r.w, h - r.h + 1.25, r.x, h - r.h + 1.25], true);
         }
-        out.push(at(win.paint_path(f.build(), inks.fill[BURN.PROMPTS])), at(win.paint_path(top.build(), inks.line[BURN.PROMPTS])));
+        out.push(at(f, inks.fill[BURN.PROMPTS]), at(top, inks.line[BURN.PROMPTS]));
       }
       if (stroke && m.folds.length) {
         const l = PAINT.PathBuilder.stroke(1);
         for (const x of m.folds) { poly(l, [x - 2.5, h + 0.5, x - 0.5, h - 6], false); poly(l, [x + 0.5, h + 0.5, x + 2.5, h - 6], false); }
-        out.push(at(win.paint_path(l.build(), inks.fold)));
+        out.push(at(l, inks.fold));
       }
       return out;
     } catch {
       return null;
+    }
+  }
+  chartPainted(paints, w, h) {
+    const win = globalThis.window;
+    if (!paints) return [];
+    try {
+      return paints.map(([path, color]) => div().absolute().top(0).left(0).w(w).h(h + 1).child(win.paint_path(path, color).w(w).h(h + 1)));
+    } catch {
+      return [];
     }
   }
   // Without paths: each point's total as a bar of the first model's colour, or the prompts' bars.
