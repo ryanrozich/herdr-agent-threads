@@ -907,22 +907,27 @@ test("a draw stopped inside the matches' scan counts each match once", async () 
 // of set() on its by or at map from now on, before the write or after it.
 function plantWrite(h, which, k, after) {
   const m = h[which];
+  const real = m.set;
   let n = 0;
   m.set = function (key, val) {
     const hit = Boolean(stopV?.renderOpen && stopV.scanning) && ++n === k;
     if (hit && !after) { delete m.set; landed = `${which} before`; throw new Error("interrupted"); }
-    const r = Map.prototype.set.call(this, key, val);
+    const r = real.call(this, key, val);
     if (hit) { delete m.set; landed = `${which} after`; throw new Error("interrupted"); }
     return r;
   };
 }
+// Each place with a key in the set's two arrays (Places): [place, key].
+const written = (by) => [...by.up.map((k, i) => [i, k]), ...by.dn.map((k, i) => [-1 - i, k])].filter(([, k]) => k !== undefined);
 // The set's places agree: every place from bot up to top - 1 has its key, at gives each key
-// its place back, and with whole, nothing is written outside the set.
+// its place back, and with whole, nothing is written outside the set and neither array has a
+// hole (an index under its length with no slot).
 function unsound(h, whole) {
   const bad = [];
   for (let p = h.bot; p < h.top; p++) if (h.by.get(p) === undefined || h.at.get(h.by.get(p)) !== p) bad.push(["place", p]);
   if (whole) {
-    for (const [p, k] of h.by) if (p < h.bot || p >= h.top) bad.push(["by", p, k]);
+    for (const [side, a] of [["up", h.by.up], ["dn", h.by.dn]]) for (let i = 0; i < a.length; i++) if (!(i in a)) bad.push(["hole", side, i]);
+    for (const [p, k] of written(h.by)) if (p < h.bot || p >= h.top) bad.push(["by", p, k]);
     for (const [k, p] of h.at) if (p < h.bot || p >= h.top || h.by.get(p) !== k) bad.push(["at", k, p]);
   }
   return bad;

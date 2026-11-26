@@ -212,11 +212,26 @@ const SIZE_REST = 64;
 const HITS_TAIL = 64;
 // A tail of more turns than this is not checked again: the set is found again from the start,
 // in slices. hitsTail's walk back to the tail's start and its drop of the tail's places run in
-// one call, not cut by the clock: about 0.5 µs a place in bun with the JIT off (5,960 places
-// in 2.9 ms), a few ms at this many on Herdr's interpreter (the rig's figure on Herdr 0.1.18
-// is to come; the cap moves if it says so). It is above the 2,000-turn tails the tests check
-// again as tails.
+// one call, not cut by the clock. On the rig (Herdr 0.1.18), one such check of a 1,990- or
+// 2,490-turn tail took 1.9 to 2.3 ms (the median of the later checks in a run) with the places
+// in two arrays (Places), and 10.2 to 14.4 ms with a Map keyed by the place. It is above the
+// 2,000-turn tails the tests check again as tails.
 const HITS_TAIL_MAX = 2500;
+// The keys of a search's matches by place: up for the places from 0 up, dn for those from -1 down.
+// A place is written at its array's end or inside it, never past the end (a match takes the place
+// next to one taken before); a place dropped is written undefined, and no array gets shorter.
+// Arrays, not a Map keyed by the place: HITS_TAIL_MAX gives what a tail check took with each.
+class Places {
+  constructor() { this.up = []; this.dn = []; }
+  get(p) { return p >= 0 ? this.up[p] : this.dn[-1 - p]; }
+  has(p) { return this.get(p) !== undefined; }
+  set(p, key) { if (p >= 0) this.up[p] = key; else this.dn[-1 - p] = key; }
+  delete(p) {
+    const a = p >= 0 ? this.up : this.dn;
+    const i = p >= 0 ? p : -1 - p;
+    if (i < a.length) a[i] = undefined;
+  }
+}
 // A step kept from a press that could not land yet (stepHit) goes on for this many draws at
 // most, a slice each; then it is dropped with no words, the selection left where it is (an
 // older or newer match can still be there: the step gave up, it did not reach the end), and
@@ -9230,7 +9245,7 @@ export default class Threads extends View {
       }
       if (older || (newest && !(tail = this.hitsTail(h)))) { step = h.step ?? null; h = null; }
     } else h = null;
-    h ??= { base, q, agents: Boolean(this.prefs.agentTurns), sessions: S.slice(), at: new Map(), by: new Map(), top: 0, bot: 0,
+    h ??= { base, q, agents: Boolean(this.prefs.agentTurns), sessions: S.slice(), at: new Map(), by: new Places(), top: 0, bot: 0,
       hidOld: 0, hidL: [], cur: { si: L, ti: L >= 0 ? S[L].turns.length - 1 : -1, bot: 0, hidOld: 0, hidL: 0, tail: null }, done: false,
       get hidden() { return this.hidOld + this.hidL.length; } };
     h.vers = S.map((s) => s.version);
