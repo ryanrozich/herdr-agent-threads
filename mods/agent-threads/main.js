@@ -10570,8 +10570,9 @@ export default class Threads extends View {
       // The list spans the pane and each item sits in the reading column, centred. An item
       // with a wide table (tableExtra) is wider by it, padded by half on each side, so its
       // other parts stay in the column and the table reaches past it (tableBlock). Herdr
-      // clips an item on both axes, even with overflow_y_hidden. A turn a jump landed on has
-      // its flash layer over the column (flashTurn).
+      // clips an item on both axes, even with overflow_y_hidden; for a table's part this is
+      // the only clip (cardPart). A turn a jump landed on has its flash layer over the
+      // column (flashTurn).
       const ex = this.tableExtra(x);
       const fl = this.flash && x && (rowTurnKey(x) ?? x.key) === this.flash.key ? this.flash : null;
       out.push(h_flex().w_full().h(h).justify_center()
@@ -11407,9 +11408,11 @@ export default class Threads extends View {
 
   // One slice of an open turn: exactly its slot's height, 16 px in from each side like a
   // closed exchange. The first part has the 8 px top padding and the last the 10 px bottom
-  // padding, with no seam between them.
+  // padding, with no seam between them. A table's part does not clip: its table may run
+  // past the column (tableBlock), into its row's slot, which is wider by as much and clips.
   cardPart(t, r, size) {
-    return v_flex().h(size).w_full().relative().overflow_hidden().px(ROW.PAD_X)
+    const box = v_flex().h(size).w_full().relative();
+    return (r.table ? box : box.overflow_hidden()).px(ROW.PAD_X)
       .when(r.part === "top", (el) => el.pt(ROW.PAD_T))
       .when(r.part === "bottom", (el) => el.pb(ROW.PAD_B))
       .child(this.partContent(t, r, false));
