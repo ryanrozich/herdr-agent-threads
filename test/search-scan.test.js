@@ -2030,11 +2030,15 @@ test("a newer step from a match in a long tail being checked again, the newer ma
       }
     }
     v.action("newerMatch", cx);
+    // The check again has just passed the selected match, and the press's own slice does not
+    // reach the newer one, 1,990 turns on: the step is kept, and the selection stays on the
+    // match it went from until a draw lands it.
+    r.stayed = v.sel === from;
     for (let k = 0; k < 80 && v.sel === from; k++) drawOnce(v, cx);
     r.sel = v.sel;
     for (let k = 0; k < 80 && counting(v); k++) drawOnce(v, cx);
   }); } finally { X = 1; }
-  expect(r).toEqual({ counted: true, at: { newest: true, dimmed: false }, sel: newer });
+  expect(r).toEqual({ counted: true, at: { newest: true, dimmed: false }, stayed: true, sel: newer });
   expect(direct(v, "zebra")).toEqual([newer, from]);
   expect(places(v)).toEqual(want(v, "zebra"));
 }, 120000);
