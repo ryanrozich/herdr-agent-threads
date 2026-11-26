@@ -2042,6 +2042,34 @@ test("a newer step from a match in a long tail being checked again, the newer ma
   expect(places(v)).toEqual(want(v, "zebra"));
 }, 120000);
 
+// An older press (n) made right after a new search, before any draw, from a turn the search
+// does not match: the command's slice found nothing, and the press's own slice finds two
+// matches. The press goes to the newest of them, as n with no match selected does; the new
+// search's own selection of the newest (hitsSelect) does not move the turn the press goes from
+// first, which made it land on the second newest.
+test("an older press right after a new search from a turn it does not match, whose own slice finds the first two matches, selects the newest", async () => {
+  const { v, cx, s } = await longPane(600);
+  // Two matches, then 1,600 turns with none: more than the command's slice checks.
+  for (let i = 0; i < 1602; i++) asked(s, i < 2 ? `Tail ${i}: the quokka list.` : `Tail ${i}: nothing here.`);
+  settleRows(v, cx);
+  const start = `0:${s.turns.length}`;
+  v.sel = start;
+  const base = s.turns.length - 1602;
+  const r = {};
+  priced(v, () => {
+    v.action("search:quokka", cx);
+    r.firstSlice = v.hitsNow().top - v.hitsNow().bot;
+    r.from = v.sel === start && !v.selMatches();
+    v.action("olderMatch", cx);
+    r.found = v.hitsNow().top - v.hitsNow().bot;
+    r.sel = v.sel;
+    for (let k = 0; k < 80 && counting(v); k++) drawOnce(v, cx);
+  });
+  expect(r).toEqual({ firstSlice: 0, from: true, found: 2, sel: `0:${base + 2}` });
+  expect(direct(v, "quokka")).toEqual([`0:${base + 2}`, `0:${base + 1}`]);
+  expect(places(v)).toEqual(want(v, "quokka"));
+}, 120000);
+
 // A turn left open with no reply while later ones start, then answered together with a later
 // one: its match comes from that reply (answeredBy). It is before the last turn done with a
 // reply, so the tail from that turn on does not hold it; the count still counts it.
