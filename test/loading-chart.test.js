@@ -200,8 +200,11 @@ test("a session of many days folds its idle nights, with a mark at each fold, an
 test("the legend shows each model's share with two or three, none with one, and +n for what does not fit", () => {
   const one = chartModel(day(["opus 5.5"]).b, { w: 461, end: null, loaded: true });
   expect(one.legend).toEqual([{ slot: 0, name: "opus 5.5", share: "" }]);
-  const three = chartModel(day().b, { w: 461, end: null, loaded: true });
-  expect(three.legend.map((l) => l.name)).toEqual(["opus 5.5", "sonnet 5.5", "haiku 4.5"]);
+  const d3 = day().b;
+  const three = chartModel(d3, { w: 461, end: null, loaded: true });
+  // In order of first use.
+  expect(three.legend.map((l) => l.name)).toEqual(d3.models);
+  expect([...d3.models].sort()).toEqual(["haiku 4.5", "opus 5.5", "sonnet 5.5"]);
   const sum = three.legend.reduce((a, l) => a + Number(l.share.replace("%", "")), 0);
   expect(sum).toBeGreaterThanOrEqual(99);
   expect(sum).toBeLessThanOrEqual(101);
@@ -236,14 +239,14 @@ test("the counts so far are two rows: prompts, tool calls and pins, then the tok
   expect(openCounts({ prompts: null, tools: null, pins: 0, tokens: null })).toEqual(["", ""]);
 });
 
-// A made-up session of six hours: a prompt each half hour, opus for the first four hours and
+// A made-up session of twelve hours: a prompt each half hour, opus for the first ten hours and
 // sonnet after, each turn with a tool result of 300 KB, so the read takes several chunks.
 function chartSession() {
   const t0 = Date.UTC(2026, 10, 20, 9, 0);
   const lines = [];
-  for (let k = 0; k < 12; k++) {
+  for (let k = 0; k < 24; k++) {
     const t = t0 + k * 30 * 60000;
-    const model = k < 8 ? "claude-opus-5-5" : "claude-sonnet-5-5";
+    const model = k < 20 ? "claude-opus-5-5" : "claude-sonnet-5-5";
     lines.push({ type: "user", uuid: `u${k}`, timestamp: iso(t), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: `Check part ${k} of the cart` } });
     lines.push({ type: "assistant", uuid: `a${k}`, timestamp: iso(t + 1000), sessionId: "s", message: { id: `m${k}a`, model, role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: `t${k}`, name: "Read", input: { file_path: `cart/part${k}.ts` } }], usage: { input_tokens: 40, output_tokens: 200, cache_read_input_tokens: 9000, cache_creation_input_tokens: 500 } } });
     lines.push({ type: "user", uuid: `r${k}`, timestamp: iso(t + 2000), sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${k}`, content: `const zib${k} = "${"ka".repeat(150000)}";` }] } });
@@ -251,8 +254,8 @@ function chartSession() {
   }
   const file = join(mkdtempSync(join(tmpdir(), "threads-chart-")), "c.jsonl");
   writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
-  // Last written as its last turn ends, so the axis is the session's six hours.
-  const end = (t0 + 11 * 30 * 60000 + 60000) / 1000;
+  // Last written as its last turn ends, so the axis is the session's twelve hours.
+  const end = (t0 + 23 * 30 * 60000 + 60000) / 1000;
   utimesSync(file, end, end);
   return file;
 }
@@ -261,10 +264,11 @@ test("the pane: the chart has its rows from the first paint, fills from the firs
   const { v, cx, go } = await openingPane(chartSession(), (v) => v.current()?.offset > 0);
   const o = v.opening;
   o.at -= 1000;
-  go((v) => v.current()?.offset > 0);
+  // Held after the first chunk (openingPane's hold), so the read stops there.
   await until(() => v.current().offset > 0 && v.opening?.peek && v.opening.mtime, "the first chunk");
   const s = v.current();
   expect(s.loaded).toBeFalsy();
+  expect(s.offset).toBeLessThan(s.size / 2);
   // With no point yet (as before the first chunk): the chart's title, no scale, no legend.
   const burn = s.burn;
   s.burn = null;
@@ -280,7 +284,7 @@ test("the pane: the chart has its rows from the first paint, fills from the firs
   expect(said).toContain("opus 5.5");
   expect(said).not.toContain("sonnet 5.5");
   const m = o.chart.m;
-  // Six hours on the axis, the first chunk's turns read: filled part way.
+  // Twelve hours on the axis, the first chunk's turns read: filled part way.
   const w = Number(o.chart.key.split("|")[1]);
   expect(m.readX).toBeGreaterThan(0.1 * w);
   expect(m.readX).toBeLessThan(0.9 * w);
