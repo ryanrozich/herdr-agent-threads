@@ -388,6 +388,47 @@ test("atif: the command line nests Codex subagents by their rollout's parent thr
   expect(bad.extra.arguments_unread).toBe("not JSON");
 });
 
+// The day folders searched for Codex children reach the turn's latest marked answer, not only
+// its first: a turn that answers on November 2 and again on November 5, after spawning a child
+// that day, finds that child's rollout in the November 5 folder (TRD-164).
+test("atif: the command line finds a Codex child spawned days after the turn's first marked answer", () => {
+  const base = mkdtempSync(join(tmpdir(), "threads-atif-late-"));
+  const ids = { root: "00000000-0000-4000-8000-0000000000e1", child: "00000000-0000-4000-8000-0000000000e2" };
+  const rollout = (date, id, meta, from, body) => {
+    const day = join(base, "sessions", ...date.slice(0, 10).split("-"));
+    mkdirSync(day, { recursive: true });
+    let ord = 0;
+    let t = Date.parse(date);
+    const line = (type, payload, gap = 1) => JSON.stringify({ timestamp: new Date((t += gap * 1000)).toISOString(), ordinal: ord++, type, payload });
+    const api = {
+      ask: (turn, text) => line("event_msg", { type: "item_completed", turn_id: turn, item: { type: "UserMessage", content: [{ type: "text", text }] } }),
+      say: (text, gap = 4) => line("response_item", { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text }] }, gap),
+      call: (name, cid, args, gap = 2) => line("response_item", { type: "function_call", name, call_id: cid, arguments: JSON.stringify(args) }, gap),
+      out: (cid, output) => line("response_item", { type: "function_call_output", call_id: cid, output }),
+      fin: (ms) => line("event_msg", { type: "task_complete", duration_ms: ms }, 0),
+    };
+    const lines = [line("session_meta", { id, cwd: "/Users/dev/acme-web", ...meta, ...(from != null ? { subagent_history_start_ordinal: from } : {}) }, 0), line("turn_context", { model: "gpt-5.5-codex", effort: "medium" }, 0), ...body(api)];
+    const f = join(day, `rollout-${date.slice(0, 19).replace(/:/g, "-")}-${id}.jsonl`);
+    writeFileSync(f, `${lines.join("\n")}\n`);
+    return f;
+  };
+  const days = 3 * 86400;
+  const root = rollout("2026-11-02T09:00:00Z", ids.root, {}, null, (a) => [
+    a.ask("turn-0001", "Review the cart module, then check back later"),
+    a.say("Started the review; I will check back."),
+    a.call("spawn_agent", "call_late", { task_name: "late", message: "Review cart/total.ts" }, days),
+    a.out("call_late", JSON.stringify({ task_name: "/root/late" })),
+    a.say("The late review is in: the totals are right."),
+    a.fin(1000),
+  ]);
+  const spawn = { source: { subagent: { thread_spawn: { parent_thread_id: ids.root, depth: 1, agent_path: "/root/late", agent_nickname: "Reviewer" } } } };
+  rollout("2026-11-05T09:00:05Z", ids.child, spawn, 2, (a) => [a.ask("turn-c001", "Review cart/total.ts"), a.say("cart/total.ts rounds once."), a.fin(1000)]);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), root, "codex"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const results = Object.fromEntries(t.steps.flatMap((st) => st.observation?.results ?? []).map((r) => [r.source_call_id, r]));
+  expect(results.call_late.subagent_trajectory_ref).toEqual([{ trajectory_id: ids.child, session_id: ids.root }]);
+});
+
 // A subagent's id is transcript text: one that names a file outside the session's subagents
 // folder is not read, by its spelling or through a link.
 test("atif: a subagent id with folder steps, odd characters, or a file linked from elsewhere is not found, and nothing outside is read", () => {
