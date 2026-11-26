@@ -9274,8 +9274,9 @@ export default class Threads extends View {
     const h = this.hitsNow();
     if (!h) return h;
     // A step kept from a press that could not land yet (stepHit): in a draw, its next slice,
-    // in place of the scan's, while the step's match is still selected and still matches. It
-    // keeps itself until it lands, so a stop in its slice leaves it for the next draw.
+    // in place of the scan's, while the turn it went from is still selected and, if it was a
+    // match, still matches (a step from a turn the search does not match goes on from it too).
+    // It keeps itself until it lands, so a stop in its slice leaves it for the next draw.
     // A step still kept after STEP_DRAWS draws going on with it is dropped with no words, the
     // selection left where it is: it gave up, so a match that way can still be there.
     // The reader moving the list or leaving the view since the step was kept (readerMoves, noted
@@ -9283,7 +9284,7 @@ export default class Threads extends View {
     let stepped = false;
     if (cx && h.step != null) {
       if ((this.readerMoves ?? 0) !== h.step.moves) h.step = null;
-      else if (h.step.key === this.sel && this.selMatches()) {
+      else if (h.step.key === this.sel && (h.step.miss || this.selMatches())) {
         stepped = true;
         h.step.draws = (h.step.draws ?? 0) + 1;
         this.stepHit(h, h.step.older);
@@ -9461,12 +9462,10 @@ export default class Threads extends View {
   // first; this is a guard).
   stepHit(h, older) {
     // A press is the reader's own step: a new search's selection still to come (hitsSelect) is
-    // called off while it runs, so a slice run here does not move the turn the step goes from.
-    // A press that leaves a turn the search does not match where it was (no match found yet)
-    // gives it back: the new search still selects its newest match once one is found.
-    const select = this.hitsSelect;
+    // called off, so a slice run here does not move the turn the step goes from. A press that
+    // cannot land yet is kept and lands by itself, from a turn the search does not match too:
+    // with no match found yet, on the newest once one is.
     this.hitsSelect = null;
-    const giveBack = () => { if (select && !this.selMatches()) this.hitsSelect = select; };
     while (h.top > h.bot && !h.by.has(h.top - 1)) h.top--;
     const next = () => {
       const p = h.at.get(this.sel);
@@ -9480,7 +9479,7 @@ export default class Threads extends View {
     // move since then calls it off (scanStep).
     const draws = h.step?.draws ?? 0;
     const moves = h.step?.moves ?? this.readerMoves ?? 0;
-    const keep = () => { giveBack(); h.step = { key: this.sel, older, draws, moves }; return true; };
+    const keep = () => { h.step = { key: this.sel, older, draws, moves, miss: !this.selMatches() }; return true; };
     // An older step from a match in a tail being checked again, not placed yet: the turns back
     // from it to the tail's next turn, not checked again yet, are checked here, one slice at
     // most (tailBack). It lands on the first match there; a slice that ends first keeps the
@@ -9521,7 +9520,14 @@ export default class Threads extends View {
       j = next();
       if (j >= h.top && h.cur.tail) return keep();
     }
-    if (h.top === h.bot) { giveBack(); return !h.done; }
+    // No match found yet while more can come, Shift n from a turn the search does not match (n
+    // goes past the oldest, above): one slice, here, and the step kept while that finds none.
+    if (!older && h.top === h.bot && !h.done) {
+      this.scanStep();
+      j = next();
+      if (h.top === h.bot && !h.done) return keep();
+    }
+    if (h.top === h.bot) return !h.done;
     if (j < h.bot || j >= h.top) return true;
     this.sel = h.by.get(j);
     this.follow = false;

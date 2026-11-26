@@ -2073,9 +2073,9 @@ test("an older press right after a new search from a turn it does not match, who
 
 // n or Shift n pressed right after a new search, before any draw, from a turn the search does
 // not match, with the first match further back than the command's slice and the press's own
-// together: the press finds nothing and leaves the selection where it is. The new search's
-// selection of the newest match (hitsSelect) still comes, once the draws find it.
-test("a step press right after a new search from a turn it does not match, whose own slice finds no match, leaves the new search to select the newest match", async () => {
+// together: the press finds nothing and leaves the selection where it is. The step is kept, and
+// the newest match is selected once the draws find it.
+test("a step press right after a new search from a turn it does not match, whose own slice finds no match, ends on the newest match", async () => {
   const runs = [];
   for (const press of ["olderMatch", "newerMatch"]) {
     const { v, cx, s } = await longPane(600);
