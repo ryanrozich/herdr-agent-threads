@@ -9480,6 +9480,9 @@ export default class Threads extends View {
     const draws = h.step?.draws ?? 0;
     const moves = h.step?.moves ?? this.readerMoves ?? 0;
     const keep = () => { h.step = { key: this.sel, older, draws, moves, miss: !this.selMatches() }; return true; };
+    // A step kept stays kept through the slices it runs here, and goes only once it lands or
+    // stops at an end: Herdr's stop inside one of them leaves it for the next draw.
+    const end = (r) => { h.step = null; return r; };
     // An older step from a match in a tail being checked again, not placed yet: the turns back
     // from it to the tail's next turn, not checked again yet, are checked here, one slice at
     // most (tailBack). It lands on the first match there; a slice that ends first keeps the
@@ -9493,10 +9496,8 @@ export default class Threads extends View {
     if (older && inTail && unplaced && n - 1 > tail.next) {
       const k = this.tailBack(h, this.sel, n - 2, now() + this.scanMax());
       if (k === undefined) return keep();
-      h.step = null;
-      if (k) { this.sel = k; this.follow = false; this.scrollTo = { key: k, how: "center" }; return true; }
+      if (k) { this.sel = k; this.follow = false; this.scrollTo = { key: k, how: "center" }; return end(true); }
     }
-    h.step = null;
     // A selected match with no place yet, other than an older step in a tail: the scan has not
     // reached it, so the matches next to it are not all found. One slice here; then, while it
     // still has no place, the step is kept, and lands once the scan places it.
@@ -9527,12 +9528,12 @@ export default class Threads extends View {
       j = next();
       if (h.top === h.bot && !h.done) return keep();
     }
-    if (h.top === h.bot) return !h.done;
-    if (j < h.bot || j >= h.top) return true;
+    if (h.top === h.bot) return end(!h.done);
+    if (j < h.bot || j >= h.top) return end(true);
     this.sel = h.by.get(j);
     this.follow = false;
     this.scrollTo = { key: this.sel, how: "center" };
-    return true;
+    return end(true);
   }
 
   // The newest shown match among the newest session's turns from turn index from down to the
