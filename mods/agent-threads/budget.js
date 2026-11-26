@@ -70,15 +70,17 @@ const clock = () => globalThis.performance?.now?.() ?? Date.now();
 
 // Measures the turns that changed since their last measure (a turn takes the session's version
 // when it changes, turns.js apply) and returns the session's estimate. With until (a time on
-// performance.now's clock), it stops once past it and returns null; the next call goes on.
+// performance.now's clock), it stops once past it, after one turn at least, and returns null;
+// the next call goes on.
 export function measure(s, until = Infinity) {
   const m = meta(s);
   let text = 0;
   let fixed = s.calls?.size ? s.calls.size * PER_INFO : 0;
+  let done = 0;
   for (const t of s.turns) {
     let b = SIZES.get(t);
     if (!b || b[2] !== t.v) {
-      if (until !== Infinity && clock() > until) return null;
+      if (done++ && until !== Infinity && clock() > until) return null;
       const [x, f] = turnBytes(t);
       SIZES.set(t, (b = [x, f, t.v]));
     }
@@ -161,7 +163,7 @@ const KEY = "__agentThreadsWindow";
 const GEN = {};
 export function windowState() {
   let w = globalThis[KEY];
-  if (!w || w.v !== 1) globalThis[KEY] = w = { v: 1, panes: new Set(), files: new Map(), lock: null, queue: [] };
+  if (w?.v !== 1) globalThis[KEY] = w = { v: 1, panes: new Set(), files: new Map(), lock: null, queue: [] };
   return w;
 }
 const deref = (e) => (typeof e.ref?.deref === "function" ? e.ref.deref() : e.ref);
