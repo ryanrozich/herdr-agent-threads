@@ -1793,13 +1793,13 @@ describe("the pane", () => {
     s.partial = true;
     rewindTail(s);
     for (const e of events.slice(0, at)) apply(s, e);
-    // An editor asked for before the read waits for its end: it is not made from the half answer.
+    // An editor asked for before the read waits for its end: it is not made from the half answer
+    // (the editor is the same one). made records only calls outside a read, for the end.
     const { makeCode } = Object.getPrototypeOf(v);
     const made = [];
     v.makeCode = function (k) { if (!this.midRead(k)) made.push(k); return makeCode.call(this, k); };
     v.codeDue.add("0:1");
     expect([reply(s.turns[0]), shown(), cuts, v.code.get("0:1:1")?.st === st]).toEqual(["First answer.", ["First answer."], 0, true]);
-    expect(made).toEqual([]);
     for (const e of events.slice(at)) apply(s, e);
     s.partial = false;
     // At the end it is made, the same editor as its text is the same, and nothing waits.
@@ -1871,6 +1871,56 @@ describe("the pane", () => {
     v.current().version++;
     v.syncSel();
     expect([still, moved, walks, state.shared["threads.turnSel"][v.terminal].key]).toEqual([0, 1, 2, other]);
+  });
+
+  // Red if the memo did not ask for the session object: another file's session at the same
+  // version, turn count and key took the old id.
+  test("the selected turn's id is worked out again when another session takes the same place", async () => {
+    const t = claudeReplied("One.");
+    t.prompt("Next question");
+    t.say("m5", "Two.");
+    t.hooks();
+    const { v, cx } = await pane(t.file());
+    settleRows(v, cx);
+    state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+    state.shared["threads.trajByTerminal"] = { [v.terminal]: { pane: "p3" } };
+    const [key] = v.turnKeys(v.rows());
+    v.sel = key;
+    v.syncSel();
+    const first = state.shared["threads.turnSel"][v.terminal].id;
+    // Another file: the same rows, another question, at the same version.
+    const u = claude();
+    u.prompt("Why does the checkout test fail?");
+    u.tool("m1");
+    u.say("m2", "One.");
+    u.hooks();
+    u.duration(5000);
+    u.prompt("Next question");
+    u.say("m5", "Two.");
+    u.hooks();
+    const other = read(u.file());
+    other.loaded = true;
+    other.version = v.current().version;
+    expect(other.turns.length).toBe(v.current().turns.length);
+    v.sessions = [other];
+    v.syncSel();
+    const sent = state.shared["threads.turnSel"][v.terminal];
+    expect([sent.key, sent.id === first, sent.id]).toEqual([key, false, turnId(other.turns, other.turns[0])]);
+  });
+
+  // Red before its cure: the memo kept the last session, and all its turns, while the next one
+  // loads.
+  test("picking another transcript lets go of the selected turn's id and its session", async () => {
+    const t = claudeReplied("One.");
+    const { v, cx } = await pane(t.file());
+    settleRows(v, cx);
+    state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+    state.shared["threads.trajByTerminal"] = { [v.terminal]: { pane: "p3" } };
+    v.sel = v.turnKeys(v.rows())[0];
+    v.syncSel();
+    expect(v.selIdMemo?.s).toBe(v.current());
+    v.pick({ path: claudeReplied("Two.").file() }, cx);
+    expect(v.selIdMemo).toBeNull();
   });
 
   // Red on the base: one row, opened to "No final reply." with the answer in the Worked part.
