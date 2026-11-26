@@ -1919,8 +1919,12 @@ describe("the pane", () => {
     v.sel = v.turnKeys(v.rows())[0];
     v.syncSel();
     expect(v.selIdMemo?.s).toBe(v.current());
+    const old = v.current();
     v.pick({ path: claudeReplied("Two.").file() }, cx);
     expect(v.selIdMemo).toBeNull();
+    // The new transcript's read ends before the test does.
+    for (let i = 0; i < 3; i++) { const p = cx.pending; cx.pending = []; await Promise.all(p); }
+    expect([v.current() === old, v.selIdMemo]).toEqual([false, null]);
   });
 
   // Red on the base: one row, opened to "No final reply." with the answer in the Worked part.
