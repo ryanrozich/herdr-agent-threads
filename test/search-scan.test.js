@@ -1856,7 +1856,7 @@ test("a step with the newest place half taken off by a stop in the tail's pop go
 // The set keeps each match's key by its place in two arrays (Places in main.js): up for the
 // places from 0 up, dn for those from -1 down. With a Map keyed by the place, one tail check of
 // a 1,990- or 2,490-turn tail took 10.2 to 14.4 ms on the rig (Herdr 0.1.18, the median of the
-// later checks in a run); with the two arrays, 1.9 to 2.3 ms. A dropped place is written
+// later checks in a run); with the two arrays, 1.9 to 2.4 ms. A dropped place is written
 // undefined and no array gets shorter, so a place written next to the oldest one after it was
 // dropped lands at the array's end, never past it (a hole).
 const holes = (a) => { let n = 0; for (let i = 0; i < a.length; i++) if (!(i in a)) n++; return n; };

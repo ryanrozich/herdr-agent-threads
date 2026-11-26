@@ -213,7 +213,7 @@ const HITS_TAIL = 64;
 // A tail of more turns than this is not checked again: the set is found again from the start,
 // in slices. hitsTail's walk back to the tail's start and its drop of the tail's places run in
 // one call, not cut by the clock. On the rig (Herdr 0.1.18), one such check of a 1,990- or
-// 2,490-turn tail took 1.9 to 2.3 ms (the median of the later checks in a run) with the places
+// 2,490-turn tail took 1.9 to 2.4 ms (the median of the later checks in a run) with the places
 // in two arrays (Places), and 10.2 to 14.4 ms with a Map keyed by the place. It is above the
 // 2,000-turn tails the tests check again as tails.
 const HITS_TAIL_MAX = 2500;
