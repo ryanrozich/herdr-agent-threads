@@ -35,6 +35,8 @@
 // prompt is the message without its wrapper tags. A typed prompt a sender rule matches is
 // an agent message too (ruleSender).
 
+import { burnCopy, sessionPrompt, sessionTokens } from "./burn.js";
+
 const OWN_ROW = new Set(["human", "peer", "scheduled", "sdk"]);
 
 export function newSession(id, file) {
@@ -52,6 +54,9 @@ export function newSession(id, file) {
     // Calls waiting for their result ("x"), by call id: the call's record (a group's info) and
     // its turn.
     calls: new Map(),
+    // The loading chart's series (core/burn.js), made at the first timed count or prompt, and
+    // its copy at the last settle (OpenCode).
+    burn: null, burnSettled: null,
   };
 }
 
@@ -462,6 +467,8 @@ function applyOne(s, e) {
       // A task notification that wakes the agent once the row above has ended starts a row of
       // its own: what the agent says then is a reply for the person, so it shows in the Chat
       // (the owner, 21 Nov). One that lands while a row is open still counts on that row.
+      // The loading chart counts each prompt a person typed (core/burn.js).
+      if (e.o === "human" && e.ts) sessionPrompt(s, ms(e.ts));
       if (OWN_ROW.has(e.o) || !cur || (e.o === "task-notification" && !s.open.length)) {
         clockStart(s, openRow(s, e), e);
       } else if (s.open.length) {
@@ -526,15 +533,20 @@ function applyOne(s, e) {
         if (w) { addStep(s, w, e.n, e.id, e, cur); w.after = []; w.afterAt = null; if (w.reasoning) w.reasoning = []; if (w.held) w.held = 0; }
       }
       return;
-    case "m":
+    case "m": {
       if (!cur) return;
+      const was = cur.usage[e.id];
       // w: the context window the agent stated with this count (Codex only), kept beside it.
       cur.usage[e.id] = e.w > 0 ? { ...e.u, w: e.w } : e.u;
       if (e.m) cur.model = e.m;
+      // The loading chart (core/burn.js): only what this count adds, since an id can come again
+      // (Claude Code streams a message; Codex repeats a count).
+      if (e.ts) sessionTokens(s, ms(e.ts), shortModel(cur.model), fresh(e.u) - (was ? fresh(was) : 0));
       if (e.e) cur.effort = e.e;
       if (typeof e.a === "string" && e.a) cur.by = e.a;
       if (e.ts) cur.endTs = Date.parse(e.ts);
       return;
+    }
     case "e":
       if (cur && e.t) cur.errors.push(e.t);
       return;
@@ -630,6 +642,8 @@ function applyOne(s, e) {
       return;
     case "settle":
       s.settled = s.turns.length;
+      // The chart as it stood here, for the next read, which takes the tail again (rewindTail).
+      if (s.burn) s.burnSettled = burnCopy(s.burn, s.burnSettled);
       if (e.id) s.anchor = e.id;
       return;
   }
@@ -659,6 +673,7 @@ export function skipNote(k) {
 
 export function rewindTail(s) {
   s.turns.length = Math.min(s.turns.length, s.settled ?? 0);
+  s.burn = s.burnSettled ? burnCopy(s.burnSettled) : null;
   s.open = [];
   s.seg = null;
   s.pendingCmd = null;
@@ -734,6 +749,9 @@ export function sessionStats(turns) {
 
 // sessionStats in two steps, so the pane sums the done turns once and only the newest again:
 // turnSums adds turns from..to onto a copy of base, and sumsStats turns the sums into stats.
+// A count's tokens as the stats count them: new input, cache writes and output.
+const fresh = (u) => (u?.i ?? 0) + (u?.cc ?? 0) + (u?.o ?? 0);
+
 export function turnSums(turns, from = 0, to = turns.length, base = null) {
   const a = base ? { ...base } : { tools: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, any: false, context: null, window: null };
   for (let k = from; k < to; k++) {
