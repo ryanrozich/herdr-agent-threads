@@ -63,7 +63,7 @@ test("the Pinned view: a click on a closed pin opens it as the full card a momen
   }
 });
 
-test("the list: a click on a closed turn opens it a moment later, also when the pointer moves on after the release", async () => {
+test("the list: a click on a closed turn opens it a moment later, and a click on the open turn closes it, also when the pointer moves on after the release", async () => {
   const { v, cx } = await pane(fixture("--extra", "6"));
   v.listH = 700;
   const keys = v.turnKeys(v.rows()).filter((k) => v.rows().find((r) => r.key === k)?.kind === "turn").slice(0, 3);
@@ -78,7 +78,9 @@ test("the list: a click on a closed turn opens it a moment later, also when the 
       afterPress(cx);
       expect(v.open.has(key)).toBe(true);
       expect(v.textSel ?? null).toBe(null);
-      v.toggle(key, cx);
+      // A click on the open turn closes it at once; the pointer going on after it lifts no fill.
+      click(v, cx, key, { after });
+      expect([v.sel, v.open.has(key), v.textSel ?? null]).toEqual([key, false, null]);
     }
   }
 });
