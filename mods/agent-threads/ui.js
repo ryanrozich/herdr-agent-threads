@@ -3172,6 +3172,14 @@ export function openLines(o) {
   const head = o.newest ? `Newest prompt${o.newest.ts ? ` · ${openWhen(o.newest.ts, o.now)}` : ""}` : "";
   return ["Reading this session", read, turns, agent, when, spans, counts.length ? `So far: ${counts.join(" · ")}` : "", head, o.newest?.text ?? ""];
 }
+// The counts so far as the loading state shows them, in two rows: what happened (prompts,
+// tool calls, pins), then the tokens and the share of the prompt read from cache, in the
+// status line's forms. A count the session does not record is left out, never 0.
+export function openCounts(o) {
+  const done = [o.prompts != null ? openMany(o.prompts, "prompt") : null, o.tools != null ? openMany(o.tools, "tool call") : null, o.pins > 0 ? openMany(o.pins, "pin") : null].filter(Boolean);
+  const tokens = o.tokens != null ? [`${fmtTokens(o.tokens)} tokens`, o.cachePct != null ? `cache ${fmtPct(o.cachePct)}` : null].filter(Boolean).join(" · ") : "";
+  return [done.length ? `So far: ${done.join(" · ")}` : "", tokens];
+}
 // The newest prompt a person typed, by the rule that gives a turn the prompt bubble: their own
 // sender, not a command line, with text. Plain text, its whitespace collapsed. Null when none.
 export function newestPrompt(turns) {
