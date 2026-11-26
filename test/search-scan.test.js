@@ -1956,6 +1956,49 @@ test("a new search whose first slice finds nothing selects the newest match, als
   expect(places(v)).toEqual(want(v, "zebra"));
 }, 120000);
 
+// A newer step (Shift n) from a match in a tail being checked again: the tail is checked
+// oldest first, so the selected match can have its place again, as the newest place, while
+// the newer match after it is not checked again yet. The newer button stays on meanwhile (not
+// "No newer match"), and the step goes on by itself in the draws after it until the check
+// places that match, and lands on it.
+test("a newer step from a match in a long tail being checked again, the newer match not checked again yet, goes on by itself and lands on it, and the newer button stays on meanwhile", async () => {
+  const { v, cx, s } = await longPane(600);
+  const base = s.turns.length;
+  // A 2,400-turn tail, under HITS_TAIL_MAX: "zebra" in its 11th turn and its 2,001st, more
+  // than a slice apart at twice the prices.
+  for (let i = 0; i < 2400; i++) asked(s, i === 10 || i === 2000 ? `Tail ${i}: the zebra list.` : `Tail ${i}: nothing here.`);
+  settleRows(v, cx);
+  v.sel = `0:${s.turns.length}`;
+  const from = `0:${base + 11}`;
+  const newer = `0:${base + 2001}`;
+  const newerButton = () => { H.rec = []; v.stepButtons(theme); const c = H.rec; H.rec = null; return afterId(c, "th-match-newer"); };
+  const r = {};
+  X = 2;
+  try { priced(v, () => {
+    v.action("search:zebra", cx);
+    for (let k = 0; k < 200 && counting(v); k++) drawOnce(v, cx);
+    r.counted = !counting(v);
+    v.sel = from;
+    asked(s, "A new turn: nothing here.");
+    // The draws after the turn check the tail again. Once the selected match has its place
+    // again and the newer one has none yet: the newest place is the selection's.
+    for (let k = 0; k < 80 && !r.at; k++) {
+      drawOnce(v, cx);
+      const h = v.hitsNow();
+      if (h.cur.tail && h.at.has(from) && !h.at.has(newer)) {
+        r.at = { newest: h.by.get(h.top - 1) === from, dimmed: (newerButton() ?? []).some((c) => c[0] === "tooltip" && c[1] === "No newer match") };
+      }
+    }
+    v.action("newerMatch", cx);
+    for (let k = 0; k < 80 && v.sel === from; k++) drawOnce(v, cx);
+    r.sel = v.sel;
+    for (let k = 0; k < 80 && counting(v); k++) drawOnce(v, cx);
+  }); } finally { X = 1; }
+  expect(r).toEqual({ counted: true, at: { newest: true, dimmed: false }, sel: newer });
+  expect(direct(v, "zebra")).toEqual([newer, from]);
+  expect(places(v)).toEqual(want(v, "zebra"));
+}, 120000);
+
 // A turn left open with no reply while later ones start, then answered together with a later
 // one: its match comes from that reply (answeredBy). It is before the last turn done with a
 // reply, so the tail from that turn on does not hold it; the count still counts it.
