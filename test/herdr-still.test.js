@@ -344,8 +344,7 @@ test("herdr-still.sh has one deadline for the whole run: a Herdr call that hangs
   expect(took).toBeLessThan(12);
   expect(existsSync(png)).toBe(false);
   // The hung call itself is gone: the call's subshell execs, so the pid the deadline signals is
-  // the timeout process, which ends the call. (On Linux the cleanup's sweep of processes
-  // holding the run's folder would also end it, so the text check below pins the exec there.)
+  // the timeout process, which ends the call. The text check below pins the exec too.
   const gone = () => spawnSync("pgrep", ["-f", `hang-${f.d}`]).status === 1;
   for (let i = 0; i < 30 && !gone(); i++) spawnSync("sleep", ["0.1"]);
   expect(gone()).toBe(true);

@@ -70,10 +70,11 @@ const snapshot = (pids) => table(pids ? ["-o", "pid=,ppid=,lstart=,comm=", "-p",
 // be stopped.
 const OURS = new Set(["bash", "sh", "dash", "sleep", "bun", "node", "jq", "sqlite3", "codex", "opencode"]);
 
-// The processes this run started that are still alive: its descendants, and processes with a
-// name in OURS whose command line or environment names the run's folder (every child inherits
-// TMPDIR, so an orphan still carries it; Linux shows any process's environment, macOS not a
-// system binary's). The preload's own ps calls are left out.
+// The processes this run started that are still alive: its descendants, and processes started
+// since it began, with a name in OURS, whose command line names the run's folder. Only those
+// are asked for their command line, and no process for its environment, so an orphan that
+// carries the folder only in TMPDIR is not found (leftover-check.sh finds one by its group or
+// its working folder). The preload's own ps calls are left out.
 function leftovers() {
   const rows = snapshot();
   const by = new Map(rows.map((r) => [r.pid, r]));
@@ -84,11 +85,11 @@ function leftovers() {
     grew = false;
     for (const r of rows) if (ours.has(r.ppid) && !ours.has(r.pid)) { ours.add(r.pid); grew = true; }
   }
-  // With e, ps adds each process's environment to its command line.
-  for (const line of ps(["axeww", "-o", "pid=,command="]).split("\n")) {
-    if (!line.includes(root) && !line.includes(realRoot)) continue;
-    const pid = Number(line.trim().split(/\s+/)[0]);
-    if (OURS.has(by.get(pid)?.comm)) ours.add(pid);
+  // Start times may differ by a second, as in stop().
+  const began = (by.get(process.pid)?.start ?? Number.POSITIVE_INFINITY) - 1000;
+  const ask = rows.filter((r) => r.start >= began && OURS.has(r.comm) && !ours.has(r.pid) && !ancestors.has(r.pid)).map((r) => r.pid);
+  for (const line of ask.length ? ps(["-ww", "-o", "pid=,args=", "-p", ask.join(",")]).split("\n") : []) {
+    if (line.includes(root) || line.includes(realRoot)) ours.add(Number(line.trim().split(/\s+/)[0]));
   }
   return rows.filter((r) => ours.has(r.pid) && r.pid > 1 && !ancestors.has(r.pid) && !(r.comm === "ps" && r.ppid === process.pid));
 }
