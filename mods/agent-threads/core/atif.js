@@ -415,9 +415,16 @@ async function main(argv) {
     const m = day.match(/^(.*)\/(\d{4})\/(\d{2})\/(\d{2})$/);
     const dirs = new Set([day]);
     if (m) {
-      const times = s.turns.flatMap((t) => [t.ts, t.afterAt, t.answers?.[0]?.at]).filter((x) => typeof x === "number" && x > 0);
+      // Every marked answer's time, not only the first: a turn can answer again days later.
+      // Its end and its steps' times too: a row's end moves the text after its marked answers
+      // into a step, so afterAt no longer holds the time of a late call's commentary. And its
+      // background wake-ups' (keepWakes): their calls and texts, kept apart from its steps.
+      const stepTimes = (steps) => (steps ?? []).flatMap((st) => [st.at, ...(st.info ?? []).map((i) => i?.at)]);
+      const wakeTimes = (t) => [t.latestAt, ...(t.updatesAt ?? []), ...(t.wakes ?? []).flatMap((w) => [w.afterAt, ...stepTimes(w.steps)])];
+      const times = s.turns.flatMap((t) => [t.ts, t.afterAt, t.endTs, ...(t.answers ?? []).map((a) => a.at), ...stepTimes(t.steps), ...wakeTimes(t)]).filter((x) => typeof x === "number" && x > 0);
       const lo = Date.UTC(+m[2], +m[3] - 1, +m[4]) - 864e5;
-      const hi = Math.max(lo + 2 * 864e5, (times.length ? Math.max(...times) : 0) + 864e5);
+      // A loop, not a spread: a long session's call times can pass the engine's argument limit.
+      const hi = Math.max(lo + 2 * 864e5, times.reduce((a, b) => Math.max(a, b), 0) + 864e5);
       for (let t = lo, k = 0; t <= hi && k < CODEX_DAYS; t += 864e5, k++) {
         const d = new Date(t);
         dirs.add(join(m[1], String(d.getUTCFullYear()), String(d.getUTCMonth() + 1).padStart(2, "0"), String(d.getUTCDate()).padStart(2, "0")));

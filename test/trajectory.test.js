@@ -198,3 +198,18 @@ test("trajectory: from the panel's reader, every background update that said som
     [["context", "the deploy is out", Date.parse(at(31))]],
   ]);
 });
+
+// The reply cell starts where reply() takes its text from: a whitespace-only marked answer is
+// no answer, so the text after it is the reply, from the time that text began (TRD-164).
+test("trajectory: a reply after a whitespace-only marked answer starts at its own text", () => {
+  const s = newSession("s", "f");
+  const at = (m) => `2026-11-01T09:${String(m).padStart(2, "0")}:00.000Z`;
+  for (const e of [
+    { k: "p", o: "human", t: "Fix the cart total", ts: at(0) },
+    { k: "t", t: "\n", f: 1, id: "m1", ts: at(1) },
+    { k: "t", t: "Real reply.", id: "m2", ts: at(2) },
+    { k: "d", ms: 1, ts: at(3) },
+  ]) apply(s, e);
+  const cells = trajectory(s, s.turns[0]).groups.flatMap((g) => g.cells).filter((c) => c.kind === "message");
+  expect(cells.map((c) => [c.text, c.start])).toEqual([["Real reply.", Date.parse(at(2))]]);
+});

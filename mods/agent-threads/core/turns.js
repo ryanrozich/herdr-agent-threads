@@ -379,6 +379,37 @@ function flushText(turn) {
   turn.afterAt = null;
 }
 
+// Whether a turn has a marked answer with text: whitespace-only answers count as none, as in
+// reply() and hasReply().
+const hasAnswer = (t) => Boolean(t.answers?.some((a) => a.parts.some((p) => p.trim())));
+
+// A row ends (a close, an interrupt, a later prompt): with a marked answer, text no record
+// classified is commentary, a Worked step. With none, that text stays the reply (the old rule).
+function settleText(t) {
+  if (t.after.length && hasAnswer(t)) flushText(t);
+}
+
+// The row a soft close left, when its own work went on past it (a retry, a hook
+// continuation): it is off s.open, so a row end settles it apart, before s.softClose resets.
+function settleResumed(s) {
+  const t = s.turns[s.turns.length - 1];
+  if (s.softClose && t?.done && !s.open.includes(t)) settleText(t);
+}
+
+// Reasoning on a row or wake-up, for the step it precedes: its text, or a block with no text
+// counted as withheld.
+function addReason(w, e) {
+  if (e.t) (w.reasoning ??= []).push(e.t);
+  else if (e.w) w.held = (w.held ?? 0) + 1;
+}
+
+// Reasoning that came after a row's hard close (counted in s.pendReason) moves to the
+// background row the next work opened: it preceded that work, not the closed row's reply.
+function moveReason(from, to, p) {
+  if (p.n && (from.reasoning?.length ?? 0) >= p.n) (to.reasoning ??= []).push(...from.reasoning.splice(-p.n));
+  if (p.w && (from.held ?? 0) >= p.w) { from.held -= p.w; to.held = (to.held ?? 0) + p.w; }
+}
+
 // A model turn starts: an "s" estimates its time from here.
 function startModelTurn(s, e) {
   s.since = e.ts ? Date.parse(e.ts) : null;
@@ -386,11 +417,14 @@ function startModelTurn(s, e) {
 }
 
 function openRow(s, e) {
+  settleResumed(s);
   s.softClose = false;
   // Later events go to the new row, so an open row with its reply has nothing more to come.
   s.open = s.open.filter((t) => {
     if (!hasReply(t)) return true;
     t.done = true;
+    // The row ends here: commentary after its marked answers is Worked, as at a close.
+    settleText(t);
     if (!t.durationMs && t.endTs && t.ts) t.durationMs = Math.max(0, t.endTs - t.ts);
     return false;
   });
@@ -427,11 +461,12 @@ function linkAnswer(s, cur) {
 
 // Every open row is done: the shared end of "d" and "s".
 function closeOpen(s, cur, end, e) {
+  settleResumed(s);
   for (const t of s.open) {
     t.done = true;
     if (end) t.endTs = end;
     // With marked answers, text no record classified is commentary: Worked, not the reply.
-    if (t.answers.length && t.after.length) flushText(t);
+    settleText(t);
     // Answered together with a later prompt: its reply is on that row. Not a turn with a line
     // left out (noteSkip): its reply may be the line itself.
     if (t !== cur && !hasReply(t) && !t.skipped) t.answeredBy = cur.n;
@@ -444,6 +479,10 @@ function closeOpen(s, cur, end, e) {
   s.softClose = Boolean(e.soft);
   linkAnswer(s, cur);
 }
+
+// The events that settle where reasoning after a hard close belongs (s.pendReason): work, a
+// prompt, an error, a close or an interrupt. Usage lines, results and the rest leave it open.
+const REASON_ENDS = new Set(["t", "u", "p", "e", "d", "s", "i"]);
 
 // The events that change no turn: a turn's version (v) moves for every other one. Subagent
 // launches and notices (r, n) change what an open turn's subagent group shows: s.agentVer.
@@ -483,9 +522,13 @@ function applyOne(s, e) {
   // agent says then is a reply for the person. Text of the message that closed the row still
   // belongs to that row (Claude Code streams one message as records sharing an id).
   if ((e.k === "t" || e.k === "u") && s.seg === "own" && !s.open.length && cur?.done && !s.softClose && !(e.k === "t" && e.id != null && cur.lastMsg === e.id)) {
+    const prev = cur;
     openRow(s, { o: "background", ts: e.ts, t: null });
     cur = s.turns[s.turns.length - 1];
+    if (s.pendReason) moveReason(prev, cur, s.pendReason);
   }
+  // Anything else that settles it leaves that reasoning on the row that closed.
+  if (s.pendReason && REASON_ENDS.has(e.k)) s.pendReason = null;
   switch (e.k) {
     case "p": {
       if (s.startedAt === null && e.ts) s.startedAt = Date.parse(e.ts);
@@ -530,8 +573,14 @@ function applyOne(s, e) {
       // counted there as withheld.
       const w = s.seg === "own" ? cur : s.keepWakes ? cur?.wakes?.at(-1) : null;
       if (!w) return;
-      if (e.t) (w.reasoning ??= []).push(e.t);
-      else if (e.w) w.held = (w.held ?? 0) + 1;
+      addReason(w, e);
+      // After a hard close, before any text or call: the closed row keeps it for now, and a
+      // background row the next work opens takes it (s.pendReason counts it, moveReason).
+      if (s.seg === "own" && !s.open.length && cur.done && !s.softClose) {
+        s.pendReason ??= { n: 0, w: 0 };
+        if (e.t) s.pendReason.n++;
+        else if (e.w) s.pendReason.w++;
+      }
       return;
     }
     case "t":
@@ -655,10 +704,13 @@ function applyOne(s, e) {
       return;
     }
     case "i": {
+      // An interrupt ends a row as a close does: commentary after its marked answers is Worked,
+      // on the open rows and on the row a soft close left whose own work went on.
+      settleResumed(s);
       s.softClose = false;
       if (!s.open.length) { s.followActive = false; return; }
       const last = s.open[s.open.length - 1];
-      for (const t of s.open) t.done = true;
+      for (const t of s.open) { t.done = true; settleText(t); }
       if (s.clock) for (const t of s.open) clockEnd(s, t, e);
       last.interrupted = true;
       s.open = [];
@@ -723,6 +775,7 @@ export function rewindTail(s) {
   s.open = [];
   s.seg = null;
   s.softClose = false;
+  s.pendReason = null;
   s.pendingCmd = null;
   s.followActive = false;
   s.updateAt = null;

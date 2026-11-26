@@ -926,3 +926,124 @@ test("an interrupted or failed turn with no marked answer shows no reply", () =>
   for (const e of ev2) apply(s2, e);
   expect(reply(s2.turns[0])).toBe("Answer one.");
 });
+
+// Commentary after a marked answer is Worked wherever the row ends: at a later prompt that
+// retires it, and at the close after a soft close the row's own work carried on past.
+test("commentary after a marked answer becomes work when a later prompt retires the row", () => {
+  const s = newSession("s", "f");
+  const ev = [
+    { k: "p", o: "human", t: "Fix the cart total" },
+    { k: "t", t: "Answer one.", f: 1, id: "m1" },
+    { k: "t", t: "Checking one more thing." },
+    { k: "p", o: "peer", t: "Status?", n: "t7" },
+  ];
+  for (const e of ev) apply(s, e);
+  expect(s.turns.length).toBe(2);
+  expect(reply(s.turns[0])).toBe("Answer one.");
+  expect(s.turns[0].steps.map((st) => st.k)).toEqual(["text"]);
+  expect(s.turns[0].steps[0].t).toBe("Checking one more thing.");
+  expect(s.turns[0].after).toEqual([]);
+});
+
+test("commentary after a soft close becomes work at the row's final close", () => {
+  const s = newSession("s", "f");
+  const ev = [
+    { k: "p", o: "human", t: "Fix the cart total" },
+    { k: "t", t: "Answer one.", f: 1, id: "m1" },
+    { k: "s", soft: 1 },
+    { k: "u", n: "Read" },
+    { k: "t", t: "Hook asked for a recheck; it holds.", id: "m2" },
+    { k: "s" },
+  ];
+  for (const e of ev) apply(s, e);
+  expect(s.turns.length).toBe(1);
+  expect(reply(s.turns[0])).toBe("Answer one.");
+  expect(s.turns[0].steps.map((st) => st.k)).toEqual(["group", "text"]);
+  expect(s.turns[0].steps[1].t).toBe("Hook asked for a recheck; it holds.");
+  expect(s.turns[0].after).toEqual([]);
+});
+
+test("commentary after a marked answer becomes work when the row is interrupted", () => {
+  const s = newSession("s", "f");
+  for (const e of [
+    { k: "p", o: "human", t: "Fix the cart total" },
+    { k: "t", t: "Answer one.", f: 1, id: "m1" },
+    { k: "t", t: "Checking one more thing." },
+    { k: "i" },
+  ]) apply(s, e);
+  expect(s.turns[0].interrupted).toBe(true);
+  expect(reply(s.turns[0])).toBe("Answer one.");
+  expect(s.turns[0].steps.map((st) => st.t)).toEqual(["Checking one more thing."]);
+  // The same after a soft close, when the row's own work went on past it.
+  const s2 = newSession("s", "f");
+  for (const e of [
+    { k: "p", o: "human", t: "Fix the cart total" },
+    { k: "t", t: "Answer one.", f: 1, id: "m1" },
+    { k: "s", soft: 1 },
+    { k: "u", n: "Read" },
+    { k: "t", t: "Rechecking after the hook." },
+    { k: "i" },
+  ]) apply(s2, e);
+  expect(reply(s2.turns[0])).toBe("Answer one.");
+  expect(s2.turns[0].steps.map((st) => st.k)).toEqual(["group", "text"]);
+  expect(s2.turns[0].after).toEqual([]);
+});
+
+// Reasoning after a hard close belongs to the work it precedes: the background row the next
+// call opens, not the reply of the row that closed. With no work after it, it stays there.
+test("reasoning after a hard close goes with the background work it precedes", () => {
+  const s = newSession("s", "f");
+  const ev = [
+    { k: "p", o: "human", t: "Fix the cart total" },
+    { k: "t", t: "Answer one.", f: 1, id: "m1" },
+    { k: "d", ms: 1000 },
+    { k: "h", t: "Plan the recheck." },
+    { k: "h", w: 1 },
+    { k: "u", n: "Read" },
+    { k: "t", t: "Rechecked: it holds.", f: 1, id: "m2" },
+    { k: "d", ms: 1000 },
+  ];
+  for (const e of ev) apply(s, e);
+  expect(s.turns.length).toBe(2);
+  expect(s.turns[0].reasoning ?? []).toEqual([]);
+  expect(s.turns[0].held ?? 0).toBe(0);
+  expect(s.turns[1].steps[0]).toMatchObject({ k: "group", calls: ["Read"], r: "Plan the recheck.", h: 1 });
+  expect(reply(s.turns[1])).toBe("Rechecked: it holds.");
+  const s2 = newSession("s", "f");
+  for (const e of [ev[0], ev[1], ev[2], ev[3], { k: "d", ms: 0 }]) apply(s2, e);
+  expect(s2.turns.length).toBe(1);
+  expect(s2.turns[0].reasoning).toEqual(["Plan the recheck."]);
+  // Nor when the transcript ends on it.
+  const s3 = newSession("s", "f");
+  for (const e of ev.slice(0, 4)) apply(s3, e);
+  expect(s3.turns.length).toBe(1);
+  expect(s3.turns[0].reasoning).toEqual(["Plan the recheck."]);
+});
+
+test("commentary after a soft close becomes work when a later prompt opens a row", () => {
+  const s = newSession("s", "f");
+  for (const e of [
+    { k: "p", o: "human", t: "Fix the cart total" },
+    { k: "t", t: "Answer one.", f: 1, id: "m1" },
+    { k: "s", soft: 1 },
+    { k: "u", n: "Read" },
+    { k: "t", t: "Rechecking after the hook.", id: "m2" },
+    { k: "p", o: "human", t: "Thanks, next one" },
+  ]) apply(s, e);
+  expect(s.turns.length).toBe(2);
+  expect(reply(s.turns[0])).toBe("Answer one.");
+  expect(s.turns[0].steps.map((st) => st.k)).toEqual(["group", "text"]);
+  expect(s.turns[0].after).toEqual([]);
+});
+
+test("a whitespace-only marked answer leaves the text after it as the reply", () => {
+  const s = newSession("s", "f");
+  for (const e of [
+    { k: "p", o: "human", t: "Fix the cart total" },
+    { k: "t", t: "\n", f: 1, id: "m1" },
+    { k: "t", t: "Real reply.", id: "m2" },
+    { k: "d", ms: 1000 },
+  ]) apply(s, e);
+  expect(reply(s.turns[0])).toBe("Real reply.");
+  expect(s.turns[0].steps).toEqual([]);
+});

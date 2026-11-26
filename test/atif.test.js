@@ -388,6 +388,92 @@ test("atif: the command line nests Codex subagents by their rollout's parent thr
   expect(bad.extra.arguments_unread).toBe("not JSON");
 });
 
+// A Codex rollout file in base's day folders, for the child-search window tests below: its
+// lines from date on, each a second or more after the last (gap, in seconds).
+const lateRollout = (base) => (date, id, meta, from, body) => {
+  const day = join(base, "sessions", ...date.slice(0, 10).split("-"));
+  mkdirSync(day, { recursive: true });
+  let ord = 0;
+  let t = Date.parse(date);
+  const line = (type, payload, gap = 1) => JSON.stringify({ timestamp: new Date((t += gap * 1000)).toISOString(), ordinal: ord++, type, payload });
+  const msg = (phase) => (text, gap = 4) => line("response_item", { type: "message", role: "assistant", phase, content: [{ type: "output_text", text }] }, gap);
+  const api = {
+    ask: (turn, text) => line("event_msg", { type: "item_completed", turn_id: turn, item: { type: "UserMessage", content: [{ type: "text", text }] } }),
+    say: msg("final_answer"),
+    note: msg("commentary"),
+    call: (name, cid, args, gap = 2) => line("response_item", { type: "function_call", name, call_id: cid, arguments: JSON.stringify(args) }, gap),
+    out: (cid, output) => line("response_item", { type: "function_call_output", call_id: cid, output }),
+    fin: (ms) => line("event_msg", { type: "task_complete", duration_ms: ms }, 0),
+    abort: () => line("event_msg", { type: "turn_aborted", reason: "interrupted" }, 0),
+    wake: (trigger, gap) => line("event_msg", { type: "task_started", turn_attribution: { trigger } }, gap),
+  };
+  const lines = [line("session_meta", { id, cwd: "/Users/dev/acme-web", ...meta, ...(from != null ? { subagent_history_start_ordinal: from } : {}) }, 0), line("turn_context", { model: "gpt-5.5-codex", effort: "medium" }, 0), ...body(api)];
+  const f = join(day, `rollout-${date.slice(0, 19).replace(/:/g, "-")}-${id}.jsonl`);
+  writeFileSync(f, `${lines.join("\n")}\n`);
+  return f;
+};
+const LATE_IDS = { root: "00000000-0000-4000-8000-0000000000e1", child: "00000000-0000-4000-8000-0000000000e2" };
+const LATE_SPAWN = { source: { subagent: { thread_spawn: { parent_thread_id: LATE_IDS.root, depth: 1, agent_path: "/root/late", agent_nickname: "Reviewer" } } } };
+// The child the late call spawned, in the November 5 folder; the root's export links it.
+const lateChildLinked = (base, root) => {
+  lateRollout(base)("2026-11-05T09:00:05Z", LATE_IDS.child, LATE_SPAWN, 2, (a) => [a.ask("turn-c001", "Review cart/total.ts"), a.say("cart/total.ts rounds once."), a.fin(1000)]);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), root, "codex"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const results = Object.fromEntries(t.steps.flatMap((st) => st.observation?.results ?? []).map((r) => [r.source_call_id, r]));
+  expect(results.call_late.subagent_trajectory_ref).toEqual([{ trajectory_id: LATE_IDS.child, session_id: LATE_IDS.root }]);
+};
+const LATE_GAP = 3 * 86400;
+
+// The day folders searched for Codex children reach the turn's latest marked answer, not only
+// its first: a turn that answers on November 2 and again on November 5, after spawning a child
+// that day, finds that child's rollout in the November 5 folder (TRD-164).
+test("atif: the command line finds a Codex child spawned days after the turn's first marked answer", () => {
+  const base = mkdtempSync(join(tmpdir(), "threads-atif-late-"));
+  const root = lateRollout(base)("2026-11-02T09:00:00Z", LATE_IDS.root, {}, null, (a) => [
+    a.ask("turn-0001", "Review the cart module, then check back later"),
+    a.say("Started the review; I will check back."),
+    a.call("spawn_agent", "call_late", { task_name: "late", message: "Review cart/total.ts" }, LATE_GAP),
+    a.out("call_late", JSON.stringify({ task_name: "/root/late" })),
+    a.say("The late review is in: the totals are right."),
+    a.fin(1000),
+  ]);
+  lateChildLinked(base, root);
+});
+
+// The same when no marked answer follows the late call: the turn ends on commentary (task
+// complete) or is cut off (turn aborted). The row's end makes that commentary a Worked step, so
+// the window reaches it through the step's time and the turn's end (TRD-164).
+test("atif: the command line finds a Codex child spawned days after a turn's last marked answer", () => {
+  for (const end of ["fin", "abort"]) {
+    const base = mkdtempSync(join(tmpdir(), "threads-atif-late-"));
+    const root = lateRollout(base)("2026-11-02T09:00:00Z", LATE_IDS.root, {}, null, (a) => [
+      a.ask("turn-0001", "Review the cart module, then check back later"),
+      a.say("Started the review; I will check back."),
+      a.call("spawn_agent", "call_late", { task_name: "late", message: "Review cart/total.ts" }, LATE_GAP),
+      a.out("call_late", JSON.stringify({ task_name: "/root/late" })),
+      a.note("Waiting on the late review."),
+      end === "fin" ? a.fin(1000) : a.abort(),
+    ]);
+    lateChildLinked(base, root);
+  }
+});
+
+// The same for a background wake-up's own calls: a task the agent started days after the turn
+// closed, under a trigger that opens no row of its own, keeps its calls on the wake-up
+// (keepWakes). The window reaches them through those calls' times.
+test("atif: the command line finds a Codex child spawned in a background wake-up days after the turn", () => {
+  const base = mkdtempSync(join(tmpdir(), "threads-atif-late-"));
+  const root = lateRollout(base)("2026-11-02T09:00:00Z", LATE_IDS.root, {}, null, (a) => [
+    a.ask("turn-0001", "Review the cart module"),
+    a.say("Started the review; I will check back."),
+    a.fin(1000),
+    a.wake("automation", LATE_GAP),
+    a.call("spawn_agent", "call_late", { task_name: "late", message: "Review cart/total.ts" }),
+    a.out("call_late", JSON.stringify({ task_name: "/root/late" })),
+  ]);
+  lateChildLinked(base, root);
+});
+
 // A subagent's id is transcript text: one that names a file outside the session's subagents
 // folder is not read, by its spelling or through a link.
 test("atif: a subagent id with folder steps, odd characters, or a file linked from elsewhere is not found, and nothing outside is read", () => {
