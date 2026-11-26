@@ -100,7 +100,7 @@ import("./build.js")
   .then((m) => { built = parseBuild(m?.BUILD) ? m.BUILD : null; })
   .catch(() => { built = null; });
 import { isDiagram, drawDiagram } from "./diagram.js";
-import { BUDGET, TIGHT_CHUNK, PANE_WEIGHT, measure, sessionBytes, forgetSize, trim, tailOf, tailNote, gut, joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, beatRead, dropRead } from "./budget.js";
+import { BUDGET, TIGHT_CHUNK, PANE_WEIGHT, measure, sessionBytes, forgetSize, trim, tailOf, tailNote, gut, joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, dropRead } from "./budget.js";
 // A hot reload evaluates this module again in the same VM, beside the old one, and then
 // replaces every copy: the copies it replaces give back what they hold now (budget.js).
 releaseOlder();
@@ -1298,6 +1298,7 @@ export default class Threads extends View {
   }
 
   close() {
+    if (this.forgotten) return;
     // The launcher, the gallery and the output viewer (overlays) return from init() before any
     // of this exists.
     if (this.outv?.st) this.outv.st.release();
@@ -2584,6 +2585,13 @@ export default class Threads extends View {
             s.offset += c.used;
             s.partial = false;
             if (this.win) dropRead(this.win, gen);
+            // The chunk's turns measured in slices, then the window's guard (budget.js).
+            while (this.win && !measure(s, now() + SLICE_MS)) {
+              beat();
+              await cx.sleep(0);
+              if (!live()) return;
+              beat();
+            }
             if (this.guard(s)) return;
             if (s.offset < s.size) cap = readCap(cap, c.cut, chunk, CHUNK);
             // Over half the budget, smaller chunks: a smaller peak.
@@ -9797,7 +9805,7 @@ export default class Threads extends View {
   // with the panes already open (budget.js). Retry reads it if room was made.
   refusedView(t) {
     return this.empty(t, "info", "This session is too large to show in full",
-      "The Threads panes in this window would run out of memory with this session read here too. The Chat shows its newest turns. Close another Threads pane, then Retry.",
+      "Read here too, it would take the Threads panes in this window past their memory budget. The Chat still shows it. Close another Threads pane, then Retry.",
       null, [this.retryButton(t), ...this.closeButtons(t)]);
   }
 

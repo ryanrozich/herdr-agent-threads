@@ -23,11 +23,12 @@ export const BUDGET = 144 * MiB;
 // The largest extractor call while the window holds over half the budget (16 MiB otherwise).
 export const TIGHT_CHUNK = 4 * MiB;
 // What a pane holds for a session: its text once (twice the characters for a wide string),
-// plus its fixed costs (objects, arrays, records) times the pane's weight. The Chat adds shapes
-// and rows, the Trajectory its ledger rows, the Pinned pane shapes of what it reads. Weights
-// from the rig rows above over measure()'s fixed part of the same made-up session, which has
-// almost no text: (80, 46, 50 MiB) / 11.7 MiB (test/budget.test.js says how).
-export const PANE_WEIGHT = Object.freeze({ chat: 6.8, pinned: 3.9, trajectory: 4.3 });
+// plus its fixed costs (objects, arrays, records) times the pane's weight: the Chat adds shapes
+// and rows, the Trajectory its ledger rows, the Pinned pane shapes of what it reads. From the rig
+// rows above and measure() of the same made-up session (test/make-big.js real: 164 B of text and
+// 3,534 B fixed a turn, 0.5 and 11.1 MiB at 3,300 turns): chat (80 - 0.5) / 11.1 = 7.15, pinned
+// (46 - 0.5) / 11.1 = 4.1, trajectory (50 - 0.5) / 11.1 = 4.45. test/budget.test.js checks it.
+export const PANE_WEIGHT = Object.freeze({ chat: 7.15, pinned: 4.1, trajectory: 4.45 });
 
 // What QuickJS-NG spends past the characters: a string's header and malloc's, an object, a
 // usage record, a step, a call.
@@ -60,37 +61,39 @@ export function turnBytes(t) {
   return [text, fixed + strings * STR];
 }
 
-// Each turn's last estimate, and each session's: { v, text, fixed, dropped, gone }, where v is
-// the session's version at the last measure, dropped the turns trim() let go and gone their
-// estimate.
+// Each turn's last estimate, [text, fixed, the turn's version then], and each session's:
+// { text, fixed, dropped, gone }, where dropped is the turns trim() let go and gone their estimate.
 const SIZES = new WeakMap();
 const META = new WeakMap();
-const meta = (s) => { let m = META.get(s); if (!m) META.set(s, (m = { v: -1, text: 0, fixed: 0, dropped: 0, gone: [0, 0] })); return m; };
+const meta = (s) => { let m = META.get(s); if (!m) META.set(s, (m = { text: 0, fixed: 0, dropped: 0, gone: [0, 0] })); return m; };
+const clock = () => globalThis.performance?.now?.() ?? Date.now();
 
-// Measures what changed since the last call (a turn takes the session's version when it
-// changes, turns.js apply). Every turn is visited, but only a changed one is measured again.
-export function measure(s) {
+// Measures the turns that changed since their last measure (a turn takes the session's version
+// when it changes, turns.js apply) and returns the session's estimate. With until (a time on
+// performance.now's clock), it stops once past it and returns null; the next call goes on.
+export function measure(s, until = Infinity) {
   const m = meta(s);
   let text = 0;
   let fixed = s.calls?.size ? s.calls.size * PER_INFO : 0;
   for (const t of s.turns) {
     let b = SIZES.get(t);
-    if (b === undefined || t.v > m.v) SIZES.set(t, (b = turnBytes(t)));
+    if (!b || b[2] !== t.v) {
+      if (until !== Infinity && clock() > until) return null;
+      const [x, f] = turnBytes(t);
+      SIZES.set(t, (b = [x, f, t.v]));
+    }
     text += b[0];
     fixed += b[1];
   }
-  m.v = s.version;
   m.text = text;
   m.fixed = fixed;
   return m;
 }
 const weigh = (text, fixed, w) => text + w * fixed;
-// A pane's bytes for a session at weight w; full: with the turns trim() let go, which is what
-// another pane reading it would hold.
-export function sessionBytes(s, w, full = false) {
+// A pane's bytes for a session at weight w.
+export function sessionBytes(s, w) {
   const m = META.get(s);
-  if (!m) return 0;
-  return weigh(m.text + (full ? m.gone[0] : 0), m.fixed + (full ? m.gone[1] : 0), w);
+  return m ? weigh(m.text, m.fixed, w) : 0;
 }
 // A session read again from the top (main.js restart) starts with no estimate.
 export const forgetSize = (s) => { META.delete(s); };
@@ -111,7 +114,15 @@ export function trim(s, bytes, w) {
   }
   const dropped = new Set(s.turns.splice(0, k));
   s.version++;
-  s.turns.forEach((t, i) => { t.n = i + 1; t.v = s.version; });
+  // A later turn a turn was answered in keeps its number less k (turns.js linkAnswer, closeOpen).
+  for (const [i, t] of s.turns.entries()) {
+    t.n = i + 1;
+    t.v = s.version;
+    if (t.answeredIn) t.answeredIn = Math.max(0, t.answeredIn - k) || null;
+    if (t.answeredBy) t.answeredBy = Math.max(0, t.answeredBy - k) || null;
+    const b = SIZES.get(t);
+    if (b) b[2] = t.v;
+  }
   if (s.calls) for (const [id, c] of s.calls) if (dropped.has(c.turn)) s.calls.delete(id);
   s.open = s.open.filter((t) => !dropped.has(t));
   for (const key of ["updateAt", "guess"]) if (dropped.has(s[key]?.turn)) s[key] = null;
@@ -121,7 +132,6 @@ export function trim(s, bytes, w) {
   m.text = text;
   m.fixed = fixed;
   m.dropped += k;
-  m.v = s.version;
   return k;
 }
 // { shown, of } for a session trim() cut, else null; and the line the list shows over it.
@@ -131,11 +141,14 @@ export function tailOf(s) {
 }
 export const tailNote = (t) => `This session is too large to show in full: showing the newest ${t.shown.toLocaleString()} of ${t.of.toLocaleString()} turns`;
 
-// Empties a session in place, and every turn in it: a pane that closed or was replaced gives its
-// memory back now, even if something still reaches the objects (a cycle waits for a collection,
-// and the collector may not run before the VM is full; see BUDGET).
+// Empties a session in place: a pane that closed or was replaced gives its turns back now, even
+// if something still reaches the session (an object in a cycle waits for a collection, and the
+// collector may not run before the VM is full; see BUDGET). Turns hold no turn and no pane, so
+// once out of their array nothing keeps them. A few steps a session, whatever its size: this runs
+// as a new module is evaluated, inside the reload's time.
 export function gut(s) {
-  for (const t of s.turns ?? []) for (const k of Object.keys(t)) delete t[k];
+  if (Array.isArray(s.turns)) s.turns.length = 0;
+  for (const k of ["calls", "agents", "agentIds"]) s[k]?.clear?.();
   for (const k of Object.keys(s)) delete s[k];
 }
 
@@ -186,10 +199,12 @@ export function fileBytes(file, w) {
   return b ? weigh(b[0], b[1], w) : 0;
 }
 
-// Releases the panes of an older evaluation of the module. Herdr reloads every copy of a mod
-// in one pass when its files change, evaluating the new module first; QuickJS keeps the old
-// module, and each old copy stays reachable from it until its tasks are cancelled and its view
-// dropped. Called once as main.js is evaluated.
+// Releases the panes of an older evaluation of the module, as main.js is evaluated. Herdr
+// reloads every copy of a mod in one pass when its files change, evaluating the new module
+// first (gpui-kit watch.rs reload); it then cancels each old copy's tasks, drops its entities
+// and its view, but a copy's objects come back only once nothing reaches them, and whatever sits
+// in a cycle waits for a collection that may not come before the VM is full (see BUDGET).
+// Emptied in place now, their sessions come back at once whatever still reaches them.
 export function releaseOlder() {
   const w = windowState();
   let n = 0;
@@ -240,10 +255,6 @@ export function takeRead(e, gen, now = Date.now()) {
   w.queue.shift();
   w.lock = { e, gen, at: now };
   return true;
-}
-export function beatRead(e, now = Date.now()) {
-  const w = windowState();
-  if (w.lock?.e === e) w.lock.at = now;
 }
 // gen: only that read's turn (null: whatever the pane holds or waits for).
 export function dropRead(e, gen = null) {
