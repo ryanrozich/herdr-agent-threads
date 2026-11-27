@@ -482,15 +482,17 @@ test("the loading state's turns row says how many of its turns are the person's 
   // Every turn a prompt, or the prompts not known yet: the turns alone.
   expect(openLines({ ...base, prompts: 375 })[2]).toBe("375 turns so far");
   expect(openLines({ ...base, prompts: null })[2]).toBe("375 turns so far");
-  // What each counts, from a read: a typed prompt, an hc report (in the person's own turn
-  // kind), a peer's message and a command are four turns; only the first is a prompt.
+  // What each counts, from a read: a command, a typed prompt, an hc report (in the person's
+  // own turn kind) and a peer's message are four turns; only the typed prompt is a prompt.
+  // The command comes first: one logged while a row is open never takes a row (applyOne).
   const s = newSession("s", "f.jsonl");
   const t0 = Date.UTC(2026, 10, 20, 9, 0);
-  apply(s, { k: "p", o: "human", t: "Sum the cart", ts: iso(t0) });
+  apply(s, { k: "p", o: "human", cmd: true, t: "/review cart", ts: iso(t0) });
+  apply(s, { k: "t", t: "Reviewing the cart.", ts: iso(t0 + 1000) });
+  apply(s, { k: "p", o: "human", t: "Sum the cart", ts: iso(t0 + 20000) });
   apply(s, { k: "p", o: "human", t: '<hc from="t7 review">The cart test passes</hc>', ts: iso(t0 + 30000) });
   apply(s, { k: "p", o: "peer", t: "<teammate-message teammate_id=\"rex\">The totals agree</teammate-message>", ts: iso(t0 + 60000) });
-  apply(s, { k: "p", o: "human", cmd: true, t: "/compact", ts: iso(t0 + 120000) });
-  apply(s, { k: "t", t: "Compacted.", ts: iso(t0 + 121000) });
+  expect(s.turns.map((t) => [t.sender.kind, t.cmd])).toEqual([["you", true], ["you", false], ["hc", false], ["peer", false]]);
   const prompts = s.turns.filter((t) => t.sender?.kind === "you" && !t.cmd).length;
   expect(s.turns.length).toBe(4);
   expect(prompts).toBe(1);
