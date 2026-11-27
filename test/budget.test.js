@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { newSession, apply, parseChunk } from "../mods/agent-threads/core/turns.js";
 import {
   BUDGET, TIGHT_CHUNK, TRIM_TO, PANE_WEIGHT, LOCK_STALE, QUEUE_STALE, GHOST_MS, measure, sessionBytes, trim, shiftKey, tailOf, tailNote, droppedOf, gut, windowState,
-  joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, holdRead, dropRead, pruneWindow, idsBefore,
+  joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, holdRead, dropRead, pruneWindow, idsBefore, turnBytes,
 } from "../mods/agent-threads/budget.js";
 import { turnId, turnIds } from "../mods/agent-threads/pins.js";
 import { drawRange, fixture, H, makeCx, modDir, PINS, settle, setup, Threads, unsliced, until } from "./render-harness.js";
@@ -1266,4 +1266,154 @@ test("a trimmed session that gains a turn without trimming again says the new co
   expect(v.baseRows[firstTurn]).toBe(before[firstTurn]);
   expect(v.baseRows[noteAt].text).toBe(tailNote(tailOf(s)));
   expect(v.baseSizes.length).toBe(v.baseRows.length);
+}, 20000);
+
+// ---- the second review's findings ----
+
+test("a final reply's text is counted once: its step is the same object as its entry in finals", () => {
+  const s = newSession("s", "/x/f.jsonl");
+  const T = new Date(Date.UTC(2026, 10, 1, 9)).toISOString();
+  const answer = "a".repeat(10000);
+  for (const e of [{ k: "p", o: "human", ts: T, t: "p" }, { k: "t", ts: T, t: answer, a: true }, { k: "u", ts: T, n: "Bash", id: "c1" }, { k: "d", ts: T, ms: 1 }]) apply(s, e);
+  const t = s.turns[0];
+  expect(t.finals?.length).toBe(1);
+  expect(t.steps.includes(t.finals[0])).toBe(true);
+  expect(t.finals[0].t).toBe(answer);
+  const [text] = turnBytes(t);
+  expect(text).toBeGreaterThanOrEqual(answer.length);
+  expect(text).toBeLessThan(2 * answer.length);
+}, 20000);
+
+// A read superseded at its first yield in phase ("apply": with part of its chunk applied;
+// "measure": with the chunk applied, in the measure after it).
+async function supersededIn(phase) {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 60 }, 1000, 5);
+  const { v, cx } = openPane(file);
+  const real = performance.now;
+  let t = 0;
+  let superseded = false;
+  performance.now = () => (t += 20);
+  cx.sleepHook = () => {
+    const s = v.current();
+    const now = phase === "apply" ? s?.partial : s && s.offset > 0 && !s.partial;
+    if (!superseded && now) { superseded = true; v.readGen++; }
+    return new Promise((r) => setTimeout(r, 0));
+  };
+  try {
+    await until(() => superseded, "the read superseded");
+    await new Promise((r) => setTimeout(r, 50));
+  } finally { performance.now = real; cx.sleepHook = null; }
+  return v;
+}
+
+test("a read superseded while it applies its chunk counts the turns it applied and publishes the pane's total", async () => {
+  const v = await supersededIn("apply");
+  const s = v.current();
+  expect(s.partial).toBe(true);
+  expect(s.turns.length).toBeGreaterThan(0);
+  expect(s.turns.length).toBeLessThan(60);
+  const w = PANE_WEIGHT.chat;
+  const est = sessionBytes(s, w);
+  expect(est).toBeGreaterThan(0);
+  expect(v.mem.bytes).toBe(v.heldBytes());
+  measure(s);
+  expect(sessionBytes(s, w)).toBe(est);
+}, 20000);
+
+test("a read superseded in the measure after its chunk publishes the pane's total before it lets go of the window's turn", async () => {
+  const v = await supersededIn("measure");
+  expect(v.current().turns.length).toBe(60);
+  expect(v.mem.bytes).toBeGreaterThan(0);
+  expect(v.mem.bytes).toBe(v.heldBytes());
+}, 20000);
+
+test("the chunk size is chosen once the read has the window's turn: the window passing half the budget in between gives the smaller chunk", async () => {
+  const MiB = 1024 * 1024;
+  const file = fixture("--only", "1");
+  const st = fakeReader({ [file]: 1000 }, 16000);
+  const { v, cx } = openPane(file);
+  let raised = false;
+  // Right after the read chose its third chunk (8 MiB), before it asks for the window's turn:
+  // the other panes now hold over half the budget.
+  cx.notifyHook = () => {
+    if (!raised && st.asked.length === 2 && v.current()?.offset > 3 * MiB) { raised = true; phantom(BUDGET * 0.6); }
+  };
+  await until(() => st.asked.length >= 3, "the third chunk asked for");
+  cx.notifyHook = null;
+  expect(raised).toBe(true);
+  expect(st.asked[1][2]).toBe(4 * MiB);
+  expect(st.asked[2][2]).toBe(TIGHT_CHUNK);
+}, 20000);
+
+test("a trim keeps the reader's place while a re-wrap's held place is due or taken: the trim lets that go", async () => {
+  for (const held of ["due", "taken"]) {
+    // The first pass's pane and its made-up neighbour leave the window.
+    windowState().panes.clear();
+    const { v, trimNow } = await trimmedLater();
+    v.rows();
+    v.follow = false;
+    v.toBottom = false;
+    v.scrollTo = null;
+    v.anchorDue = held === "due";
+    v.anchor = held === "taken" ? { key: "md:0:58:0", turn: "0:58", share: 0, off: 0, held: new Map(), wheels: 0 } : null;
+    v.topKey = "0:58";
+    const { at } = trimNow();
+    expect(v.anchor).toBeNull();
+    expect(v.anchorDue).toBe(false);
+    expect(v.scrollTo).toEqual({ key: at(58), how: "top" });
+  }
+}, 40000);
+
+test("leaving the Select view gives the keyboard back to the pane only when no code editor has it", async () => {
+  const { v } = await trimmedLater();
+  const ed = () => ({ handlers: {}, released: 0, on(n, f) { this.handlers[n] = f; }, release() { this.released++; } });
+  const [sel, code] = [ed(), ed()];
+  v.watchEditor(sel);
+  v.watchEditor(code);
+  v.selEditor = { key: "0:3", st: sel, text: "x" };
+  v.code.set("0:59:0", { st: code, text: "y" });
+  code.handlers.focus();
+  v.endSelect();
+  expect(sel.released).toBe(1);
+  expect(v.editorFocused).toBe(true);
+  expect(v.focusedEd).toBe(code);
+  // The Select view's own editor had it: the pane has it again.
+  const sel2 = ed();
+  v.watchEditor(sel2);
+  v.selEditor = { key: "0:4", st: sel2, text: "z" };
+  sel2.handlers.focus();
+  v.endSelect();
+  expect(v.editorFocused).toBe(false);
+  expect(v.focusedEd).toBeNull();
+}, 20000);
+
+test("a side pane that refuses a session it has read lets go of everything built from its turns", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 60 });
+  const { v, cx } = openPane(file, { view: "trajectory" });
+  await settle(v);
+  for (let i = 0; i < 5; i++) v.render(cx);
+  const s = v.current();
+  const old = new Set(s.turns);
+  // Whether x reaches one of the session's turns before the refusal, through Maps, Sets,
+  // arrays and own values (the sessions themselves not walked: restart empties them).
+  const skip = new Set([v.sessions, ...v.sessions]);
+  const reaches = (x, depth = 12, seen = new Set()) => {
+    if (old.has(x)) return true;
+    if (!x || typeof x !== "object" || depth <= 0 || seen.has(x) || skip.has(x)) return false;
+    seen.add(x);
+    const d = depth - 1;
+    if (x instanceof Map) return [...x].some(([k, y]) => reaches(k, d, seen) || reaches(y, d, seen));
+    if (x instanceof Set || Array.isArray(x)) return [...x].some((y) => reaches(y, d, seen));
+    return Object.keys(x).some((k) => reaches(x[k], d, seen));
+  };
+  const holding = () => Object.keys(v).filter((k) => k !== "sessions" && reaches(v[k]));
+  expect(holding().length).toBeGreaterThan(0);
+  phantom(BUDGET);
+  expect(v.guard(s)).toBe(true);
+  expect(v.refused?.file).toBe(file);
+  expect(s.turns.length).toBe(0);
+  expect(holding()).toEqual([]);
+  expect(() => v.render(cx)).not.toThrow();
 }, 20000);

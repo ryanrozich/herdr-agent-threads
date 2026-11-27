@@ -2614,6 +2614,14 @@ export default class Threads extends View {
     this.readBeat = Date.now();
     const gen = (this.readGen = (this.readGen ?? 0) + 1);
     const live = () => this.readGen === gen && this.current() === s;
+    // A read superseded with events of its chunk applied: the session stays in the pane's sum
+    // (heldBytes), so its turns are counted all at once and the pane's total published before
+    // the window's read turn is let go (finally).
+    const counted = () => {
+      if (!this.sessions?.includes(s)) return;
+      measure(s);
+      if (this.mem) this.mem.bytes = this.heldBytes();
+    };
     // The read's heartbeat; while it holds the window's turn, the turn's too (budget.js holdRead).
     const beat = () => { this.readBeat = Date.now(); if (this.mem) holdRead(this.mem, gen, this.readBeat); };
     // Runs fn over items, yielding after each SLICE_MS of work. False when superseded.
@@ -2638,6 +2646,9 @@ export default class Threads extends View {
           let chunk = CHUNK;
           let cap = READ_CHUNK;
           let retried = false;
+          // Whether chunk is the size nextChunk grows to after a chunk that was used (not one
+          // grown to fit a line longer than the last): that one is held to TIGHT_CHUNK.
+          let grown = false;
           const count = s.turns.length;
           const wasLoaded = s.loaded;
           const before = this.newestSig();
@@ -2653,6 +2664,9 @@ export default class Threads extends View {
               await cx.sleep(READ_TURN_MS);
               if (!live()) return;
             }
+            // Over half the budget, smaller chunks: a smaller peak. Asked once the read has the
+            // window's turn, since other panes read and grew while it waited.
+            if (grown && this.mem && chunk > TIGHT_CHUNK && windowBytes() > BUDGET / 2) chunk = TIGHT_CHUNK;
             try {
               this.readWaiting = true;
               // The window's turn stays this read's while the call is out (budget.js takeRead).
@@ -2680,6 +2694,7 @@ export default class Threads extends View {
               this.restart(s);
               chunk = CHUNK;
               cap = READ_CHUNK;
+              grown = false;
               continue;
             }
             if (c.head && !s.head) s.head = c.head;
@@ -2697,7 +2712,7 @@ export default class Threads extends View {
               const at = Date.now();
               for (const e of c.events) if (e.k === "p" || e.k === "d" || e.k === "i") e.at = at;
             }
-            if (!(await sliced(c.events, (e) => apply(s, e), cx))) return;
+            if (!(await sliced(c.events, (e) => apply(s, e), cx))) { counted(); return; }
             if (c.events.length) grew = true;
             s.offset += c.used;
             s.partial = false;
@@ -2710,18 +2725,16 @@ export default class Threads extends View {
             while (this.mem && !measure(s, now() + SLICE_MS)) {
               beat();
               await cx.sleep(0);
-              // Superseded (a /clear, a retry) with the chunk applied: its turns are counted
-              // all at once before the read ends, as the session stays in the pane's sum
-              // (heldBytes). It applies nothing more.
-              if (!live()) { if (this.sessions?.includes(s)) measure(s); return; }
+              // Superseded (a /clear, a retry) with the chunk applied: counted, and it applies
+              // nothing more.
+              if (!live()) { counted(); return; }
               beat();
             }
             if (this.guard(s)) return;
             if (this.mem) dropRead(this.mem, gen);
             if (s.offset < s.size) cap = readCap(cap, cut, chunk, CHUNK);
-            // Over half the budget, smaller chunks: a smaller peak.
-            const tight = this.mem && windowBytes() > BUDGET / 2 ? TIGHT_CHUNK : cap;
-            chunk = nextChunk(s, used, chunk, Math.min(cap, chunk * 2, tight));
+            grown = used > 0;
+            chunk = nextChunk(s, used, chunk, Math.min(cap, chunk * 2));
             if (!s.loaded) cx.notify();
             // Once a session (peek holds the session peeked): another one on the list is
             // statted and peeked again.
@@ -2801,10 +2814,11 @@ export default class Threads extends View {
         // Every turn has a new number: every row and place is built again, and the row window
         // starts over (its keys hold turn numbers, as in restart and pick). The selection,
         // the open turns and the reader's place keep their turns (shiftKeys).
-        // A reader who is not following and has no jump or held place on the way keeps the
-        // row at the top: the list's offset in px would now land on later turns. Asked
-        // before the keys move and the anchor goes (dropAnchor).
-        const stay = !this.follow && !this.toBottom && !this.scrollTo && !this.anchor && !this.anchorDue;
+        // A reader who is not following and has no jump on the way keeps the row at the top:
+        // the list's offset in px would now land on later turns. A held place (a re-wrap's
+        // anchor, due or taken) goes with the rows (dropAnchor), so it is no reason not to.
+        // Asked before the keys move.
+        const stay = !this.follow && !this.toBottom && !this.scrollTo;
         this.shiftKeys(this.sessions.indexOf(s), k);
         // The top row's turn went: the tail's first turn is at the top now.
         if (stay) this.scrollTo = { key: this.topKey ?? `${this.sessions.indexOf(s)}:1`, how: "top" };
@@ -2948,6 +2962,34 @@ export default class Threads extends View {
   heldBytes(except = null) { const w = this.paneWeight(); let n = 0; for (const x of this.sessions) if (x !== except) n += sessionBytes(x, w); return n; }
   refuse(s) {
     this.refused = { file: s.file };
+    // What was built from the session's turns goes with them, as on a trim: the refusal view
+    // draws none of it, so nothing would build it again, and the pane's estimate drops now.
+    // The rows, the Trajectory's ledger and timeline, the rail, the pins' turns and the memos
+    // of shaped text, and the session's code editors and Select view.
+    const si = this.sessions.indexOf(s);
+    this.dropBuilt();
+    if (si >= 0) {
+      this.dropCode(`${si}:`);
+      if (this.selEditor?.key?.startsWith(`${si}:`)) this.endSelect();
+    }
+    this.rowsKey = null;
+    this.rowBuild = null;
+    this.rowJob = null;
+    this.rowsLog = null;
+    this.baseRows = null;
+    this.baseSizes = null;
+    this.baseIndex = null;
+    this.staleRows = null;
+    this.stickyNow = null;
+    this.railTurns = null;
+    this.pinMemo = null;
+    this.pinMemoKey = null;
+    this.pinTurns = new Set();
+    this.railMemo = null;
+    this.mdMemo = null;
+    this.tableMemo = null;
+    this.fillMemo = null;
+    this.bubbleMemo = null;
     this.restart(s, true);
   }
 
@@ -6286,7 +6328,8 @@ export default class Threads extends View {
     if (this.selEditor?.st) this.selEditor.st.release();
     this.selEditor = null;
     this.selecting = null;
-    this.editorFocused = false;
+    // The keyboard comes back to the pane unless a code editor has it.
+    if (!this.focusedEd) this.editorFocused = false;
   }
   // Notes while one of the pane's editors (Select view, code blocks) has the keyboard, so
   // nothing takes it back mid-selection.
