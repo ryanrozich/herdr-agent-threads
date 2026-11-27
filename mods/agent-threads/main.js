@@ -2782,6 +2782,7 @@ export default class Threads extends View {
         // starts over (its keys hold turn numbers, as in restart and pick). The selection,
         // the open turns and the reader's place keep their turns (shiftKeys).
         this.shiftKeys(this.sessions.indexOf(s), k);
+        this.shiftRows(s, this.sessions.indexOf(s), k);
         this.dropAnchor();
         this.win.reset();
         this.capKey = null;
@@ -2832,6 +2833,41 @@ export default class Threads extends View {
     // as endSelect ends it (its editor let go, and the keyboard back to the pane).
     if (ed && !this.selEditor) this.selEditor = ed;
     if ((this.selEditor || this.selecting) && this.selEditor?.key !== this.selecting) this.endSelect();
+  }
+  // The rows on screen stay until the trim's rebuild ends (buildStep), over several frames in a
+  // long session: as copies under their turns' new keys, without the rows of turns that went,
+  // so what is drawn agrees with every key the pane keeps, and a frame mid-build (winPlace, the
+  // list) writes keys back in the new numbering. With no rows at all, those frames would draw
+  // an empty list. A row's only keys are key and turnKey; its turn's number is read from the
+  // turn (turnKeyOf).
+  shiftRows(s, si, k) {
+    const rows = this.baseRows;
+    if (!rows?.length) return;
+    const kept = new Set(s.turns);
+    const out = [];
+    const sizes = [];
+    const index = new Map();
+    const moved = new Map();
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (r.turn && r.si === si && !kept.has(r.turn)) continue;
+      const key = shiftKey(r.key, si, k);
+      const turnKey = r.turnKey == null ? r.turnKey : shiftKey(r.turnKey, si, k);
+      if (key == null || (r.turnKey != null && turnKey == null)) continue;
+      moved.set(i, out.length);
+      index.set(key, out.length);
+      out.push(key === r.key && turnKey === r.turnKey ? r : { ...r, key, ...(r.turnKey != null ? { turnKey } : {}) });
+      sizes.push(this.baseSizes?.[i] ?? this.height(r));
+    }
+    this.baseRows = out;
+    this.baseSizes = sizes;
+    this.baseIndex = index;
+    this.baseVer = (this.baseVer ?? 0) + 1;
+    this.staleRows = (this.staleRows ?? []).map((i) => moved.get(i)).filter((i) => i != null);
+    this.buildStale = this.staleRows;
+    this.rowsLog = null;
+    this.probeList();
+    this.fitKey = null;
   }
   // For the tests that every field keyed by turn is on a list.
   turnKeyed() { return { moved: TURN_KEYED, reset: TURN_KEYED_RESET }; }

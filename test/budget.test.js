@@ -641,8 +641,8 @@ async function trimmedLater(file = fixture("--only", "1")) {
   p.v.follow = false;
   return {
     ...p,
-    trimNow() {
-      phantom(BUDGET - 100 * 1024);
+    trimNow(room = 100 * 1024) {
+      phantom(BUDGET - room);
       const s = p.v.current();
       expect(p.v.guard(s)).toBe(false);
       const k = droppedOf(s);
@@ -829,3 +829,44 @@ test("a trim leaves a person's text alone, \"0:30\" in it or not: the unpin hist
   expect(v.linkNotes).toEqual(["rule 0:2 has no URL"]);
   expect(v.trajNotes).toEqual(["0:5 is not a turn"]);
 }, 20000);
+
+test("while a trim's rebuild runs over several frames, the rows drawn are the tail's, under the new keys, and the window, the jump and the selection land on the same turns once it ends", async () => {
+  const { v, cx, trimNow } = await trimmedLater();
+  v.win.cap = { ...v.win.cap, slide: 20, block: 5, stop: 24 };
+  v.rows();
+  v.sel = "0:50";
+  const target = v.findTurn("0:50");
+  // Room for about 60% of the session: a tail of 20 turns or more, so its rows take more than
+  // one slice, with turn 50 in it.
+  const { k, at } = trimNow(Math.floor(v.mem.bytes * 0.6));
+  expect(k).toBeLessThan(50);
+  const s = v.current();
+  expect(s.turns.length).toBeGreaterThanOrEqual(20);
+  expect(v.sel).toBe(at(50));
+  v.scrollTo = { key: v.sel, how: "center" };
+  // A slice a frame, cut every 16 turns (buildRows).
+  v.buildMax = () => 0;
+  const turnOf = (key) => /(?:^|:)(\d+):(\d+)(?=:|$)/.exec(key)?.slice(1, 3).join(":") ?? null;
+  const kept = new Set(s.turns);
+  const agree = () => {
+    const rows = v.baseRows;
+    // Every row of the session is a kept turn's, its key that turn's number now, and the
+    // index finds it there.
+    expect(rows.filter((r) => r.turn && r.si === 0 && !kept.has(r.turn)).length).toBe(0);
+    expect(rows.filter((r) => r.turn && r.si === 0 && turnOf(r.key) !== `0:${r.turn.n}`).map((r) => r.key)).toEqual([]);
+    expect(rows.every((r, i) => v.baseIndex.get(r.key) === i)).toBe(true);
+    expect(v.baseRows[v.baseIndex.get(v.sel)]?.turn).toBe(target);
+  };
+  v.render(cx);
+  expect(v.rowJob).not.toBeNull(); // mid-build: the rows on screen are the ones from before the trim
+  agree();
+  let frames = 0;
+  while (v.rowJob && frames++ < 100) { v.render(cx); if (v.rowJob) agree(); }
+  expect(v.rowJob).toBeNull();
+  agree();
+  // The window, placed by the frames mid-build and after, names turns of the tail.
+  const list = v.winList();
+  if (v.win.from != null) expect(v.findTurn(v.win.from)).not.toBeNull();
+  expect(v.win.has(list, v.sel)).toBe(true);
+  expect(v.findTurn(v.sel)).toBe(target);
+}, 30000);
