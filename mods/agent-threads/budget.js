@@ -140,6 +140,9 @@ export function tailOf(s) {
   const d = META.get(s)?.dropped ?? 0;
   return d ? { shown: s.turns.length, of: d + s.turns.length } : null;
 }
+// How many of the session's oldest turns trim() let go: a turn numbered n in the tail is turn
+// n + droppedOf(s) of the whole session.
+export const droppedOf = (s) => META.get(s)?.dropped ?? 0;
 export const tailNote = (t) => `This session is too large to show in full: showing the newest ${t.shown.toLocaleString()} of ${t.of.toLocaleString()} turns`;
 
 // Empties a session in place: a pane that closed or was replaced gives its turns back now, even
@@ -167,9 +170,12 @@ export function windowState() {
 }
 const deref = (e) => (typeof e.ref?.deref === "function" ? e.ref.deref() : e.ref);
 
+// born: the order panes joined in; a copy a reload replaced joined before its replacement.
 export function joinWindow(pane, kind) {
-  const e = { gen: GEN, ref: typeof WeakRef === "function" ? new WeakRef(pane) : pane, kind, bytes: 0, pane: null, beat: Date.now() };
-  windowState().panes.add(e);
+  const w = windowState();
+  w.born = (w.born ?? 0) + 1;
+  const e = { gen: GEN, ref: typeof WeakRef === "function" ? new WeakRef(pane) : pane, kind, bytes: 0, pane: null, beat: Date.now(), born: w.born };
+  w.panes.add(e);
   return e;
 }
 export function leaveWindow(e) {
@@ -177,10 +183,22 @@ export function leaveWindow(e) {
   w.panes.delete(e);
   dropRead(e);
 }
+// A pane collected with no close() (a WeakRef that comes back empty) leaves the registry here,
+// so its last estimate does not count against the budget for good.
 export function windowBytes(except = null) {
+  const w = windowState();
   let n = 0;
-  for (const e of windowState().panes) if (e !== except) n += e.bytes;
+  for (const e of [...w.panes]) {
+    if (e.ref && typeof e.ref.deref === "function" && e.ref.deref() === undefined) { leaveWindow(e); continue; }
+    if (e !== except) n += e.bytes;
+  }
   return n;
+}
+// A copy that threw while emptying itself: counted, with its message, for the debug report.
+function failed(err) {
+  const w = windowState();
+  w.releaseErrors = (w.releaseErrors ?? 0) + 1;
+  w.releaseError = String(err?.message ?? err);
 }
 // The largest whole-session estimate any pane has made for a transcript, as [text, fixed], for a
 // side pane to judge before it reads (fileBytes, at its own weight).
@@ -211,7 +229,7 @@ export function releaseOlder() {
     if (e.gen === GEN) continue;
     w.panes.delete(e);
     n++;
-    try { deref(e)?.forget?.(); } catch { /* an old copy's own code */ }
+    try { deref(e)?.forget?.(); } catch (err) { failed(err); }
   }
   if (w.lock && w.lock.e.gen !== GEN) w.lock = null;
   w.queue = w.queue.filter((q) => q.e.gen === GEN);
@@ -219,16 +237,18 @@ export function releaseOlder() {
 }
 // A copy in the same Herdr pane whose timer has not beaten for GHOST_MS: one a reload of the
 // same code replaced (no new module, so releaseOlder does not see it). Herdr cancels a replaced
-// copy's timers, while a live copy's 1 s timer beats; two live copies never share a pane.
+// copy's timers, while a live copy's 1 s timer beats; two live copies never share a pane. A
+// replaced copy joined before its replacement, so only an older one is swept: a newer copy
+// whose timer is held up is never emptied by an older one.
 export const GHOST_MS = 10000;
 export function sweepGhosts(e, now = Date.now()) {
   if (!e.pane) return 0;
   let n = 0;
   for (const o of [...windowState().panes]) {
-    if (o === e || o.pane !== e.pane || now - o.beat <= GHOST_MS) continue;
+    if (o === e || o.pane !== e.pane || (o.born ?? 0) >= (e.born ?? 0) || now - o.beat <= GHOST_MS) continue;
     leaveWindow(o);
     n++;
-    try { deref(o)?.forget?.(); } catch { /* gone */ }
+    try { deref(o)?.forget?.(); } catch (err) { failed(err); }
   }
   return n;
 }

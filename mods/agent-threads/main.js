@@ -100,7 +100,7 @@ import("./build.js")
   .then((m) => { built = parseBuild(m?.BUILD) ? m.BUILD : null; })
   .catch(() => { built = null; });
 import { isDiagram, drawDiagram } from "./diagram.js";
-import { BUDGET, TIGHT_CHUNK, PANE_WEIGHT, measure, sessionBytes, forgetSize, trim, tailOf, tailNote, gut, joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, dropRead } from "./budget.js";
+import { BUDGET, TIGHT_CHUNK, PANE_WEIGHT, measure, sessionBytes, forgetSize, trim, tailOf, tailNote, droppedOf, gut, joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, dropRead, windowState } from "./budget.js";
 // A hot reload evaluates this module again in the same VM, beside the old one, and then
 // replaces every copy: the copies it replaces give back what they hold now (budget.js).
 releaseOlder();
@@ -1171,7 +1171,7 @@ export default class Threads extends View {
       tried: (this.res.tried ?? []).map((x) => `${x.ok ? "ok" : "no"} ${x.what}: ${x.detail}`),
       sessions: this.sessions.map((x) => ({ id: x.id.slice(-4), turns: x.turns.length, loaded: Boolean(x.loaded), clearAt: x.clearAt, error: x.error ?? null, skipped: x.skipped ?? null, tail: tailOf(x) })),
       // The memory guard (budget.js): this pane's estimate and the window's, in MiB.
-      guard: { pane: +((this.win?.bytes ?? 0) / 1048576).toFixed(1), window: +(windowBytes() / 1048576).toFixed(1), budget: BUDGET / 1048576, refused: Boolean(this.refused) },
+      guard: { pane: +((this.win?.bytes ?? 0) / 1048576).toFixed(1), window: +(windowBytes() / 1048576).toFixed(1), budget: BUDGET / 1048576, refused: this.refusedNow(), releaseErrors: windowState().releaseErrors ?? 0, releaseError: windowState().releaseError ?? null },
       rows: rows.map((r) => `${r.kind}${r.turn ? `#${r.turn.n}` : ""}${r.kind === "divider" ? `:${dividerLabel(r.s)}` : ""}`),
       live: this.liveShown ? this.liveState(theme()).label : null, status: this.status(),
       sel: this.sel, query: this.query, count: this.filterCount(),
@@ -1318,8 +1318,9 @@ export default class Threads extends View {
   forget() {
     if (this.forgotten) return;
     if (this.win) leaveWindow(this.win);
-    try { this.dropCode(); this.endSelect(); } catch { /* half-made pane */ }
+    // The sessions first: they are what the memory is, whatever the calls below do.
     for (const s of this.sessions ?? []) gut(s);
+    try { this.dropCode(); this.endSelect(); } catch { /* half-made pane */ }
     for (const k of Object.keys(this)) delete this[k];
     this.forgotten = true;
   }
@@ -2198,17 +2199,21 @@ export default class Threads extends View {
       const pins = this.pinStore.sessions[this.sessionKey(s)]?.pins ?? [];
       if (!pins.length) return;
       const ids = turnIds(s.turns, pins.map((p) => p.id));
+      // A session the memory guard cut (budget.js trim): its turns are numbered from 1 in the
+      // tail, a pin keeps its number in the whole session (the store the panes share), and a
+      // pin not in the tail is older than it, not gone.
+      const dropped = droppedOf(s);
       for (const pin of pins) {
         const turn = ids.get(pin.id) ?? null;
         const key = turn ? `${si}:${turn.n}` : null;
-        if (turn) pin.n = turn.n;
+        if (turn) pin.n = turn.n + dropped;
         const live = turn ? this.isLive(s, si, turn.n - 1) : false;
         // An open, selected turn is being read, so nothing in it is new.
         if (turn && !live && key === this.sel && this.open.has(key)) {
           const seen = seenOf(turn);
           if (seen.len !== pin.seen?.len || seen.fu !== pin.seen?.fu) { pin.seen = seen; this.pinChangedLater(this.sessionKey(s)); }
         }
-        out.push({ pin, s, si, turn, key, state: pinState({ turn, loaded: s.loaded, live, seen: pin.seen }) });
+        out.push({ pin, s, si, turn, key, state: pinState({ turn, loaded: s.loaded, live, seen: pin.seen, cut: dropped > 0 }) });
       }
     });
     out.sort(byTime);
@@ -2236,6 +2241,7 @@ export default class Threads extends View {
     const rec = (this.pinStore.sessions[k] ??= { at: 0, pins: [] });
     rec.at = Date.now();
     const pin = newPin(s.turns, turn);
+    pin.n = turn.n + droppedOf(s);
     this.notePlace(pin, key);
     rec.pins.push(pin);
     this.pinChanged(k, cx);
@@ -2308,7 +2314,7 @@ export default class Threads extends View {
     const p = this.pinnedList()[i];
     if (!p) return false;
     if (!p.turn) {
-      this.say(p.state === "gone" ? `#${p.pin.n} is no longer in this session. Unpin to clear it.` : "Still reading this session", "pin", cx, 4000);
+      this.say(p.state === "gone" ? `#${p.pin.n} is no longer in this session. Unpin to clear it.` : p.state === "beyond" ? `#${p.pin.n} is older than the turns this session shows` : "Still reading this session", "pin", cx, 4000);
       return true;
     }
     const { key, turn, pin, s } = p;
@@ -2486,6 +2492,8 @@ export default class Threads extends View {
   read(cx) {
     if (this.reading) { this.readAgain = true; return; }
     const s = this.current();
+    // A refusal is for its session: another one (a /clear, a new session) is read.
+    if (this.refused && this.refused.file !== s?.file) this.refused = null;
     if (!s || this.refused) return;
     // A Pinned or Trajectory pane on a session another pane found too large for the window
     // reads none of it (budget.js).
@@ -2530,6 +2538,7 @@ export default class Threads extends View {
           let grew = false;
           while (chunk && live()) {
             let c;
+            let r;
             // One read at a time in the window (budget.js): its chunk's output, lines and events
             // are the read's peak.
             while (this.win && !takeRead(this.win, gen)) {
@@ -2540,7 +2549,7 @@ export default class Threads extends View {
             }
             try {
               this.readWaiting = true;
-              const r = await exec("sh", readArgs(s.file, s.offset, chunk));
+              r = await exec("sh", readArgs(s.file, s.offset, chunk));
               if (!live()) return;
               this.readWaiting = false;
               beat();
@@ -2584,8 +2593,12 @@ export default class Threads extends View {
             if (c.events.length) grew = true;
             s.offset += c.used;
             s.partial = false;
-            if (this.win) dropRead(this.win, gen);
-            // The chunk's turns measured in slices, then the window's guard (budget.js).
+            // The chunk is applied: its output and events go now, before anything waits.
+            const { cut, used } = c;
+            c = null;
+            r = null;
+            // The chunk's turns measured in slices, then the window's guard (budget.js), still
+            // in this read's turn: no other read starts until this one's estimate is counted.
             while (this.win && !measure(s, now() + SLICE_MS)) {
               beat();
               await cx.sleep(0);
@@ -2593,10 +2606,11 @@ export default class Threads extends View {
               beat();
             }
             if (this.guard(s)) return;
-            if (s.offset < s.size) cap = readCap(cap, c.cut, chunk, CHUNK);
+            if (this.win) dropRead(this.win, gen);
+            if (s.offset < s.size) cap = readCap(cap, cut, chunk, CHUNK);
             // Over half the budget, smaller chunks: a smaller peak.
             const tight = this.win && windowBytes() > BUDGET / 2 ? TIGHT_CHUNK : cap;
-            chunk = nextChunk(s, c.used, chunk, Math.min(cap, chunk * 2, tight));
+            chunk = nextChunk(s, used, chunk, Math.min(cap, chunk * 2, tight));
             if (!s.loaded) cx.notify();
             // Once a session (peek holds the session peeked): another one on the list is
             // statted and peeked again.
@@ -2678,6 +2692,8 @@ export default class Threads extends View {
     this.win.bytes = mine;
     return false;
   }
+  // The refusal stands for the session it was made for, not one that came after it.
+  refusedNow() { return Boolean(this.refused) && this.refused.file === this.current()?.file; }
   paneWeight() { return PANE_WEIGHT[this.win?.kind ?? "chat"]; }
   heldBytes() { const w = this.paneWeight(); let n = 0; for (const x of this.sessions) n += sessionBytes(x, w); return n; }
   refuse(s) {
@@ -3776,7 +3792,7 @@ export default class Threads extends View {
         out.push({ kind: "pday", key: `pday:${i}`, ...dayParts(p.turn.ts, now) });
       }
       if (!p.turn) {
-        out.push({ kind: "note", key: `pins:${i}`, pinNo: i + 1, text: p.state === "gone" ? `${i + 1} · #${p.pin.n} is no longer in this session. Click to unpin it.` : `${i + 1} · #${p.pin.n} · reading this session…` });
+        out.push({ kind: "note", key: `pins:${i}`, pinNo: i + 1, text: p.state === "gone" ? `${i + 1} · #${p.pin.n} is no longer in this session. Click to unpin it.` : p.state === "beyond" ? `${i + 1} · #${p.pin.n} is older than the turns this session shows` : `${i + 1} · #${p.pin.n} · reading this session…` });
         return;
       }
       const si = this.sessions.indexOf(p.s);
@@ -6922,6 +6938,8 @@ export default class Threads extends View {
     this.choosing = false;
     this.dropAnchor();
     this.sessions = [];
+    // What the sessions held leaves the window's estimate now (budget.js).
+    if (this.win) this.win.bytes = 0;
     this.senderHits = null;
     this.open.clear();
     this.full.clear();
@@ -9349,7 +9367,7 @@ export default class Threads extends View {
     this.openDrew = false;
     const out = this.bodyNow(t, focusedPanel, cx);
     const s = this.current();
-    if (this.openActive() && !this.openDrew && (!s || s.loaded || s.error || this.refused)) this.openFinish();
+    if (this.openActive() && !this.openDrew && (!s || s.loaded || s.error || this.refusedNow())) this.openFinish();
     return out;
   }
   bodyNow(t, focusedPanel, cx) {
@@ -9373,7 +9391,7 @@ export default class Threads extends View {
     if (r.kind === "none" && !s) return this.notFound(t, r);
     const noTurns = () => this.empty(t, mark(this.agent().key, 36) ?? "messages", "No turns yet", `Send a prompt to ${this.agent().cmd} in ${this.terminal}. Each prompt and its final reply will show up here.`, "Threads only reads the session. It never types into the terminal.");
     if (r.kind === "pending" && !s) return noTurns();
-    if (this.refused) return this.refusedView(t);
+    if (this.refusedNow()) return this.refusedView(t);
     if (s && !s.loaded && s.error && s.turns.length === 0)
       return this.empty(t, "alert", "Couldn't read this session", s.error, null, [this.retryButton(t), ...this.closeButtons(t)]);
     const gate = this.openGate(t, s, cx);
@@ -12241,7 +12259,7 @@ export default class Threads extends View {
   // detail (under the ledger, or at its right from 900 px), the key hints and the status line.
   trajFrame(cx) {
     const t = theme();
-    if (this.refused) return v_flex().id("threads-root").track_focus(this.h).on_key_down((e, cx) => this.key(e, cx)).size_full().bg(t.background).text_color(t.foreground).text_size(13).child(this.refusedView(t));
+    if (this.refusedNow()) return v_flex().id("threads-root").track_focus(this.h).on_key_down((e, cx) => this.key(e, cx)).size_full().bg(t.background).text_color(t.foreground).text_size(13).child(this.refusedView(t));
     // The column beside the Trajectory's pane, kept for its close (shareWidth).
     if (this.trajPane) { const col = this.pinnedPaneOpen(); if (col) this.colId = col.pane; }
     const w = this.pw();

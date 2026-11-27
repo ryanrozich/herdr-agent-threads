@@ -76,9 +76,10 @@ export function newPin(turns, turn, now = Date.now()) {
   return { id: turnId(turns, turn), n: turn.n, text: firstLine(turn.prompt ?? "").slice(0, PIN_TEXT), at: now, seen: seenOf(turn) };
 }
 
-// gone: the session is fully read and the turn is not in it. loading: not read yet.
-export function pinState({ turn, loaded, live, seen }) {
-  if (!turn) return loaded ? "gone" : "loading";
+// gone: the session is fully read and the turn is not in it. loading: not read yet. beyond:
+// the session keeps only its newest turns (cut, budget.js trim), so the turn may be older.
+export function pinState({ turn, loaded, live, seen, cut = false }) {
+  if (!turn) return cut ? "beyond" : loaded ? "gone" : "loading";
   if (live) return "live";
   const now = seenOf(turn);
   return now.len > (seen?.len ?? 0) || now.fu > (seen?.fu ?? 0) ? "new" : "quiet";

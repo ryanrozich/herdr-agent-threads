@@ -7,9 +7,10 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { newSession, apply, parseChunk } from "../mods/agent-threads/core/turns.js";
 import {
-  BUDGET, TIGHT_CHUNK, PANE_WEIGHT, LOCK_STALE, QUEUE_STALE, GHOST_MS, measure, sessionBytes, trim, tailOf, tailNote, gut, windowState,
+  BUDGET, TIGHT_CHUNK, PANE_WEIGHT, LOCK_STALE, QUEUE_STALE, GHOST_MS, measure, sessionBytes, trim, tailOf, tailNote, droppedOf, gut, windowState,
   joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, dropRead,
 } from "../mods/agent-threads/budget.js";
+import { turnId } from "../mods/agent-threads/pins.js";
 import { fixture, H, makeCx, modDir, settle, setup, Threads, unsliced, until } from "./render-harness.js";
 
 setup();
@@ -21,6 +22,8 @@ const sessionOf = (n, text = "") => { const s = newSession("s", "/x/s.jsonl"); f
 // Another pane of the window, holding bytes.
 const phantom = (bytes) => { const e = { gen: null, ref: null, kind: "chat", bytes, pane: null, beat: Date.now() }; windowState().panes.add(e); return e; };
 
+// What each made-up turn's prompt carries past "prompt <n>" in fakeReader.
+const PAD = " xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
 // The extractor's answers for made-up sessions of n turns, `per` bytes each, by file: a call for
 // [offset, offset + chunk) gets the whole turns in it. Each call is counted while it runs.
 function fakeReader(sessions, per = 1000, delay = 0) {
@@ -38,7 +41,7 @@ function fakeReader(sessions, per = 1000, delay = 0) {
     const a = Math.floor(off / per);
     const b = Math.min(n, Math.floor((off + chunk) / per));
     const lines = [{ k: "file", size: n * per }, { k: "chunk", used: Math.max(0, b - a) * per }];
-    for (let i = a; i < b; i++) lines.push(...turnEvents(i, " xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"));
+    for (let i = a; i < b; i++) lines.push(...turnEvents(i, PAD));
     return { code: 0, stdout: `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`, stderr: "" };
   };
   return st;
@@ -179,7 +182,12 @@ test("a new copy of the mod releases the panes of an older one, and a pane's cop
   ghost.pane = "p2";
   other.pane = "p3";
   mine.pane = "p2";
+  ghost.born = mine.born - 1; // the replaced copy joined first
+  // A copy that joined after this one, in the same pane, its timer held up: never swept by it.
+  const newer = joinWindow(pane("newer"), "chat");
+  newer.pane = "p2";
   const now = Date.now();
+  newer.beat = now - 2 * GHOST_MS;
   ghost.beat = now - GHOST_MS + 100;
   expect(sweepGhosts(mine, now)).toBe(0); // still beating
   other.beat = now - 2 * GHOST_MS;
@@ -187,6 +195,24 @@ test("a new copy of the mod releases the panes of an older one, and a pane's cop
   expect(sweepGhosts(mine, now)).toBe(1);
   expect(forgot).toEqual(["old", "ghost"]);
   expect(windowState().panes.has(other)).toBe(true); // another pane's copy is not this one's
+  expect(windowState().panes.has(newer)).toBe(true);
+});
+
+test("a registry entry whose pane was collected with no close() stops counting, and a copy that throws as it is emptied is counted for the debug report", () => {
+  const dead = joinWindow({}, "chat");
+  dead.ref = { deref: () => undefined };
+  dead.bytes = 99 * MiB;
+  const live = phantom(MiB);
+  expect(windowBytes()).toBe(MiB);
+  expect(windowState().panes.has(dead)).toBe(false);
+  expect(windowState().panes.has(live)).toBe(true);
+  const old = joinWindow({ forget() { throw new Error("old code"); } }, "chat");
+  old.gen = {};
+  const keep = old.ref.deref?.() ?? old.ref; // held here, so the WeakRef stays full
+  expect(releaseOlder()).toBe(1);
+  expect(keep).toBeTruthy();
+  expect(windowState().releaseErrors).toBe(1);
+  expect(windowState().releaseError).toBe("old code");
 });
 
 test("gut empties a session in place, and the transcript's estimate stays for a side pane to judge by", () => {
@@ -319,11 +345,99 @@ test("a reload of the same code: the copy it replaced in this Herdr pane, its ti
   tick(b);
   expect(b.v.win.pane).toBe(where);
   expect(a.v.forgotten).toBeUndefined();
-  // The old copy's timers stopped (Herdr cancelled them): the new copy's next beat empties it.
+  // The old copy's timers stopped (Herdr cancelled them): the new copy's next beat empties it,
+  // but not a beat that comes after its own timer was held up (a sleep: no copy beat).
+  a.v.win.beat = Date.now() - 2 * GHOST_MS;
+  b.v.lastTick = Date.now() - 60000;
+  tick(b);
+  expect(a.v.forgotten).toBeUndefined();
   a.v.win.beat = Date.now() - 2 * GHOST_MS;
   tick(b);
   expect(a.v.forgotten).toBe(true);
   expect(turns.length).toBe(0);
   expect([...windowState().panes]).toEqual([b.v.win]);
   expect(b.v.current().turns.length).toBeGreaterThan(0);
+}, 20000);
+
+test("a pin on a turn a trimmed Chat let go is older than the tail, not gone, and a pin keeps its number in the whole session", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 60 });
+  phantom(BUDGET - 100 * 1024);
+  const { v, cx } = openPane(file);
+  await settle(v);
+  const s = v.current();
+  const n = s.turns.length;
+  expect(n).toBeLessThan(60);
+  expect(droppedOf(s)).toBe(60 - n);
+  // The same turns as the transcript's, for their ids.
+  const whole = sessionOf(60, PAD);
+  const pinOf = (i) => ({ id: turnId(whole.turns, whole.turns[i]), n: i + 1, text: `prompt ${i + 1}`, at: Date.now(), seen: { len: 0, fu: 0 } });
+  const k = v.sessionKey(s);
+  v.pinStore.sessions[k] = { at: Date.now(), pins: [pinOf(0), pinOf(59)] };
+  v.pinVer++;
+  const [old, last] = v.pinnedAll();
+  expect(old.turn).toBeNull();
+  expect(old.state).toBe("beyond");
+  expect(old.pin.n).toBe(1);
+  expect(last.turn).toBe(s.turns[n - 1]);
+  expect(last.pin.n).toBe(60);
+  // A pin made in the tail is stored with its number in the whole session.
+  expect(v.togglePin(`0:${n - 1}`, cx)).toBe(true);
+  const made = v.pinStore.sessions[k].pins.find((p) => p.id === turnId(whole.turns, whole.turns[58]));
+  expect(made.n).toBe(59);
+}, 20000);
+
+test("a refusal is for its session: a new, small session in the same side pane is read", async () => {
+  const file = fixture("--only", "1");
+  const small = fixture("--only", "2");
+  fakeReader({ [file]: 60, [small]: 3 });
+  const chat = openPane(file);
+  await settle(chat.v);
+  phantom(BUDGET - windowBytes() - fileBytes(file, PANE_WEIGHT.pinned) / 2);
+  const { v, cx } = openPane(file, { view: "pinned" });
+  await until(() => v.refused, "the Pinned pane refusing");
+  expect(v.refusedNow()).toBe(true);
+  // The agent's /clear: the pane moves to a new session.
+  v.sessions.push(newSession("s2", small));
+  v.read(cx);
+  await settle(v);
+  expect(v.current().turns.length).toBe(3);
+  expect(v.refusedNow()).toBe(false);
+  H.rec = [];
+  v.render(cx);
+  const said = H.rec.flatMap((e) => e.slice(1)).filter((x) => typeof x === "string");
+  H.rec = null;
+  expect(said).not.toContain("This session is too large to show in full");
+}, 20000);
+
+test("a read keeps the window's turn until its chunk is measured and counted: no other pane's extractor call starts before", async () => {
+  const [f1, f2] = [fixture("--only", "1"), fixture("--only", "2")];
+  fakeReader({ [f1]: 600, [f2]: 600 }, 16000, 5);
+  const log = [];
+  const held = [];
+  const ask = H.extractHook;
+  H.extractHook = async (args) => { log.push(["exec", args[1]]); return ask(args); };
+  phantom(BUDGET * 0.6); // over half the budget: 4 MiB chunks, several a session
+  const panes = [openPane(f1), openPane(f2)];
+  for (const { v } of panes) {
+    const guard = v.guard.bind(v);
+    v.guard = (s) => { held.push(windowState().lock?.e === v.win); log.push(["guard", s.file]); return guard(s); };
+  }
+  for (const { v } of panes) await settle(v, 800);
+  expect(held.length).toBeGreaterThan(2);
+  expect(held.every(Boolean)).toBe(true);
+  // Between a pane's extractor call and its guard, no other pane's call.
+  let open = null;
+  for (const [k, f] of log) {
+    if (k === "exec") { expect(open == null || open === f).toBe(true); open = f; }
+    else if (f === open) open = null;
+  }
+}, 60000);
+
+test("a pane that picks another transcript lets go of the old one's estimate at once", async () => {
+  const a = openPane(fixture("--extra", "3"));
+  await settle(a.v);
+  expect(a.v.win.bytes).toBeGreaterThan(0);
+  a.v.pick({ path: fixture("--extra", "4") }, a.cx);
+  expect(a.v.win.bytes).toBe(0);
 }, 20000);
