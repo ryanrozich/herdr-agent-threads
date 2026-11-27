@@ -248,7 +248,7 @@ test("turn_duration replaces the estimate, and is not added to it", () => {
   expect(read(u.file()).turns[0].durationMs).toBe(7000);
 });
 
-test("a Stop hook that sends the model back keeps one row, and the last reply is its reply", () => {
+test("a Stop hook that sends the model back keeps one row, and both replies are its reply", () => {
   const t = transcript();
   t.prompt("First question");
   t.say("m1", "Done, I think.");
@@ -259,7 +259,8 @@ test("a Stop hook that sends the model back keeps one row, and the last reply is
   t.duration(20000);
   const s = read(t.file());
   expect(s.turns.length).toBe(1);
-  expect(reply(s.turns[0])).toBe("Done now.");
+  // Claude Code marks both as the end of a reply (end_turn), so both are shown, in order.
+  expect(reply(s.turns[0])).toBe("Done, I think.\n\nDone now.");
   expect(s.turns[0].durationMs).toBe(20000);
   expect(s.turns[0].done).toBe(true);
 });

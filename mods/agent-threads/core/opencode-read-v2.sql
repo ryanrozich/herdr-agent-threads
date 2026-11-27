@@ -38,7 +38,8 @@ done as (
     or (wtype = 'compaction' and cstatus = 'completed')),
 settled as (select coalesce(max(un), :off - 1) un from done),
 items as (
-  select m.un, m.seq, m.id, c.key ord, json_extract(c.value,'$.type') ty, c.value v
+  select m.un, m.seq, m.id, c.key ord, json_extract(c.value,'$.type') ty, c.value v,
+    json_extract(m.data,'$.finish') not in ('tool-calls','unknown','length') and json_extract(m.data,'$.error') is null ans
   from msgs m, json_each(m.data,'$.content') c
   where m.type = 'assistant' and json_extract(c.value,'$.type') in ('text','tool')),
 ev as (
@@ -52,9 +53,11 @@ ev as (
     w.type wtype
   from win w
   union all
-  -- A reply's text and tool calls, in order.
+  -- A reply's text and tool calls, in order. A text is marked (a) as the answer when its message
+  -- finished with no call to make and no error; one cut at the length limit is not.
   select x.un, x.seq, 1, printf('%06d', x.ord), x.id,
-    case x.ty when 'text' then json_object('k','t','t', substr(json_extract(x.v,'$.text'), 1, 200000))
+    case when x.ty = 'text' and x.ans then json_object('k','t','a',1,'t', substr(json_extract(x.v,'$.text'), 1, 200000))
+      when x.ty = 'text' then json_object('k','t','t', substr(json_extract(x.v,'$.text'), 1, 200000))
       else json_object('k','u','n', json_extract(x.v,'$.name'), 'id', json_extract(x.v,'$.id')) end, null, ''
   from items x
   where x.ty <> 'text' or length(json_extract(x.v,'$.text')) > 0

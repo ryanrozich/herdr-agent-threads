@@ -13,7 +13,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cardKey, keyAction, ledgerKey, ringKey } from "../mods/agent-threads/ui.js";
 import { trajCompact } from "../mods/agent-threads/ledger.js";
-import { H, draw, drawRange, dropTimers, fixture, keyEv, pane, pinsShown, probeFrame, root, scripted, settleList, settleRows, setup, simList, state, stillAt } from "./render-harness.js";
+import { turnId } from "../mods/agent-threads/core/ids.js";
+import { H, draw, drawRange, dropTimers, fixture, keyEv, openAt, pane, pinsShown, probeFrame, root, scripted, settleList, settleRows, setup, simList, state, stillAt } from "./render-harness.js";
 
 setup();
 
@@ -75,7 +76,7 @@ test("a key goes through the same count: j once, and a key with no action not at
 // the Trajectory's turn. Its other keys move the Trajectory's own list.
 const LEDGER = {
   lprev: 0, lnext: 0, lfirst: 0, llast: 0, ldetail: 0, lfail: 0, lfailBack: 0, luser: 0, luserBack: 0,
-  trajectory: 1, escape: 1, focus: 0, settings: 0, keys: 0, narrower: 0, wider: 0,
+  trajectory: 1, escape: 1, focus: 0, settings: 0, keys: 0, narrower: 0, wider: 0, timeline: 0,
 };
 const RING = { next: 0, back: 0, press: 0 };
 const CARD = { down: 0, up: 0, pagedown: 0, pageup: 0, home: 0, end: 0 };
@@ -87,6 +88,15 @@ function allKeys() {
 const label = (e) => `${e.modifiers.shift ? "shift-" : ""}${e.key}`;
 // What a key that goes on to keyAction counts (the first walk's rows).
 const onward = (v, e) => { const n = keyAction(e, v.filtering, v.quoteKey); return n ? ACTIONS[n] ?? `no row for ${n}` : 0; };
+// The Trajectory in the Chat's own pane at 800 px: y shows it there under the split width, and
+// the pane is then made wider (from 480 px, y opens the Trajectory's own pane instead).
+function wideTraj(v, cx) {
+  v.paneW = 400;
+  v.width = 400;
+  if (!v.traj) v.action("trajectory", cx);
+  v.paneW = 800;
+  v.width = 800;
+}
 const BEFORE = {
   // The plain list, nothing open: every key goes through key() to keyAction, so a key key()
   // takes on its own in the list only is walked too.
@@ -99,6 +109,18 @@ const BEFORE = {
   trajectory: {
     enter: (v, cx) => { v.paneW = 400; v.width = 400; v.action("trajectory", cx); v.tdetail = false; },
     check: (v) => v.traj && !v.trajPane,
+    want: (_v, e) => { const n = ledgerKey(e); return n ? LEDGER[n] ?? `no row for ${n}` : 0; },
+  },
+  // The same from 540 px, with the timeline shown, then with it hidden: b has something to do
+  // only there (under 540 px it passes on).
+  timeline: {
+    enter: (v, cx) => { wideTraj(v, cx); v.tdetail = false; v.tlHidden = false; },
+    check: (v) => v.traj && !v.trajPane && v.tlShown(),
+    want: (_v, e) => { const n = ledgerKey(e); return n ? LEDGER[n] ?? `no row for ${n}` : 0; },
+  },
+  timelineHidden: {
+    enter: (v, cx) => { wideTraj(v, cx); v.tdetail = false; v.tlHidden = true; },
+    check: (v) => v.traj && !v.trajPane && v.tlCan() && !v.tlShown(),
     want: (_v, e) => { const n = ledgerKey(e); return n ? LEDGER[n] ?? `no row for ${n}` : 0; },
   },
   // The settings card, its ring on nothing and then on its first control that is not a field.
@@ -194,6 +216,12 @@ const HANDLERS = [
   ["on_click", /^th-traj-chat$/, 1, PRESS],
   ["on_click", /^th-traj-fail-(prev|next)$/, 0, PRESS],
   ["on_item_click", /^tr:N:N:N$/, 0, "item"],
+  // From 540 px: its filter buttons, the timeline's button, and a press on the timeline's
+  // lanes (24 px down, in the middle lane of their 48), which selects a row as a press on the
+  // row does. They move nothing of the Chat's.
+  ["on_click", /^th-filter-(failed|user|input|model|tools)$/, 0, PRESS],
+  ["on_click", /^th-traj-timeline$/, 0, PRESS],
+  ["on_mouse_down", /^th-tl-lanes$/, 0, { local_position: { x: 120, y: 24 } }],
   // The keys sheet: its close, its scrim and the sheet itself.
   ["on_click", /^th-keys(-close|-scrim)?$/, 0, PRESS],
   ["on_scroll_wheel", /^th-keys-scrim$/, 0, WHEEL],
@@ -261,6 +289,13 @@ const STATES = {
   trajectory: (v, cx) => v.action("trajectory", cx),
   // The Trajectory in this pane at its compact width: its Chat button is an icon.
   trajIcon: { enter: (v, cx) => { v.paneW = 150; v.width = 150; v.action("trajectory", cx); }, check: (v) => v.traj && trajCompact(v.trajPx()) != null },
+  // The Trajectory in this pane from 540 px, with the timeline shown (the strip built), then
+  // hidden: its button in both, and its lanes.
+  timeline: {
+    enter: (v, cx) => { wideTraj(v, cx); v.tlHidden = false; for (let k = 0; k < 50 && (k === 0 || v.tlJob || v.tlWait); k++) v.render(cx); },
+    check: (v) => v.traj && v.tlShown() && Boolean(v.tlModel) && !v.tlWait,
+  },
+  timelineHidden: { enter: (v, cx) => { wideTraj(v, cx); v.tlHidden = true; }, check: (v) => v.traj && v.tlCan() && !v.tlShown() },
   // A search kept with its field shown and not typing in: a press on the field takes the
   // typing back.
   kept: { enter: (v, cx) => { v.action("search:Turn", cx); v.filtering = false; }, check: (v) => Boolean(v.query) && !v.filtering },
@@ -396,6 +431,28 @@ test("the bodies the source check reads hold only the regex literals listed, non
 test("no scroll the pane makes itself counts as the reader's", () => {
   const found = Object.fromEntries(PANE.map((n) => [n, body(n) == null ? "missing" : callsReaderMoved(body(n)) ? "counts" : "no"]));
   expect(found).toEqual(Object.fromEntries(PANE.map((n) => [n, "no"])));
+});
+
+// ownAsk counts a row ask as the pane's own (askN), so every one is made there: askScroll is
+// named in the code in two places, its own line and ownAsk's. Any other naming fails, in
+// whatever form (a call, ["askScroll"]), a comment after code and a block comment too. Read a
+// line at a time: over the whole file the strip above loses its place and leaves comments in.
+// A line the strip takes the name out of must be a comment from its start, so a regex it
+// misreads cannot hide a call.
+function namings(src, name) {
+  const lines = src.split("\n").filter((l) => l.includes(name));
+  return lines.filter((l) => code(l).includes(name) || !/^\s*\/\//.test(l)).map((l) => l.trim().split("(")[0]);
+}
+test("askScroll is called only from ownAsk", () => {
+  const cases = {
+    call: "  bodyNow() {\n    this.askScroll(i, how);\n  }",
+    bracket: "    this[\"askScroll\"](i, how);",
+    afterRegex: "    if (/a\\//.test(u)) this.askScroll(i, how);",
+    trailing: "    this.x = 1; // askScroll",
+    comment: "    // askScroll is not called here",
+  };
+  expect(Object.fromEntries(Object.entries(cases).map(([k, src]) => [k, namings(src, "askScroll").length]))).toEqual({ call: 1, bracket: 1, afterRegex: 1, trailing: 1, comment: 0 });
+  expect(namings(SRC, "askScroll")).toEqual(["askScroll", "ownAsk"]);
 });
 
 test("the pane's own scrolls leave the count: a reply growing while following, a build, and a stopped render's scroll asked for again", async () => {
@@ -596,6 +653,87 @@ async function landThenDrag(gap) {
 for (const gap of [1, 2]) test(`a drag on the bar ${gap} frame${gap > 1 ? "s" : ""} after the pane's own asks land counts once, and the asks count nothing`, async () => {
   expect(await landThenDrag(gap)).toEqual({ asks: [1, 1], moved16: true, moved48: true, landing: 1, dragMoved: true, sameRows: true, drag: 1 });
 });
+
+// A jump held while it waits (the cut moved, and the rows are still being built in slices):
+// every frame asks for its row again (the held ask, one of the pane's own asks), so the turn it
+// goes to stays on screen until it lands. A drag on the bar in that wait does not count: the
+// jump the reader asked for is still under way (scrollTo, busy), and it lands where it was
+// asked, from wherever the drag left the list. A jump to the centre (a key) has the drag put
+// back by the same frame's held ask, before the list is laid out; one to the top (debugScroll's
+// "land") only brings the turn to the nearest edge, so a drag that keeps it on screen stays
+// until the landing. The jump then lands, and a drag after it counts once: the held asks, one
+// a frame, leave no mark that swallows the reader's later moves. The whole jump counts once,
+// at its key or command. A key's jump is settled for 500 ms after it lands (scrollBusyUntil),
+// and a drag in that time does not count either; the test moves past it.
+const capTurn = (i, long = false, parts = 25) => {
+  const ts = new Date(Date.UTC(2026, 10, 1, 9, 0, 0) + i * 1000).toISOString();
+  const said = long ? Array.from({ length: parts }, (_, j) => `Part ${j}: ${"word ".repeat(600)}`).join("\n\n") : `Reply ${i}: the order is fine.`;
+  return [{ k: "p", o: "human", t: `Prompt ${i}: check order ${i}.`, ts }, { k: "t", t: said }, { k: "d", ts }];
+};
+// The rows a simList frame shows, by key: those between its offset and the list's height on,
+// not every item the list holds.
+function shownIn(v, f) {
+  const pre = [0];
+  for (const x of f.sizes) pre.push(pre[pre.length - 1] + x);
+  return f.keys.filter((_k, i) => pre[i + 1] > f.off && pre[i] < f.off + v.listH);
+}
+async function heldThenDrag(go) {
+  const ev = [];
+  for (let i = 0; i < 80; i++) ev.push(...capTurn(i, i === 40, 170));
+  const { v, cx } = await scripted(ev);
+  v.debug = false;
+  v.win.cap = { ...v.win.cap, max: 60 };
+  v.width = 560; v.rootH = 1100; v.listH = 1000;
+  const sim = simList(v);
+  try {
+    // Past a cap of 60 items, with #41's long reply open: #65 is past the cut.
+    openAt(v, cx, sim, 562);
+    v.open.add("0:41");
+    v.command("search:#41", cx);
+    settleList(v, cx, sim);
+    const cut = v.rows().at(-1).key;
+    // The jump waits on a rows build in slices, at the same width.
+    v.buildMax = () => 0;
+    v.rowsKey = null;
+    probeFrame(v, cx);
+    // The search's own landing is settled before the jump.
+    v.scrollBusyUntil = 0;
+    const n00 = moves(v);
+    go(v, cx);
+    probeFrame(v, cx);
+    probeFrame(v, cx);
+    const held = Boolean(v.scrollTo?.held);
+    const off0 = sim.last().off;
+    const n0 = moves(v);
+    const a0 = v.askN ?? 0;
+    // The reader's drag on the bar, up 300 px.
+    sim.off = Math.max(0, sim.off - 300);
+    probeFrame(v, cx);
+    const during = { asked: (v.askN ?? 0) > a0, moved: sim.last().off !== off0, drag: moves(v) - n0, waiting: v.scrollTo?.key ?? null };
+    delete v.buildMax;
+    settleList(v, cx, sim);
+    const landed = { scrollTo: v.scrollTo, shows: shownIn(v, sim.last()).includes("0:65"), jump: moves(v) - n00 };
+    // The landing's settle (scrollBusyUntil, 500 ms on) is over by the reader's next drag.
+    v.scrollBusyUntil = 0;
+    const off1 = sim.last().off;
+    const n1 = moves(v);
+    sim.off = Math.max(0, sim.off - 300);
+    probeFrame(v, cx);
+    const after = { moved: sim.last().off !== off1, drag: moves(v) - n1 };
+    return { cut, held, during, landed, after };
+  } finally { H.listWindow = null; }
+}
+for (const [name, go, moved] of [
+  ["a key", (v, cx) => { v.sel = "0:64"; v.action("next", cx); }, false],
+  ["debugScroll", (v, cx) => { v.debug = true; v.command("debugScroll:0:65", cx); v.debug = false; }, true],
+]) test(`a drag on the bar while a jump by ${name} is held counts nothing, the jump counts once and lands, and a drag once it has landed counts once`, async () => {
+  expect(await heldThenDrag(go)).toEqual({
+    cut: "capped-later", held: true,
+    during: { asked: true, moved, drag: 0, waiting: "0:65" },
+    landed: { scrollTo: null, shows: true, jump: 1 },
+    after: { moved: true, drag: 1 },
+  });
+}, 60000);
 
 // Two of the pane's own moves of the list, with no wheel and no bar, in the list, the outline
 // and the Pinned view: neither counts.
@@ -805,11 +943,12 @@ test("the Trajectory pane beside the Chat moving its selection counts once in th
   state.shared["threads.trajByTerminal"] = { [v.terminal]: { pane: "p3" } };
   const keys = v.turnKeys(v.rows());
   const pick = keys.find((k) => k !== v.sel);
+  const id = turnId(v.current().turns, v.findTurn(pick));
   const n0 = moves(v);
-  state.shared["threads.turnSel"] = { [v.terminal]: { key: pick, by: "other", at: Date.now() + 1000, pane: "trajectory" } };
+  state.shared["threads.turnSel"] = { [v.terminal]: { key: pick, id, by: "other", at: Date.now() + 1000, pane: "trajectory" } };
   const took = v.syncSel();
   const once = moves(v) - n0;
-  state.shared["threads.turnSel"] = { [v.terminal]: { key: pick, by: "other", at: Date.now() + 2000, pane: "trajectory" } };
+  state.shared["threads.turnSel"] = { [v.terminal]: { key: pick, id, by: "other", at: Date.now() + 2000, pane: "trajectory" } };
   const again = v.syncSel();
   expect({ took, sel: v.sel === pick, once, again, after: moves(v) - n0 - once }).toEqual({ took: true, sel: true, once: 1, again: false, after: 0 });
 });

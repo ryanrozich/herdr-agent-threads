@@ -43,9 +43,12 @@ ev as (
     (select count(*) from parts x where x.message_id = m.id and x.ty = 'compaction') comp
   from msgs m where m.role = 'user'
   union all
-  -- A reply's text and tool calls, in order.
+  -- A reply's text and tool calls, in order. A text is marked (a) as the answer when its message
+  -- finished with no call to make and no error; one cut at the length limit is not.
   select m.un, m.ut, m.uid, 1, m.mt, m.id, x.id,
-    case x.ty when 'text' then json_object('k','t','t', substr(json_extract(x.data,'$.text'), 1, 200000))
+    case when x.ty = 'text' and json_extract(m.data,'$.finish') not in ('tool-calls','unknown','length')
+      and json_extract(m.data,'$.error') is null then json_object('k','t','a',1,'t', substr(json_extract(x.data,'$.text'), 1, 200000))
+      when x.ty = 'text' then json_object('k','t','t', substr(json_extract(x.data,'$.text'), 1, 200000))
       else json_object('k','u','n', json_extract(x.data,'$.tool'), 'id', json_extract(x.data,'$.callID')) end, null, 0
   from msgs m join parts x on x.message_id = m.id
   where m.role = 'assistant' and x.ty in ('text','tool')
