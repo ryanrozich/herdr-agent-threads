@@ -2779,7 +2779,9 @@ export default class Threads extends View {
     let mine = this.heldBytes();
     if (mine > room) {
       if (this.mem.kind !== "chat") { this.refuse(s); return true; }
-      const k = trim(s, Math.floor(room * TRIM_TO) - (mine - sessionBytes(s, w)), w);
+      // TRIM_TO of what the pane's other sessions leave: of the whole room, less them, it went
+      // below zero once they held more than TRIM_TO of it, and the session kept one turn.
+      const k = trim(s, Math.floor((room - (mine - sessionBytes(s, w))) * TRIM_TO), w);
       if (k) {
         // Every turn has a new number: every row and place is built again, and the row window
         // starts over (its keys hold turn numbers, as in restart and pick). The selection,

@@ -995,3 +995,25 @@ test("a live session at its budget trims once, to TRIM_TO of the room, and the s
   expect(v.mem.bytes).toBeLessThanOrEqual(room);
   expect(s.turns.at(-1).prompt).toBe("live 4");
 }, 20000);
+
+test("a trim keeps TRIM_TO of what the pane's other sessions leave of the room: with them at 0.9 of it, the session still keeps the turns that fit", async () => {
+  const { v } = await trimmedLater();
+  const s = v.current();
+  const w = PANE_WEIGHT.chat;
+  // Another session of the pane, behind this one.
+  const other = sessionOf(60, PAD);
+  measure(other);
+  v.sessions.push(other);
+  const others = sessionBytes(other, w);
+  const room = Math.floor(others / 0.9);
+  // A few of this session's turns fit in what is left.
+  const left = Math.floor((room - others) * TRIM_TO);
+  expect(left).toBeGreaterThan(3 * (sessionBytes(s, w) / s.turns.length));
+  phantom(BUDGET - room);
+  expect(BUDGET - windowBytes(v.mem)).toBe(room);
+  expect(v.guard(s)).toBe(false);
+  expect(droppedOf(s)).toBeGreaterThan(0);
+  expect(s.turns.length).toBeGreaterThan(1);
+  expect(sessionBytes(s, w)).toBeLessThanOrEqual(left);
+  expect(v.mem.bytes).toBeLessThanOrEqual(room);
+}, 20000);
