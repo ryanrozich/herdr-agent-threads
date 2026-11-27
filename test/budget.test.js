@@ -935,3 +935,38 @@ test("a trim moves the jump a stopped render asks for again (renderWant) with it
   expect(v.dayAbove).toBeNull();
   expect(v.railSeen).toBeNull();
 }, 20000);
+
+test("a trim lets go of the Trajectory's ledger and timeline, so none of its state holds a turn the trim let go or a key past the tail", async () => {
+  const { v, cx, trimNow } = await trimmedLater();
+  v.enterTraj();
+  for (let i = 0; i < 5; i++) v.render(cx);
+  const s = v.current();
+  const oldest = s.turns[0];
+  const before = [...s.turns];
+  const fields = ["ledgerMemo", "ledgerShown", "ledgerJob", "tlModel", "tlJob", "tlKeep", "tlHatch", "tlFails"];
+  // Whether x reaches an object or string pred holds for, through Maps, Sets, arrays and own
+  // values; skip(o), an object not walked further (the sessions and the kept turns).
+  const reaches = (x, pred, skip, depth = 10, seen = new Set()) => {
+    if (pred(x)) return true;
+    if (!x || typeof x !== "object" || depth <= 0 || seen.has(x) || skip(x)) return false;
+    seen.add(x);
+    const d = depth - 1;
+    if (x instanceof Map) return [...x].some(([k, y]) => reaches(k, pred, skip, d, seen) || reaches(y, pred, skip, d, seen));
+    if (x instanceof Set || Array.isArray(x)) return [...x].some((y) => reaches(y, pred, skip, d, seen));
+    return Object.keys(x).some((k) => reaches(x[k], pred, skip, d, seen));
+  };
+  // A key of turn n of session 0 past n turns ("0:60" when the tail is shorter).
+  const past = (n) => (x) => typeof x === "string" && [...x.matchAll(/(?:^|[^0-9A-Za-z.])0:(\d+)(?![0-9.])/g)].some((m) => Number(m[1]) > n);
+  const sessions = () => new Set([...v.sessions, v.sessions]);
+  // The Trajectory was built: it holds the oldest turn, or a key of turn 60.
+  const ss = sessions();
+  const built = fields.filter((f) => reaches(v[f], (x) => x === oldest || past(59)(x), (o) => ss.has(o) || s.turns.includes(o)));
+  expect(built.length).toBeGreaterThan(0);
+  trimNow();
+  const kept = new Set(s.turns);
+  const dropped = new Set(before.filter((t) => !kept.has(t)));
+  expect(dropped.has(oldest)).toBe(true);
+  const sk = sessions();
+  const left = fields.filter((f) => reaches(v[f], (x) => dropped.has(x) || past(s.turns.length)(x), (o) => sk.has(o) || kept.has(o)));
+  expect(left).toEqual([]);
+}, 20000);

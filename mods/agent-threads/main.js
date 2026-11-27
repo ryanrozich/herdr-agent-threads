@@ -149,7 +149,7 @@ const TURN_KEYED_RESET = Object.freeze([
   "tlModel", "tlJob", "tlKeep", "tlHatch", "fillMemo", "bubbleMemo", "mdMemo", "tableMemo", "outEds",
   "codeInfo", "landed", "diagramOpened", "outputOpened", "drawingRow", "drawError", "lastRange",
   "stickyShown", "stickyNow", "buildRail", "railMemo", "dayOfRows", "stickRows", "staleRows", "buildStale", "hoverPin", "unpinDown", "railHover", "railQuiet", "railHeld",
-  "dayAbove", "railSeen",
+  "dayAbove", "railSeen", "ledgerShown", "ledgerJob", "tlFails",
 ]);
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -2881,8 +2881,10 @@ export default class Threads extends View {
   }
   // What a trim leaves holding the rows or turns from before it, besides the rows on screen
   // (shiftRows): the memos of the list as fitted and of the day bands, a build's rail and new
-  // kept rows, the closed turns' rows kept per width (dropKept), the status and usage marks and
-  // the rail's reply. Each is made again from the rows or the session on the next frame. The
+  // kept rows, the closed turns' rows kept per width (dropKept), the status and usage marks,
+  // the rail's reply, and the Trajectory's ledger and timeline (its rows, a build of them, the
+  // model and what it painted: the Trajectory shows its waiting line until they are built
+  // again). Each is made again from the rows or the session on the next frame. The
   // rail's ticks (railMemo) are read by handlers between frames: they go when the next frame
   // makes them again from the moved railTurns.
   dropBuilt() {
@@ -2901,6 +2903,14 @@ export default class Threads extends View {
     this.statusMemo = null;
     this.usageMemo = null;
     this.railReplyMemo = null;
+    this.ledgerMemo = null;
+    this.ledgerShown = null;
+    this.ledgerJob = null;
+    this.tlModel = null;
+    this.tlJob = null;
+    this.tlKeep = null;
+    this.tlHatch = null;
+    this.tlFails = null;
   }
   // The closed turns' rows kept per width (keptFor), emptied in place: a width not drawn since
   // would keep the turns a trim let go, or a closed pane's, for as long as it is kept.
