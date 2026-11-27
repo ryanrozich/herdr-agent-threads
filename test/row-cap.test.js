@@ -30,6 +30,7 @@ import {
   theme,
   until,
 } from "./render-harness.js";
+import { turnId } from "../mods/agent-threads/core/ids.js";
 import { capList, LIST_MAX, RowWindow } from "../mods/agent-threads/ui.js";
 
 setup();
@@ -3275,7 +3276,7 @@ test("a press's open 300 ms on is dropped by a jump from outside the list made i
     trajectory: (v) => {
       v.terminal = "t-traj";
       v.trajPaneOpen = () => true;
-      state.shared["threads.turnSel"] = { "t-traj": { key: "0:30", by: "other", at: Date.now() + 1000, pane: "trajectory" } };
+      state.shared["threads.turnSel"] = { "t-traj": { key: "0:30", id: turnId(v.current().turns, v.findTurn("0:30")), by: "other", at: Date.now() + 1000, pane: "trajectory" } };
       expect(v.syncSel()).toBe(true);
     },
   };
@@ -3659,7 +3660,7 @@ const PENDING = {
     go: (v) => {
       v.terminal = "t-traj";
       v.trajPaneOpen = () => true;
-      state.shared["threads.turnSel"] = { "t-traj": { key: "0:5", by: "other", at: Date.now() + 1000, pane: "trajectory" } };
+      state.shared["threads.turnSel"] = { "t-traj": { key: "0:5", id: turnId(v.current().turns, v.findTurn("0:5")), by: "other", at: Date.now() + 1000, pane: "trajectory" } };
       expect(v.syncSel()).toBe(true);
     },
   },
@@ -3961,7 +3962,7 @@ test("followed into the Trajectory, following stopped meanwhile by a turn from a
   v.openTraj();
   trajFrames(v, cx);
   v.trajPaneOpen = () => true;
-  state.shared["threads.turnSel"] = { [v.terminal]: { key: "0:100", by: "other", at: Date.now() + 1000, pane: "trajectory" } };
+  state.shared["threads.turnSel"] = { [v.terminal]: { key: "0:100", id: turnId(v.current().turns, v.findTurn("0:100")), by: "other", at: Date.now() + 1000, pane: "trajectory" } };
   expect([v.syncSel(), v.sel, v.follow]).toEqual([true, "0:100", false]);
   delete v.trajPaneOpen;
   v.leaveTraj();

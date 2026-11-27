@@ -238,7 +238,7 @@ test("the new extractor gives the old event stream, less repeated usage, non-own
   const file = made("--peer", "--notify");
   const norm = (list) => {
     const seen = new Set();
-    return list.filter((e) => e.k !== "s" && e.k !== "b" && e.k !== "an" && e.k !== "x" && (e.k !== "m" || (!seen.has(e.id) && seen.add(e.id)))).map((e) => (e.cmd ? { ...e, u: undefined } : e)).map((e) => (e.k === "u" ? { ...e, id: undefined, ts: undefined, in: undefined } : e)).map((e) => (e.k === "t" ? { ...e, ts: undefined } : e)).map((e) => JSON.stringify({ ...e, t: e.k === "p" && e.o === "task-notification" ? null : e.t }));
+    return list.filter((e) => e.k !== "s" && e.k !== "b" && e.k !== "an" && e.k !== "x" && (e.k !== "m" || (!seen.has(e.id) && seen.add(e.id)))).map((e) => (e.cmd ? { ...e, u: undefined } : e)).map((e) => (e.k === "u" ? { ...e, id: undefined, ts: undefined, in: undefined } : e)).map((e) => (e.k === "t" ? { ...e, ts: undefined, a: undefined } : e)).map((e) => JSON.stringify({ ...e, t: e.k === "p" && e.o === "task-notification" ? null : e.t }));
   };
   expect(norm(events(file))).toEqual(norm(events(file, before)));
 });

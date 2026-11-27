@@ -48,6 +48,11 @@
 //   a user step with an empty message (the notice's text is not kept) and extra.sender
 //   { kind: "task-notification" }, then its agent steps. Harbor would keep the notice's
 //   text as the message (test/atif-harbor/differences.js).
+// - Work that started by itself after a turn has finished (a Codex goal's task, a Claude Code
+//   loop tick or scheduled line with no prompt) is a turn of its own the same way, its sender
+//   { kind: "goal" } or { kind: "scheduled" }.
+// - An answer the harness marked is an agent step with its whole message, in its place, also
+//   when more calls came after it.
 // Times are ISO 8601 where the transcript gives one, else left out, never made up.
 
 import { trajectories } from "./trajectory.js";

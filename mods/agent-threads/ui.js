@@ -1,7 +1,7 @@
 // agent-threads: small pure helpers for drawing (no Herdr imports), tested under bun.
 
 import { harnessOf } from "./harness.js";
-import { fmtTokens, fmtPct, fmtDuration, fmtTime, shortModel, fmtBytes } from "./core/turns.js";
+import { fmtTokens, fmtPct, fmtDuration, fmtTime, shortModel, fmtBytes, hasReply } from "./core/turns.js";
 
 // The panel action for a key press, or null. Chords with cmd, ctrl, alt or fn belong to
 // Herdr and the system (cmd-c, cmd-shift-t, ctrl-tab), so they are never taken.
@@ -2185,13 +2185,14 @@ export function parseRemote(url) {
 
 const KIND_WORDS = {
   hc: "hc report", peer: "agent message", scheduled: "Scheduled", sdk: "SDK",
-  "task-notification": "Background task finished", "auto-continuation": "Auto-continuation",
+  "task-notification": "Background task finished", "auto-continuation": "Auto-continuation", goal: "Goal",
 };
 // A turn a task notification started after the turn before it ended (core/turns.js): it has
 // no message, so one quiet line, "Background task finished", stands where its bubble would
-// be, closed, open, running or searched; the notice's own text is never shown.
+// be, closed, open, running or searched; the notice's own text is never shown. Work that
+// started by itself (turn.self: "Goal", "Scheduled") is drawn the same way.
 export function noticeTurn(turn) {
-  return turn?.sender?.kind === "task-notification" && !String(turn.prompt ?? "").trim();
+  return (turn?.sender?.kind === "task-notification" || turn?.self === true) && !String(turn.prompt ?? "").trim();
 }
 // A typed prompt a sender rule matched says so ("matched by rule"), whatever kind the rule
 // gave it: the session has no sender for it, only the rule's reading of its text.
@@ -2250,9 +2251,11 @@ export function isShown(turn, { agentTurns = false, live = false, turns = null }
 // both in one reply). Reads the reply's pieces without joining them, since the counts call
 // this for every turn.
 export function agentReplied(turn, turns) {
-  if (!turn.agent || !turn.after?.some((x) => /\S/.test(x))) return false;
-  for (let i = turn.n - 2; i >= 0 && turns[i] && (turns[i].answeredIn === turn.n || turns[i].answeredBy === turn.n); i--) {
-    if (!turns[i].agent && !turns[i].after.length) return false;
+  if (!turn.agent || !(turn.finals?.length || turn.after?.some((x) => /\S/.test(x)))) return false;
+  // Work that started by itself answers no other turn, and can stand between (linkAnswer).
+  if (turn.self) return true;
+  for (let i = turn.n - 2; i >= 0 && turns[i] && (turns[i].self || turns[i].answeredIn === turn.n || turns[i].answeredBy === turn.n); i--) {
+    if (!turns[i].agent && !hasReply(turns[i])) return false;
   }
   return true;
 }

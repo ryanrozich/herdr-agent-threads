@@ -2,7 +2,10 @@
 // "<prompt time in seconds>|<hash of the prompt>|<count among the same>". A turn's number
 // can change when the way rows are built changes; its id does not, and a session read again
 // from the top, or whose tail the agent rewrote (OpenCode, Cursor), gives every turn the id
-// it had. Plain JavaScript with no Herdr imports.
+// it had. A row of work that started by itself (turn.self) has no prompt, as a task
+// notification's has none: its second part is "w:" and what started it, which no prompt's hash
+// can be, so a notification's row in the same second keeps its id. Plain JavaScript with no
+// Herdr imports.
 
 export const hash = (x) => {
   let h = 2166136261;
@@ -20,7 +23,7 @@ function baseOf(turn) {
   const prompt = turn.prompt ?? "";
   const m = bases.get(turn);
   if (m && m.ts === turn.ts && m.len === prompt.length) return m.base;
-  const base = `${secOf(turn)}|${hash(prompt)}`;
+  const base = `${secOf(turn)}|${turn.self ? `w:${turn.sender.kind}` : hash(prompt)}`;
   bases.set(turn, { ts: turn.ts, len: prompt.length, base });
   return base;
 }

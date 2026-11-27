@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cardKey, keyAction, ledgerKey, ringKey } from "../mods/agent-threads/ui.js";
 import { trajCompact } from "../mods/agent-threads/ledger.js";
+import { turnId } from "../mods/agent-threads/core/ids.js";
 import { H, draw, drawRange, dropTimers, fixture, keyEv, openAt, pane, pinsShown, probeFrame, root, scripted, settleList, settleRows, setup, simList, state, stillAt } from "./render-harness.js";
 
 setup();
@@ -942,11 +943,12 @@ test("the Trajectory pane beside the Chat moving its selection counts once in th
   state.shared["threads.trajByTerminal"] = { [v.terminal]: { pane: "p3" } };
   const keys = v.turnKeys(v.rows());
   const pick = keys.find((k) => k !== v.sel);
+  const id = turnId(v.current().turns, v.findTurn(pick));
   const n0 = moves(v);
-  state.shared["threads.turnSel"] = { [v.terminal]: { key: pick, by: "other", at: Date.now() + 1000, pane: "trajectory" } };
+  state.shared["threads.turnSel"] = { [v.terminal]: { key: pick, id, by: "other", at: Date.now() + 1000, pane: "trajectory" } };
   const took = v.syncSel();
   const once = moves(v) - n0;
-  state.shared["threads.turnSel"] = { [v.terminal]: { key: pick, by: "other", at: Date.now() + 2000, pane: "trajectory" } };
+  state.shared["threads.turnSel"] = { [v.terminal]: { key: pick, id, by: "other", at: Date.now() + 2000, pane: "trajectory" } };
   const again = v.syncSel();
   expect({ took, sel: v.sel === pick, once, again, after: moves(v) - n0 - once }).toEqual({ took: true, sel: true, once: 1, again: false, after: 0 });
 });
