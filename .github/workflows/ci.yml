@@ -14,7 +14,9 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The tests take 5 to 7.5 minutes on main and near 10 on a branch that adds tests; 15
+    # leaves room for a slow runner without letting a hung test run long.
+    timeout-minutes: 15
     # The upload step below trades the job's ID token for a short-lived Mergify token, so no
     # secret is stored. A job's own block replaces the workflow's, so contents is listed again.
     permissions:
