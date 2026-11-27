@@ -512,3 +512,32 @@ test("a read whose extractor call ran past LOCK_STALE keeps the window's turn: i
   expect(took.length).toBeGreaterThan(0);
   expect(took.every((x) => x === false)).toBe(true);
 }, 20000);
+
+test("a trim with the rows over the row window's stop starts the row window, capKey and viewEndKey over, so the next rows place the window on the renumbered turns", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 60 });
+  const { v } = openPane(file);
+  await settle(v);
+  const s = v.current();
+  expect(s.turns.length).toBe(60);
+  // A small window: 60 turns are past its stop, so it has a range (from) once placed at the end.
+  v.win.cap = { ...v.win.cap, slide: 20, block: 5, stop: 24 };
+  v.rows();
+  v.win.place(v.winList(), { tail: true });
+  expect(v.win.from).not.toBeNull();
+  expect(v.win.at).not.toBeNull();
+  v.capKey = "0:50";
+  v.viewEndKey = "0:55";
+  // The window fills up: this pane's next guard keeps the newest turns that fit.
+  phantom(BUDGET - 100 * 1024);
+  expect(v.guard(s)).toBe(false);
+  const n = s.turns.length;
+  expect(n).toBeLessThan(60);
+  expect(droppedOf(s)).toBe(60 - n);
+  expect({ from: v.win.from, to: v.win.to, at: v.win.at, capKey: v.capKey, viewEndKey: v.viewEndKey }).toEqual({ from: null, to: null, at: null, capKey: null, viewEndKey: null });
+  // Placed again, the range starts at a turn of the tail.
+  v.rows();
+  v.win.place(v.winList(), { tail: true });
+  if (v.win.from != null) expect(v.winList().index.has(v.win.from)).toBe(true);
+  expect(v.win.at.z).toBe(v.winList().rows.length);
+}, 20000);
