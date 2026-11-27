@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { newSession, apply, parseChunk } from "../mods/agent-threads/core/turns.js";
 import {
-  BUDGET, TIGHT_CHUNK, PANE_WEIGHT, LOCK_STALE, QUEUE_STALE, GHOST_MS, measure, sessionBytes, trim, shiftKey, tailOf, tailNote, droppedOf, gut, windowState,
+  BUDGET, TIGHT_CHUNK, TRIM_TO, PANE_WEIGHT, LOCK_STALE, QUEUE_STALE, GHOST_MS, measure, sessionBytes, trim, shiftKey, tailOf, tailNote, droppedOf, gut, windowState,
   joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, dropRead, pruneWindow,
 } from "../mods/agent-threads/budget.js";
 import { turnId } from "../mods/agent-threads/pins.js";
@@ -969,4 +969,29 @@ test("a trim lets go of the Trajectory's ledger and timeline, so none of its sta
   const sk = sessions();
   const left = fields.filter((f) => reaches(v[f], (x) => dropped.has(x) || past(s.turns.length)(x), (o) => sk.has(o) || kept.has(o)));
   expect(left).toEqual([]);
+}, 20000);
+
+test("a live session at its budget trims once, to TRIM_TO of the room, and the small chunks it writes after fit without another trim", async () => {
+  const { v } = await trimmedLater();
+  const s = v.current();
+  expect(s.turns.length).toBe(60);
+  // Just over: the room is one KiB under what the pane holds.
+  phantom(BUDGET - (v.mem.bytes - 1024));
+  const room = BUDGET - windowBytes(v.mem);
+  const trims = [];
+  const chunk = (i) => {
+    // A small chunk of the live session: one short turn.
+    if (i) s.turns.push({ n: s.turns.length + 1, prompt: `live ${i}`, steps: [], done: true, v: s.version });
+    const was = droppedOf(s);
+    expect(v.guard(s)).toBe(false);
+    trims.push(droppedOf(s) - was);
+  };
+  chunk(0);
+  expect(v.mem.bytes).toBeLessThanOrEqual(Math.floor(room * TRIM_TO));
+  for (let i = 1; i < 5; i++) chunk(i);
+  // The first trims, to about TRIM_TO of the room; the four after it fit in the rest.
+  expect(trims[0]).toBeGreaterThan(0);
+  expect(trims.slice(1)).toEqual([0, 0, 0, 0]);
+  expect(v.mem.bytes).toBeLessThanOrEqual(room);
+  expect(s.turns.at(-1).prompt).toBe("live 4");
 }, 20000);

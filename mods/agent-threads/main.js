@@ -109,7 +109,7 @@ import("./build.js")
   .then((m) => { built = parseBuild(m?.BUILD) ? m.BUILD : null; })
   .catch(() => { built = null; });
 import { isDiagram, drawDiagram } from "./diagram.js";
-import { BUDGET, TIGHT_CHUNK, PANE_WEIGHT, measure, sessionBytes, forgetSize, trim, shiftKey, tailOf, tailNote, droppedOf, gut, joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, holdRead, dropRead, windowState, pruneWindow } from "./budget.js";
+import { BUDGET, TIGHT_CHUNK, TRIM_TO, PANE_WEIGHT, measure, sessionBytes, forgetSize, trim, shiftKey, tailOf, tailNote, droppedOf, gut, joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, holdRead, dropRead, windowState, pruneWindow } from "./budget.js";
 // A hot reload evaluates this module again in the same VM, beside the old one, and then
 // replaces every copy: the copies it replaces give back what they hold now (budget.js).
 releaseOlder();
@@ -2779,7 +2779,7 @@ export default class Threads extends View {
     let mine = this.heldBytes();
     if (mine > room) {
       if (this.mem.kind !== "chat") { this.refuse(s); return true; }
-      const k = trim(s, room - (mine - sessionBytes(s, w)), w);
+      const k = trim(s, Math.floor(room * TRIM_TO) - (mine - sessionBytes(s, w)), w);
       if (k) {
         // Every turn has a new number: every row and place is built again, and the row window
         // starts over (its keys hold turn numbers, as in restart and pick). The selection,
@@ -2886,7 +2886,8 @@ export default class Threads extends View {
   // model and what it painted: the Trajectory shows its waiting line until they are built
   // again). Each is made again from the rows or the session on the next frame. The
   // rail's ticks (railMemo) are read by handlers between frames: they go when the next frame
-  // makes them again from the moved railTurns.
+  // makes them again from the moved railTurns. The day pill's band (stickyNow, a day row,
+  // which holds no turn) stays, so the pill does not go for a frame.
   dropBuilt() {
     this.dropKept();
     this.rowsMemo = null;
@@ -2896,7 +2897,6 @@ export default class Threads extends View {
     this.dayOfRows = null;
     this.dayOf = null;
     this.dayAbove = null;
-    this.stickyNow = null;
     this.railSeen = null;
     this.buildRail = null;
     this.cacheNew = [];

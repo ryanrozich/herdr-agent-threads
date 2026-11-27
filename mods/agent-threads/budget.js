@@ -22,6 +22,10 @@ const MiB = 1024 * 1024;
 export const BUDGET = 144 * MiB;
 // The largest extractor call while the window holds over half the budget (16 MiB otherwise).
 export const TIGHT_CHUNK = 4 * MiB;
+// A trim keeps the newest turns that fit in this share of the room, not all of it: a live
+// session at the budget would otherwise trim on every chunk it writes, each time with a new
+// build of every row (and of the Trajectory's), for a turn or two.
+export const TRIM_TO = 0.85;
 // What a pane holds for a session: its text once (twice the characters for a wide string),
 // plus its fixed costs (objects, arrays, records) times the pane's weight: the Chat adds shapes
 // and rows, the Trajectory its ledger rows, the Pinned pane shapes of what it reads. From the rig
