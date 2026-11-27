@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest, ruleSender, newSession as newSessionForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
 import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS, weightHerdr as weightHerdrOf } from "../mods/agent-threads/ui.js";
-import { turnIds } from "../mods/agent-threads/pins.js";
+import { turnId, turnIds } from "../mods/agent-threads/pins.js";
 import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf, trajLayout, COMPACT_PAD as COMPACT_PAD_T } from "../mods/agent-threads/ledger.js";
 
 import {
@@ -16058,11 +16058,11 @@ test("the shared selection never selects a turn the Chat hides; a turn it shows 
   expect(hidden.length).toBeGreaterThan(0);
   expect(v.findTurn(hidden[0])).toBeTruthy();
   const before = v.sel;
-  state.shared["threads.turnSel"] = { t4: { key: hidden[0], by: "other", at: Date.now() + 1000, pane: "trajectory" } };
+  state.shared["threads.turnSel"] = { t4: { key: hidden[0], id: turnId(v.current().turns, v.findTurn(hidden[0])), by: "other", at: Date.now() + 1000, pane: "trajectory" } };
   expect(v.syncSel()).toBe(false);
   expect(v.sel).toBe(before);
   const pick = shown.find((k) => k !== before);
-  state.shared["threads.turnSel"] = { t4: { key: pick, by: "other", at: Date.now() + 2000, pane: "trajectory" } };
+  state.shared["threads.turnSel"] = { t4: { key: pick, id: turnId(v.current().turns, v.findTurn(pick)), by: "other", at: Date.now() + 2000, pane: "trajectory" } };
   expect(v.syncSel()).toBe(true);
   expect(v.sel).toBe(pick);
 });
@@ -16146,20 +16146,20 @@ test("with the Pinned column and the Trajectory open, End, Home and a rail tick 
     polls();
     expect([v.sel, v.follow]).toEqual([keys[20], false]);
     // A turn written by a pane that is neither (an older copy, a Pinned pane): not taken.
-    state.shared["threads.turnSel"] = { t4: { key: keys[2], by: "elsewhere", at: Date.now() + 10000 } };
+    state.shared["threads.turnSel"] = { t4: { key: keys[2], id: turnId(v.current().turns, v.findTurn(keys[2])), by: "elsewhere", at: Date.now() + 10000 } };
     expect(v.syncSel()).toBe(false);
     expect(v.sel).toBe(keys[20]);
-    state.shared["threads.turnSel"] = { t4: { key: keys[2], by: "elsewhere", at: Date.now() + 20000, pane: "chat" } };
+    state.shared["threads.turnSel"] = { t4: { key: keys[2], id: turnId(v.current().turns, v.findTurn(keys[2])), by: "elsewhere", at: Date.now() + 20000, pane: "chat" } };
     expect(v.syncSel()).toBe(false);
     expect(v.sel).toBe(keys[20]);
     expect(traj.w.syncSel()).toBe(true);
     expect(traj.w.turnOfRow(traj.w.tsel)).toBe(keys[2]);
     // The Trajectory takes only a Chat's turn: one with no pane (an older copy's) or another
     // Trajectory's is seen and left.
-    state.shared["threads.turnSel"] = { t4: { key: keys[6], by: "elsewhere", at: Date.now() + 30000 } };
+    state.shared["threads.turnSel"] = { t4: { key: keys[6], id: turnId(v.current().turns, v.findTurn(keys[6])), by: "elsewhere", at: Date.now() + 30000 } };
     expect(traj.w.syncSel()).toBe(false);
     expect(traj.w.turnOfRow(traj.w.tsel)).toBe(keys[2]);
-    state.shared["threads.turnSel"] = { t4: { key: keys[6], by: "elsewhere", at: Date.now() + 40000, pane: "trajectory" } };
+    state.shared["threads.turnSel"] = { t4: { key: keys[6], id: turnId(v.current().turns, v.findTurn(keys[6])), by: "elsewhere", at: Date.now() + 40000, pane: "trajectory" } };
     expect(traj.w.syncSel()).toBe(false);
     expect(traj.w.turnOfRow(traj.w.tsel)).toBe(keys[2]);
     // The Pinned pane never writes, whatever it selects.

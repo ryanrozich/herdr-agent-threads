@@ -6,7 +6,9 @@
 // The shape: a turn, then its step groups, then cells.
 // - The first group ("Message") holds the prompt as a user cell.
 // - Each later group ("Step N") is one stretch of the agent's work: the text it said, then a
-//   tool cell for each call it made after that text. The reply is the last group's message.
+//   tool cell for each call it made after that text. The reply is the last group's message. An
+//   answer the harness marked that more calls came after is a message in its place, whole, with
+//   final: true: the reply is each of these, then the last group's message.
 // - A tool cell names its tool, its call id and its input in up to 120 characters. Its result
 //   is joined by that id: { call, end, failed }, with no text, since results stay on disk and
 //   are read when shown (calls.sh). failed is null when the result does not say.
@@ -51,6 +53,11 @@ export function trajectory(s, turn, id = null) {
       if (st.h) step.held = st.h;
       continue;
     }
+    if (st.k === "final") {
+      open().cells.push({ kind: "message", final: true, text: st.t, ...(st.r ? { reason: st.r } : {}), start: at(st.at), end: null });
+      if (st.h) step.held = st.h;
+      continue;
+    }
     if (st.k !== "group") continue;
     // Calls with no text before them (the first step, or calls after STEP_MAX) start a step.
     if (!step || step.cells.some((c) => c.kind === "tool")) open();
@@ -80,7 +87,8 @@ export function trajectory(s, turn, id = null) {
   }
   };
   addSteps(turn.steps);
-  const text = reply(turn);
+  // With marked answers among the steps, the rest: what was said since the last call.
+  const text = turn.finals?.length ? turn.after.join("\n\n").trim() : reply(turn);
   if (text || turn.reasoning?.length) open().cells.push({ kind: "message", text, ...(turn.reasoning?.length ? { reason: turn.reasoning.join("\n\n") } : {}), start: at(turn.afterAt), end: at(turn.endTs) });
   // Withheld reasoning after the turn's last step is counted on that step. With no step to
   // carry it, no step is made for it: the trajectory counts it (heldOut) for the notes.
