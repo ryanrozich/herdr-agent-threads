@@ -2854,11 +2854,12 @@ export default class Threads extends View {
     const room = BUDGET - windowBytes(this.mem);
     const mine = this.heldBytes();
     if (mine <= room) return;
-    const top = this.topKey;
     const k = trim(s, Math.max(0, Math.floor((room - (mine - sessionBytes(s, w))) * TRIM_TO)), w);
     if (!k) return;
     const its = (key) => typeof key === "string" && key.startsWith(`${si}:`);
-    const stay = its(top) && !this.follow && !this.toBottom && !this.scrollTo;
+    // The older session's rows sit above the newer one's, and the list keeps its offset in px:
+    // a reader who is not following keeps the row at the top, in either session, as in guard.
+    const stay = !this.follow && !this.toBottom && !this.scrollTo;
     this.shiftKeys(si, k);
     if (stay) this.scrollTo = { key: this.topKey ?? `${si}:1`, how: "top" };
     this.shiftRows(s, si, k);
@@ -2866,10 +2867,13 @@ export default class Threads extends View {
     const a = this.anchor;
     if (a && !a.end && (its(a.key) || its(a.turn) || [...(a.held?.keys() ?? [])].some(its))) this.dropAnchor();
     for (const f of ["capKey", "viewEndKey"]) if (its(this[f])) this[f] = shiftKey(this[f], si, k);
+    // The row window's range: a start in the older session whose turn went starts at its
+    // first kept turn, so the newer session's rows stay in the window; only an end that went
+    // starts the window over.
     if (its(this.win.from) || its(this.win.to)) {
-      const from = its(this.win.from) ? shiftKey(this.win.from, si, k) : this.win.from;
+      const from = its(this.win.from) ? (shiftKey(this.win.from, si, k) ?? `${si}:1`) : this.win.from;
       const to = its(this.win.to) ? shiftKey(this.win.to, si, k) : this.win.to;
-      if ((this.win.from != null && from == null) || (this.win.to != null && to == null)) this.win.reset();
+      if (this.win.to != null && to == null) this.win.reset();
       else { this.win.from = from; this.win.to = to; this.win.at = null; }
     }
     this.rowsKey = null;
@@ -3039,7 +3043,7 @@ export default class Threads extends View {
     this.cutKept = null;
     for (const k of [...this.calls.keys()]) if (k.startsWith(`${s.file}#`)) this.calls.delete(k);
     for (const e of this.outEds?.values() ?? []) this.letGoEditor(e);
-    this.outEds?.clear();
+    this.outEds = null;
     this.restart(s, true);
   }
 
@@ -6563,6 +6567,8 @@ export default class Threads extends View {
     // stopped between the two left the mark with no timer to clear it.
     cx.timer.after(0, (cx) => {
       this.outNext = false;
+      // A refusal since the timer was asked for let go of the editors: none is made again.
+      if (this.outEds !== eds || this.refusedNow()) return;
       const t = theme();
       for (const [k, w] of want) {
         if (eds.has(k)) continue;

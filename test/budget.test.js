@@ -1370,17 +1370,33 @@ test("a read a /clear supersedes while it applies its chunk lets the older sessi
   const real = performance.now;
   let t = 0;
   let s2 = null;
+  let held = 0;
+  let both = null;
   performance.now = () => (t += 20);
   cx.sleepHook = () => {
     const s = v.current();
     if (!s2 && s?.partial && s.turns.length > 1) {
-      // The agent's /clear, with the window left room for half of what the session holds.
-      measure(s);
-      phantom(BUDGET - windowBytes(v.mem) - Math.floor(v.heldBytes() / 2));
+      // The agent's /clear, its first two turns in, with the window left room for half of what
+      // the two sessions hold.
       s2 = newSession("s2", next);
+      for (let i = 0; i < 2; i++) for (const e of turnEvents(i)) apply(s2, e);
       v.sessions.push(s2);
-      v.topKey = "1:1";
-      v.sel = "1:1";
+      measure(s);
+      measure(s2);
+      phantom(BUDGET - windowBytes(v.mem) - Math.floor(v.heldBytes() / 2));
+      held = v.heldBytes();
+      // The rows of both sessions, the older one's above, and a reader up in the list on the
+      // newer session's second turn: the rows that go above it would move it.
+      v.rows();
+      both = [v.baseRows?.some((r) => r.si === 0 && r.turn), v.baseRows?.some((r) => r.si === 1 && r.turn?.n === 2)];
+      v.follow = false;
+      v.toBottom = false;
+      v.scrollTo = null;
+      v.topKey = "1:2";
+      v.sel = "1:2";
+      // The row window from the older session's first turn, which goes, to the newer one's.
+      v.win.from = "0:1";
+      v.win.to = "1:2";
     }
     return new Promise((r) => setTimeout(r, 0));
   };
@@ -1389,14 +1405,19 @@ test("a read a /clear supersedes while it applies its chunk lets the older sessi
     await new Promise((r) => setTimeout(r, 50));
   } finally { performance.now = real; cx.sleepHook = null; }
   const [s] = v.sessions;
+  expect(both).toEqual([true, true]);
   expect(s.partial).toBe(true);
   expect(tailOf(s)).not.toBeNull();
-  expect(v.heldBytes()).toBeLessThanOrEqual(BUDGET - windowBytes(v.mem));
+  expect(v.heldBytes()).toBeLessThan(held);
   expect(v.mem.bytes).toBe(v.heldBytes());
-  // The newer session's keys and place are as they were.
-  expect(v.topKey).toBe("1:1");
-  expect(v.sel).toBe("1:1");
+  // The newer session's keys and place are as they were: the list goes back to its top row,
+  // and its rows stay in the window, from the older session's first kept turn.
+  expect(v.topKey).toBe("1:2");
+  expect(v.sel).toBe("1:2");
+  expect(v.scrollTo).toEqual({ key: "1:2", how: "top" });
+  expect([v.win.from, v.win.to]).toEqual(["0:1", "1:2"]);
   expect(v.current()).toBe(s2);
+  expect(s2.turns.length).toBe(2);
   expect(() => v.render(cx)).not.toThrow();
 }, 20000);
 
@@ -1502,6 +1523,12 @@ test("a side pane that refuses a session it has read lets go of everything built
   expect(reply).toContain("QZREPLYMARK");
   expect(v.linkedSegs(`0:${last.n}`, [{ kind: "md", text: reply }])).not.toBeNull();
   v.mdHeight(reply);
+  // The other caches of the session's text: a call's input and output and its output's
+  // editor, the running answer's cut, and the loading state's newest prompt.
+  v.calls.set(`${file}#toolu_mark`, { st: "ok", input: `${markP(0)} input`, out: `${markR(0)} output`, ver: s.version });
+  v.outEds = new Map([[`cout:0:${last.n}:0:0`, { st: false, text: `${markR(0)} output` }]]);
+  v.cutKept = { key: `0:${last.n}`, text: reply, ver: "", segs: [{ kind: "md", text: reply }], cut: [], left: 0 };
+  v.opening = { ...(v.opening ?? { list: v.sessions, at: Date.now(), painted: true, done: true, pct: null, peek: false, v: null, stats: null, mtime: null }), newest: { text: `${markP(0)} newest`, ts: null } };
   const marked = (x) => typeof x === "string" && (x.includes("QZPROMPTMARK") || x.includes("QZREPLYMARK"));
   // Whether x reaches one of the session's turns before the refusal, or a string made from
   // its text, through Maps (keys too), Sets, arrays and own values (the sessions themselves
@@ -1523,5 +1550,9 @@ test("a side pane that refuses a session it has read lets go of everything built
   expect(v.refused?.file).toBe(file);
   expect(s.turns.length).toBe(0);
   expect(holding()).toEqual([]);
+  expect(v.calls.has(`${file}#toolu_mark`)).toBe(false);
+  expect(v.outEds).toBeNull();
+  expect(v.cutKept).toBeNull();
+  expect(v.opening.newest).toBeNull();
   expect(() => v.render(cx)).not.toThrow();
 }, 20000);
