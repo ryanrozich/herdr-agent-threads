@@ -208,14 +208,21 @@ export function joinWindow(pane, kind) {
   w.panes.add(e);
   return e;
 }
+// A pane that leaves lets go of the sessions it held: the last holder of one empties it.
 export function leaveWindow(e) {
   const w = windowState();
   w.panes.delete(e);
   dropRead(e);
+  for (const r of [...(w.shared?.values() ?? [])]) if (r.holders.has(e)) letSession(e, r.s);
 }
+// The window's estimate: each shared session once, at BASE plus its holders' views, and the
+// bytes of any entry that holds none (a test's stand-in). except: a pane, whose sessions (with
+// every other pane's view of them) are left out.
 export function windowBytes(except = null) {
   let n = 0;
-  for (const e of windowState().panes) if (e !== except) n += e.bytes;
+  const w = windowState();
+  for (const e of w.panes) if (e !== except && !e.shares) n += e.bytes;
+  for (const r of w.shared?.values() ?? []) if (!(except && r.holders.has(except)) && liveHolders(r).length) n += sessionBytes(r.s, weightOf(r));
   return n;
 }
 // On each pane's 1 s timer: a pane collected with no close() (a WeakRef that comes back empty)
@@ -329,3 +336,87 @@ export function dropRead(e, gen = null) {
   if (w.lock?.e === e && (gen == null || w.lock.gen === gen)) w.lock = null;
   if (gen == null) w.queue = w.queue.filter((x) => x.e !== e);
 }
+
+// ---- one copy of a session per window ---------------------------------------------------------
+
+// The panes of a window that show one transcript share one session object: one pane reads it
+// (claimRead), the others follow its turns and keep only their own view of them (rows, keys,
+// scroll). The weights split in two: what the session itself holds, counted once however many
+// panes show it (BASE_WEIGHT, about a Pinned pane's, whose own rows are few), and what each pane
+// builds on it (VIEW_WEIGHT). One pane on a session weighs what it did: BASE + VIEW = PANE_WEIGHT.
+export const BASE_WEIGHT = 4;
+export const VIEW_WEIGHT = Object.freeze(Object.fromEntries(Object.entries(PANE_WEIGHT).map(([k, w]) => [k, +(w - BASE_WEIGHT).toFixed(2)])));
+// Each shared session's record: { key, s, holders: Set of registry entries, reader: { e, gen } }.
+const SHARE = new WeakMap();
+function records() {
+  const w = windowState();
+  if (!w.shared) w.shared = new Map();
+  return w.shared;
+}
+// The holders still in the registry (one a test or a replaced registry dropped is not).
+const liveHolders = (r) => { const p = windowState().panes; return [...r.holders].filter((h) => p.has(h)); };
+const weightOf = (r) => BASE_WEIGHT + liveHolders(r).reduce((n, h) => n + (VIEW_WEIGHT[h.kind] ?? VIEW_WEIGHT.chat), 0);
+// The session for (id, file) in the window: the one another pane holds, or make()'s, now held by
+// entry e too. With no entry (a pane outside the registry), make()'s, unshared.
+export function holdSession(e, id, file, make) {
+  if (!e) return make();
+  const m = records();
+  const key = `${id}\n${file}`;
+  let r = m.get(key);
+  if (r) for (const h of [...r.holders]) if (!windowState().panes.has(h)) r.holders.delete(h);
+  if (!r?.holders.size) {
+    r = { key, s: make(), holders: new Set(), reader: null };
+    m.set(key, r);
+    SHARE.set(r.s, r);
+  }
+  r.holders.add(e);
+  e.shares = true;
+  return r.s;
+}
+// Entry e lets go of s; the last holder empties it (gut). True when it was emptied.
+export function letSession(e, s) {
+  const r = SHARE.get(s);
+  if (!r) { gut(s); return true; }
+  r.holders.delete(e);
+  if (r.reader?.e === e) r.reader = null;
+  if (r.holders.size) return false;
+  if (records().get(r.key) === r) records().delete(r.key);
+  SHARE.delete(s);
+  gut(s);
+  return true;
+}
+// Whether a pane other than entry e still holds s.
+export const heldElsewhere = (s, e = null) => { const r = SHARE.get(s); return Boolean(r) && [...r.holders].some((h) => h !== e); };
+// The panes that hold s (live, not emptied), or none for a session not shared.
+export function sharers(s) {
+  const r = SHARE.get(s);
+  if (!r) return [];
+  const out = [];
+  for (const h of liveHolders(r)) { const p = deref(h); if (p && !p.forgotten) out.push(p); }
+  return out;
+}
+// Whether a Chat holds s: past the budget a Chat keeps the newest turns (trim), side panes
+// alone let it go (refuse).
+export const chatHolds = (s) => { const r = SHARE.get(s); return Boolean(r) && liveHolders(r).some((h) => h.kind === "chat"); };
+// The weight s is counted at: BASE plus each holder's view; w for a session not shared.
+export const shareWeight = (s, w) => { const r = SHARE.get(s); return r && liveHolders(r).length ? weightOf(r) : w; };
+// What s holds, with every pane's view of it.
+export const sharedBytes = (s, w) => sessionBytes(s, shareWeight(s, w));
+// The read of s: one pane at a time. False while another pane in the registry reads it; else
+// this read (gen) of entry e is its reader until releaseRead.
+export function claimRead(e, s, gen) {
+  const r = SHARE.get(s);
+  if (!r || !e) return true;
+  const cur = r.reader;
+  if (cur && cur.e !== e && windowState().panes.has(cur.e) && r.holders.has(cur.e) && !deref(cur.e)?.forgotten) return false;
+  r.reader = { e, gen };
+  return true;
+}
+export function releaseRead(e, s, gen = null) {
+  const r = SHARE.get(s);
+  if (r?.reader?.e === e && (gen == null || r.reader.gen === gen)) r.reader = null;
+}
+// The pane reading s, or null.
+export const readerOf = (s) => { const r = SHARE.get(s); return r?.reader ? (deref(r.reader.e) ?? null) : null; };
+// For the debug report: how many panes hold s.
+export const holdersOf = (s) => { const r = SHARE.get(s); return r ? liveHolders(r).length : 0; };

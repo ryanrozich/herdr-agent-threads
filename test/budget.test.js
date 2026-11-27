@@ -260,6 +260,9 @@ test("a Pinned pane on a session too large for the window reads none of it and s
   const chat = openPane(file);
   await settle(chat.v);
   expect(chat.v.current().turns.length).toBe(60);
+  // A Pinned pane beside the Chat shares its copy (test/share.test.js): the Chat closes, and
+  // its estimate of the file stays for the Pinned pane to judge by.
+  chat.v.close();
   // The Chat's estimate of the file, at the Pinned pane's weight: half of it is left.
   const needs = fileBytes(file, PANE_WEIGHT.pinned);
   expect(needs).toBeGreaterThan(0);
