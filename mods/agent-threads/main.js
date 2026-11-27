@@ -150,7 +150,7 @@ const TURN_KEYED_RESET = Object.freeze([
   "tlModel", "tlJob", "tlKeep", "tlHatch", "fillMemo", "bubbleMemo", "mdMemo", "tableMemo", "outEds",
   "codeInfo", "landed", "diagramOpened", "outputOpened", "drawingRow", "drawError", "lastRange",
   "stickyShown", "stickyNow", "buildRail", "railMemo", "dayOfRows", "stickRows", "staleRows", "buildStale", "hoverPin", "unpinDown", "railHover", "railQuiet", "railHeld",
-  "dayAbove", "railSeen", "focusedEd", "ledgerShown", "ledgerJob", "tlFails",
+  "dayAbove", "railSeen", "focusedEd", "ledgerShown", "ledgerJob", "tlFails", "shareSeen",
 ]);
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -2886,6 +2886,8 @@ export default class Threads extends View {
   trimmed(s, k) {
     const si = this.sessions.indexOf(s);
     if (si < 0) return;
+    // What it last saw holds the newest turn's old key (newestSig): seen again from here.
+    this.shareSeen = null;
     if (s === this.current()) this.trimmedCurrent(s, si, k);
     else this.trimmedOlder(s, si, k);
   }
