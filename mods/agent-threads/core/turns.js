@@ -55,7 +55,8 @@ export function newSession(id, file) {
     // its turn.
     calls: new Map(),
     // The loading chart's series (core/burn.js), made at the first timed count or prompt, and
-    // its copy at the last settle (OpenCode).
+    // its copy at the last settle (OpenCode, so about 14 KB there). Kept, and still filled,
+    // after the read ends, though only the loading state draws it.
     burn: null, burnSettled: null,
   };
 }
@@ -467,10 +468,12 @@ function applyOne(s, e) {
       // A task notification that wakes the agent once the row above has ended starts a row of
       // its own: what the agent says then is a reply for the person, so it shows in the Chat
       // (the owner, 21 Nov). One that lands while a row is open still counts on that row.
-      // The loading chart counts each prompt a person typed (core/burn.js).
-      if (e.o === "human" && e.ts) sessionPrompt(s, ms(e.ts));
       if (OWN_ROW.has(e.o) || !cur || (e.o === "task-notification" && !s.open.length)) {
-        clockStart(s, openRow(s, e), e);
+        const row = openRow(s, e);
+        clockStart(s, row, e);
+        // The loading chart counts each prompt a person typed, by the rule "So far" counts
+        // them with (core/burn.js): not an agent's message in their turn, not a command.
+        if (row.sender.kind === "you" && !row.cmd && e.ts) sessionPrompt(s, ms(e.ts));
       } else if (s.open.length) {
         // A notification while the row is open: Claude still owes this row its reply. One
         // that only says a subagent of this session is back (its "n" came just before) is
@@ -541,7 +544,7 @@ function applyOne(s, e) {
       if (e.m) cur.model = e.m;
       // The loading chart (core/burn.js): only what this count adds, since an id can come again
       // (Claude Code streams a message; Codex repeats a count).
-      if (e.ts) sessionTokens(s, ms(e.ts), shortModel(cur.model), fresh(e.u) - (was ? fresh(was) : 0));
+      if (e.ts) sessionTokens(s, ms(e.ts), shortModel(cur.model), freshTokens(e.u) - (was ? freshTokens(was) : 0));
       if (e.e) cur.effort = e.e;
       if (typeof e.a === "string" && e.a) cur.by = e.a;
       if (e.ts) cur.endTs = Date.parse(e.ts);
@@ -673,7 +676,8 @@ export function skipNote(k) {
 
 export function rewindTail(s) {
   s.turns.length = Math.min(s.turns.length, s.settled ?? 0);
-  s.burn = s.burnSettled ? burnCopy(s.burnSettled) : null;
+  // Written over the series in use, so a read with many tails makes no new array each time.
+  s.burn = s.burnSettled ? burnCopy(s.burnSettled, s.burn) : null;
   s.open = [];
   s.seg = null;
   s.pendingCmd = null;
@@ -747,11 +751,11 @@ export function sessionStats(turns) {
   return sumsStats(turnSums(turns));
 }
 
+// A count's tokens as the stats count them: new input, cache writes and output.
+const freshTokens = (u) => (u?.i ?? 0) + (u?.cc ?? 0) + (u?.o ?? 0);
+
 // sessionStats in two steps, so the pane sums the done turns once and only the newest again:
 // turnSums adds turns from..to onto a copy of base, and sumsStats turns the sums into stats.
-// A count's tokens as the stats count them: new input, cache writes and output.
-const fresh = (u) => (u?.i ?? 0) + (u?.cc ?? 0) + (u?.o ?? 0);
-
 export function turnSums(turns, from = 0, to = turns.length, base = null) {
   const a = base ? { ...base } : { tools: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, any: false, context: null, window: null };
   for (let k = from; k < to; k++) {

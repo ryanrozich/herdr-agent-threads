@@ -10,8 +10,8 @@ import { join } from "node:path";
 import { BURN, newBurn, burnTokens, burnPrompt, burnReal, burnAt } from "../mods/agent-threads/core/burn.js";
 import { newSession, apply, rewindTail, sessionStats } from "../mods/agent-threads/core/turns.js";
 import { chartModel, niceTop, fmtTop, fmtPer } from "../mods/agent-threads/chart.js";
-import { openCounts } from "../mods/agent-threads/ui.js";
-import { draw, frame, H, openingPane, settle, setup, until } from "./render-harness.js";
+import { openCounts, openLines } from "../mods/agent-threads/ui.js";
+import { draw, el, frame, H, openingPane, settle, setup, theme, Threads, until } from "./render-harness.js";
 
 setup();
 
@@ -225,7 +225,8 @@ test("an agent whose log has no token counts (Cursor) gets bars of the prompts t
   expect(m.areas).toEqual([]);
   expect(m.bars.length).toBeGreaterThan(10);
   expect(m.top).toMatch(/^top (1|2|5) per \d+ (min|s)$/);
-  for (const r of m.bars) { expect(r.x).toBeLessThanOrEqual(m.readX); expect(r.h).toBeLessThanOrEqual(72); }
+  // No bar reaches past the read edge (0.15: the rounding of its x, its width and the edge).
+  for (const r of m.bars) { expect(r.x + r.w).toBeLessThanOrEqual(m.readX + 0.15); expect(r.h).toBeLessThanOrEqual(72); }
   // Before any prompt: the title, the legend, nothing drawn.
   const none = chartModel(null, { w: 461, prompts: true, agent: "Cursor" });
   expect(none.bars).toEqual([]);
@@ -306,4 +307,193 @@ test("the pane: the chart has its rows from the first paint, fills from the firs
   expect(v.openActive()).toBe(false);
   expect(o.chart).toBeNull();
   H.rec = null;
+});
+
+test("a Cursor bar ends at the read edge, even when the newest prompt starts its group, and stops short of a fold's gap", () => {
+  const t0 = new Date(2026, 10, 20, 9, 0).getTime();
+  // A prompt every 10 min for 5 h: read to the last one, which starts a group of 8 buckets.
+  const b = newBurn();
+  for (let k = 0; k <= 30; k++) burnPrompt(b, t0 + k * 600000);
+  const m = chartModel(b, { w: 461, end: t0 + 10 * HOUR, loaded: false, prompts: true, agent: "Cursor", now: t0 });
+  expect(m.bars.length).toBeGreaterThan(10);
+  for (const r of m.bars) expect(r.x + r.w).toBeLessThanOrEqual(m.readX + 0.15);
+  // Read whole, with a 3 h gap folded inside a group: no bar crosses the gap.
+  const f = newBurn();
+  for (let k = 0; k < 22; k++) burnPrompt(f, t0 + k * 660000);
+  const after = t0 + 21 * 660000 + 3 * HOUR;
+  for (let k = 0; k < 22; k++) burnPrompt(f, after + k * 660000);
+  const g = chartModel(f, { w: 461, end: f.last, loaded: true, prompts: true, agent: "Cursor", now: f.last });
+  expect(g.folds.length).toBe(1);
+  // One fold in 461 px: the gap is 7 px, the mark at its middle.
+  const gap = [g.folds[0] - 3.5, g.folds[0] + 3.5];
+  for (const r of g.bars) expect(r.x + r.w <= gap[0] + 0.15 || r.x >= gap[1] - 0.15).toBe(true);
+});
+
+test("a fold where the clock is on a bucket's edge still starts the next bucket: at the session's start, and twice in a row", () => {
+  const t0 = new Date(2026, 10, 20, 9, 0).getTime();
+  // The second event over 2 h after the first: the first keeps bucket 0 and its own time.
+  const a = newBurn();
+  burnTokens(a, t0, "opus 5.5", 100);
+  burnTokens(a, t0 + 3 * HOUR, "opus 5.5", 200);
+  expect(a.folds[0]).toBe(a.w);
+  expect(burnReal(a, 0)).toBe(t0);
+  expect(a.data[0]).toBe(100);
+  expect(a.data[BURN.COLS]).toBe(200);
+  // The chart starts at the box's left, with the fold's mark.
+  const m = chartModel(a, { w: 461, end: a.last, loaded: true, now: a.last });
+  expect(m.areas[0].fill[0]).toBe(0);
+  expect(m.folds.length).toBe(1);
+  // One event between two gaps (the clock on an edge each time): two folds, each its own bucket.
+  const b = newBurn();
+  const times = [t0, t0 + 600000, t0 + 600000 + 3 * HOUR, t0 + 600000 + 6 * HOUR];
+  times.forEach((t, i) => burnTokens(b, t, "opus 5.5", i + 1));
+  expect(b.folds.length).toBe(4);
+  expect(b.folds[2]).toBeGreaterThan(b.folds[0]);
+  expect(burnReal(b, b.folds[0])).toBe(times[2]);
+  expect(burnReal(b, b.folds[2])).toBe(times[3]);
+  for (const [k, amount] of [[0, 1], [8, 2], [9, 3], [10, 4]]) expect(b.data[k * BURN.COLS]).toBe(amount);
+});
+
+test("everything at one instant: while read, no scale and no legend over nothing; read whole, one bucket wide", () => {
+  const t0 = new Date(2026, 10, 20, 9, 0).getTime();
+  const b = newBurn();
+  burnTokens(b, t0, "opus 5.5", 500);
+  burnTokens(b, t0, "opus 5.5", 300);
+  const reading = chartModel(b, { w: 461, end: t0 + HOUR, loaded: false, now: t0 });
+  expect(reading.top).toBe("");
+  expect(reading.areas).toEqual([]);
+  expect(reading.legend).toEqual([]);
+  const whole = chartModel(b, { w: 461, end: null, loaded: true, now: t0 });
+  expect(whole.top).toMatch(/^top /);
+  expect(whole.areas[0].n).toBe(2);
+  expect(whole.areas[0].fill[2]).toBeGreaterThan(0);
+  expect(whole.areas[0].line).toHaveLength(1);
+  expect(whole.areas[0].line[0]).toHaveLength(4);
+});
+
+test("where Herdr paints paths, the chart is one filled path per area and one stroked per top line, each painted; a failure is logged once", () => {
+  const { b, end } = day();
+  const m = chartModel(b, { w: 461, end, loaded: true, now: end });
+  const inks = Threads.prototype.chartInks.call(null, theme);
+  const builder = (kind, width) => {
+    const ops = [];
+    const pb = {
+      move_to: (x, y) => { ops.push(["M", x, y]); return pb; },
+      line_to: (x, y) => { ops.push(["L", x, y]); return pb; },
+      close: () => { ops.push(["Z"]); return pb; },
+      build: () => Object.freeze({ kind, width, ops }),
+    };
+    return pb;
+  };
+  const kit = { PathBuilder: { fill: () => builder("fill"), stroke: (wd) => builder("stroke", wd) } };
+  const painted = [];
+  const said = [];
+  const log = console.log;
+  const win = globalThis.window;
+  globalThis.window = { paint_path: (path, color) => { painted.push([path, color]); return el; } };
+  console.log = (...a) => said.push(a.join(" "));
+  try {
+    const paints = Threads.prototype.chartPaints.call(null, { m, inks }, 72, kit);
+    const lined = m.areas.filter((a) => a.line.length);
+    expect(m.areas.length).toBe(3);
+    expect(paints).toHaveLength(m.areas.length + lined.length);
+    m.areas.forEach((a, i) => {
+      const [path, color] = paints[i];
+      expect(path.kind).toBe("fill");
+      expect(color).toBe(inks.fill[a.slot]);
+      expect(path.ops[0]).toEqual(["M", a.fill[0], a.fill[1]]);
+      expect(path.ops).toHaveLength(a.fill.length / 2 + 1);
+    });
+    lined.forEach((a, i) => {
+      const [path, color] = paints[m.areas.length + i];
+      expect(path.kind).toBe("stroke");
+      expect(path.width).toBe(1.25);
+      expect(color).toBe(inks.line[a.slot]);
+      expect(path.ops.filter((o) => o[0] === "M")).toHaveLength(a.line.length);
+    });
+    expect(Threads.prototype.chartPainted.call(null, paints, 461, 72)).toHaveLength(paints.length);
+    expect(painted).toEqual(paints);
+    expect(said).toEqual([]);
+    // A wrong call in the paths: the plainer chart, and one line in the log however often.
+    const broken = { PathBuilder: { fill: () => { throw new Error("no fill"); } } };
+    expect(Threads.prototype.chartPaints.call(null, { m, inks }, 72, broken)).toBeNull();
+    expect(Threads.prototype.chartPaints.call(null, { m, inks }, 72, broken)).toBeNull();
+    globalThis.window = { paint_path: () => { throw new Error("no paint"); } };
+    expect(Threads.prototype.chartPainted.call(null, paints, 461, 72)).toEqual([]);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain("loading chart");
+    expect(said[0]).toContain("no fill");
+  } finally {
+    console.log = log;
+    globalThis.window = win;
+  }
+});
+
+test("the totals keep the status line's sum past float32's whole numbers, and an amount too big for float32 stays finite", () => {
+  const t0 = Date.UTC(2026, 10, 20, 9, 0);
+  const b = newBurn();
+  burnTokens(b, t0, "opus 5.5", 2 ** 25);
+  for (let k = 0; k < 10; k++) burnTokens(b, t0, "opus 5.5", 1);
+  expect(b.tot[0]).toBe(2 ** 25 + 10);
+  // A count given again, lower, takes back no more than the bucket holds.
+  burnTokens(b, t0 + 1000, "sonnet 5.5", 50);
+  burnTokens(b, t0 + 1000, "sonnet 5.5", -80);
+  expect(b.tot[1]).toBe(0);
+  const huge = newBurn();
+  burnTokens(huge, t0, "opus 5.5", 1e39);
+  burnTokens(huge, t0 + 60000, "opus 5.5", 1e39);
+  expect(Number.isFinite(huge.data[0])).toBe(true);
+  expect(Number.isFinite(huge.tot[0])).toBe(true);
+  const m = chartModel(huge, { w: 461, end: null, loaded: true, now: t0 });
+  expect(m.top).not.toMatch(/NaN|Infinity/);
+  for (const a of m.areas) for (const x of a.fill) expect(Number.isFinite(x)).toBe(true);
+});
+
+test("a tail read again (OpenCode) writes the settled chart over the series in use, a newer version, so no new array is made", () => {
+  const s = newSession("s", "f");
+  const t0 = Date.UTC(2026, 10, 20, 9, 0);
+  apply(s, { k: "p", o: "human", t: "one", ts: iso(t0) });
+  apply(s, { k: "m", id: "a", m: "glm-5.3", u: { i: 10, o: 10 }, ts: iso(t0 + 1000) });
+  apply(s, { k: "settle" });
+  apply(s, { k: "m", id: "b", m: "glm-5.3", u: { i: 30, o: 70 }, ts: iso(t0 + 61000) });
+  const before = s.burn;
+  const { ver } = before;
+  rewindTail(s);
+  expect(s.burn).toBe(before);
+  expect(s.burn.ver).toBeGreaterThan(ver);
+  expect(s.burn.tot[0]).toBe(20);
+  expect(s.burn).not.toBe(s.burnSettled);
+});
+
+test("the chart's colours stay apart in a theme with no ansi2 or ansi5", () => {
+  const t = { ...theme };
+  delete t.ansi2;
+  delete t.ansi5;
+  const { line } = Threads.prototype.chartInks.call(null, t);
+  expect(new Set(line.slice(0, 4)).size).toBe(4);
+});
+
+test("the loading state's turns row says how many of its turns are the person's prompts, the count under it, since a turn is any row", () => {
+  const base = { offset: 1.24e9, size: 1.7e9, pct: 73, units: "bytes", turns: 375, loaded: false, agent: "Claude Code", prompts: 116, tools: 900, tokens: null, pins: 0, now: Date.UTC(2026, 10, 20) };
+  const L = openLines(base);
+  expect(L[2]).toBe("375 turns so far, 116 of them your prompts");
+  expect(L[6]).toMatch(/^So far: 116 prompts · /);
+  expect(openLines({ ...base, loaded: true })[2]).toBe("375 turns, 116 of them your prompts");
+  // Every turn a prompt, or the prompts not known yet: the turns alone.
+  expect(openLines({ ...base, prompts: 375 })[2]).toBe("375 turns so far");
+  expect(openLines({ ...base, prompts: null })[2]).toBe("375 turns so far");
+  // What each counts, from a read: a typed prompt, an hc report (in the person's own turn
+  // kind), a peer's message and a command are four turns; only the first is a prompt.
+  const s = newSession("s", "f.jsonl");
+  const t0 = Date.UTC(2026, 10, 20, 9, 0);
+  apply(s, { k: "p", o: "human", t: "Sum the cart", ts: iso(t0) });
+  apply(s, { k: "p", o: "human", t: '<hc from="t7 review">The cart test passes</hc>', ts: iso(t0 + 30000) });
+  apply(s, { k: "p", o: "peer", t: "<teammate-message teammate_id=\"rex\">The totals agree</teammate-message>", ts: iso(t0 + 60000) });
+  apply(s, { k: "p", o: "human", cmd: true, t: "/compact", ts: iso(t0 + 120000) });
+  apply(s, { k: "t", t: "Compacted.", ts: iso(t0 + 121000) });
+  const prompts = s.turns.filter((t) => t.sender?.kind === "you" && !t.cmd).length;
+  expect(s.turns.length).toBe(4);
+  expect(prompts).toBe(1);
+  // The chart's prompts (Cursor's bars) count by the same rule.
+  expect(s.burn.tot[BURN.PROMPTS]).toBe(prompts);
 });

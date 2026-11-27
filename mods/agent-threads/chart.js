@@ -73,8 +73,14 @@ export function chartModel(b, { w, h = CHART.H, end = null, loaded = false, prom
     out.top = `top ${top} per ${fmtPer(k * b.w)}`;
     counts.forEach((c, g) => {
       if (!c) return;
-      const x = X(g * k * b.w);
-      out.bars.push({ x: r(x + 0.5), w: r(Math.max(1, k * b.w * sx - 1.5)), h: r((c / top) * h) });
+      const v0 = g * k * b.w;
+      const x = X(v0);
+      // A bar ends short of the read edge while the read goes, and of a fold's gap within it.
+      let end = x + k * b.w * sx - 1;
+      if (!loaded) end = Math.min(end, X(vRead));
+      for (const f of folds) if (f > v0 && f <= v0 + k * b.w) { end = Math.min(end, X(f) - G); break; }
+      const bw = Math.min(Math.max(1, k * b.w * sx - 1.5), end - x - 0.5);
+      if (bw > 0) out.bars.push({ x: r(x + 0.5), w: r(bw), h: r((c / top) * h) });
     });
   } else {
     // Points: each group's tokens per hour at its middle (the first at the axis's start, the
@@ -87,6 +93,13 @@ export function chartModel(b, { w, h = CHART.H, end = null, loaded = false, prom
     }
     const last = pts.at(-1);
     if (X(vRead) > last.x) pts.push({ x: X(vRead), vals: last.vals });
+    // Everything at one instant (the first count of a read): read whole, it is one bucket wide;
+    // while the read goes there is no width to the left of the read edge, so nothing is drawn
+    // (no scale, no legend) until a second point.
+    if (pts.length === 1) {
+      if (!loaded) return out;
+      pts.push({ x: X(b.w), vals: last.vals });
+    }
     for (const f of folds) {
       if (f > vRead || f <= 0) continue;
       const x1 = X(f) - G;

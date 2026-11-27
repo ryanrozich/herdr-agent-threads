@@ -10,7 +10,7 @@
 // Idle time folds: a gap over BURN.FOLD between two events the chart takes is cut out of the
 // chart's own clock (v, in ms of active time), and the point is kept (folds), so the axis can
 // still name the real time of any point. Up to BURN.FOLDS folds; a gap past them stays in.
-export const BURN = Object.freeze({ N: 256, MODELS: 5, COLS: 7, OTHER: 5, PROMPTS: 6, W0: 75000, FOLD: 2 * 3600000, FOLDS: 64 });
+export const BURN = Object.freeze({ N: 256, MODELS: 5, COLS: 7, OTHER: 5, PROMPTS: 6, W0: 75000, FOLD: 2 * 3600000, FOLDS: 64, MAX: 1e15 });
 
 export function newBurn() {
   return {
@@ -28,14 +28,16 @@ export function newBurn() {
 }
 
 // A copy, for the read that takes the tail again (OpenCode: turns.js settle and rewindTail).
-// into: an earlier copy to write over, so a settle each chunk makes no new array.
+// into: an earlier series to write over, so a settle or a rewind makes no new array; its ver
+// only goes up, so a drawing kept for it is made again.
 export function burnCopy(b, into = null) {
   if (!b) return null;
+  const ver = Math.max(b.ver, into?.ver ?? 0) + 1;
   const c = into ?? newBurn();
   c.t0 = b.t0; c.last = b.last; c.v = b.v; c.w = b.w; c.n = b.n;
   c.folds = b.folds.slice(); c.models = b.models.slice(); c.tot = b.tot.slice();
   c.data.set(b.data);
-  c.ver = b.ver + 1;
+  c.ver = ver;
   return c;
 }
 
@@ -57,8 +59,9 @@ function place(b, t) {
   else if (t > b.last) {
     const gap = t - b.last;
     if (gap > BURN.FOLD && b.folds.length < 2 * BURN.FOLDS) {
-      // The gap is cut, and what comes after it starts a bucket of its own.
-      b.v = Math.ceil(b.v / b.w) * b.w;
+      // The gap is cut, and what comes after it starts the next bucket, so it shares none with
+      // what came before (until a later merge of pairs, which can put the two in one bucket).
+      b.v = (Math.floor(b.v / b.w) + 1) * b.w;
       if (b.v >= b.w * BURN.N) coarsen(b);
       b.folds.push(b.v, t);
     } else b.v += gap;
@@ -81,14 +84,18 @@ function slotOf(b, model) {
 }
 
 // Tokens (new input, cache writes and output, as "So far" counts them) a model used at time t.
-// A negative amount (a count given again, lower) takes back what it can from that bucket.
+// A negative amount (a count given again, lower) takes back what it can from that bucket. An
+// amount past BURN.MAX (a corrupt log) counts as BURN.MAX, so no bucket holds Infinity. The
+// totals add the amount itself, not the bucket's float32 change, so they keep the status
+// line's sum when a bucket grows past float32's whole numbers.
 export function burnTokens(b, t, model, amount) {
   if (!(Number.isFinite(t) && Number.isFinite(amount)) || amount === 0) return;
+  const n = Math.max(-BURN.MAX, Math.min(BURN.MAX, amount));
   const i = place(b, t);
   const k = i * BURN.COLS + slotOf(b, model);
   const was = b.data[k];
-  b.data[k] = Math.max(0, was + amount);
-  b.tot[k % BURN.COLS] += b.data[k] - was;
+  b.data[k] = Math.max(0, was + n);
+  b.tot[k % BURN.COLS] += Math.max(n, -was);
   b.ver++;
 }
 

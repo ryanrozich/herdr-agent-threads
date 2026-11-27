@@ -63,6 +63,14 @@ import * as gpuiKit from "gpui-kit";
 // window() (the platform) is read from the namespace, so a Herdr without it still loads the mod.
 import * as herdrNs from "herdr";
 const PAINT = gpuiKit.PathBuilder?.fill && gpuiKit.Background?.linear_gradient ? gpuiKit : null;
+// The loading chart's paths failed (main.js chartPaints, chartPainted): said once per run, so a
+// wrong call there shows in the log instead of only as the plainer chart.
+let chartPaintSaid = false;
+function chartPaintFailed(what, e) {
+  if (chartPaintSaid) return;
+  chartPaintSaid = true;
+  console.log(`agent-threads: ${what} failed: ${e?.message ?? e}`);
+}
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
@@ -9755,15 +9763,16 @@ export default class Threads extends View {
   // rest, and the accent for prompts; each area is its line's colour, see-through.
   chartInks(t) {
     const dark = (contrast(t.background, "#FFFFFF") ?? 0) > (contrast(t.background, "#000000") ?? 0);
-    const line = [t.accent, t.ansi2 ?? t.accent, t.ansi3 ?? t.working, t.ansi5 ?? t.accent, t.ansi1 && t.ansi3 ? mix(t.ansi1, t.ansi3, 0.5) : t.muted, t.dim, t.accent];
+    const line = [t.accent, t.ansi2 ?? t.done, t.ansi3 ?? t.working, t.ansi5 ?? t.blocked, t.ansi1 && t.ansi3 ? mix(t.ansi1, t.ansi3, 0.5) : t.muted, t.dim, t.accent];
     return { line, fill: line.map((x) => alpha(x, dark ? 0.5 : 0.32)), grid: alpha(t.foreground, dark ? 0.06 : 0.05), axis: alpha(t.foreground, dark ? 0.14 : 0.12), edge: alpha(t.accent, 0.7), fold: t.dim };
   }
   // The painted parts as [path, colour]: one path per area and per top line, the bars as one
   // path, and the fold marks; null where Herdr has no paths (chartBars draws then). The paths
-  // are plain frozen data, kept with the chart; each frame paints them as new elements.
-  chartPaints(c, h) {
+  // are plain frozen data, kept with the chart; each frame paints them as new elements. kit:
+  // gpui-kit's paths (a test gives its own); a failure is logged once and the bars draw.
+  chartPaints(c, h, kit = PAINT) {
     const win = globalThis.window;
-    if (!PAINT || typeof win?.paint_path !== "function") return null;
+    if (!kit || typeof win?.paint_path !== "function") return null;
     const { m, inks } = c;
     const at = (pb, color) => [pb.build(), color];
     const poly = (pb, xy, close) => {
@@ -9774,21 +9783,21 @@ export default class Threads extends View {
     try {
       const out = [];
       for (const a of m.areas) {
-        const f = PAINT.PathBuilder.fill();
+        const f = kit.PathBuilder.fill();
         poly(f, a.fill, true);
         out.push(at(f, inks.fill[a.slot]));
       }
       // Herdr's stroked paths came with its filled ones; an older one without them keeps the areas.
-      const stroke = typeof PAINT.PathBuilder.stroke === "function";
+      const stroke = typeof kit.PathBuilder.stroke === "function";
       for (const a of m.areas) {
         if (!stroke || !a.line.length) continue;
-        const l = PAINT.PathBuilder.stroke(1.25);
+        const l = kit.PathBuilder.stroke(1.25);
         for (const seg of a.line) poly(l, seg, false);
         out.push(at(l, inks.line[a.slot]));
       }
       if (m.bars.length) {
-        const f = PAINT.PathBuilder.fill();
-        const top = PAINT.PathBuilder.fill();
+        const f = kit.PathBuilder.fill();
+        const top = kit.PathBuilder.fill();
         for (const r of m.bars) {
           poly(f, [r.x, h - r.h, r.x + r.w, h - r.h, r.x + r.w, h, r.x, h], true);
           poly(top, [r.x, h - r.h, r.x + r.w, h - r.h, r.x + r.w, h - r.h + 1.25, r.x, h - r.h + 1.25], true);
@@ -9796,12 +9805,13 @@ export default class Threads extends View {
         out.push(at(f, inks.fill[BURN.PROMPTS]), at(top, inks.line[BURN.PROMPTS]));
       }
       if (stroke && m.folds.length) {
-        const l = PAINT.PathBuilder.stroke(1);
+        const l = kit.PathBuilder.stroke(1);
         for (const x of m.folds) { poly(l, [x - 2.5, h + 0.5, x - 0.5, h - 6], false); poly(l, [x + 0.5, h + 0.5, x + 2.5, h - 6], false); }
         out.push(at(l, inks.fold));
       }
       return out;
-    } catch {
+    } catch (e) {
+      chartPaintFailed("the loading chart's paths", e);
       return null;
     }
   }
@@ -9810,7 +9820,8 @@ export default class Threads extends View {
     if (!paints) return [];
     try {
       return paints.map(([path, color]) => div().absolute().top(0).left(0).w(w).h(h + 1).child(win.paint_path(path, color).w(w).h(h + 1)));
-    } catch {
+    } catch (e) {
+      chartPaintFailed("painting the loading chart", e);
       return [];
     }
   }

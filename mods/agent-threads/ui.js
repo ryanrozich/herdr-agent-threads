@@ -3162,7 +3162,10 @@ export function openLines(o) {
   const amount = (x) => (prompts ? openN(x) : kb ? fmtBytes(x) : (x / OPEN_MB).toFixed(1));
   const unit = prompts ? " prompts" : kb ? "" : " MB";
   const read = !(o.size > 0) ? "" : o.offset > 0 && o.pct != null ? `${amount(Math.min(o.offset, o.size))} of ${amount(o.size)}${unit} · ${o.pct}%` : `${amount(o.size)}${unit}`;
-  const turns = o.offset > 0 || o.loaded ? `${openMany(o.turns ?? 0, "turn")}${o.loaded ? "" : " so far"}` : "";
+  // A turn is every row (agents' messages, task notifications, commands too); the prompts
+  // below are only those a person typed, so the row says how many of its turns they are.
+  const mine = o.prompts != null && o.prompts < (o.turns ?? 0) ? `, ${openN(o.prompts)} of them your prompts` : "";
+  const turns = o.offset > 0 || o.loaded ? `${openMany(o.turns ?? 0, "turn")}${o.loaded ? "" : " so far"}${mine}` : "";
   const agent = [o.agent, o.model ? shortModel(o.model) : null].filter(Boolean).join(" · ");
   const active = o.loaded && o.working ? "Working now" : o.active ? `last active ${openWhen(o.active, o.now)}` : null;
   const when = [o.start ? `Started ${openWhen(o.start, o.now)}` : null, active].filter(Boolean).join(" · ");

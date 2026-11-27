@@ -20,7 +20,7 @@ test("opening: every line has its row from the first paint, empty until its figu
     newest: { text: "Turn 1600: check the cart total again", ts: start + 6 * 86400000 } });
   expect(mid.length).toBe(OPEN_ROWS);
   expect(mid[1]).toBe("214.6 of 518.2 MB · 41%");
-  expect(mid[2]).toBe("1,912 turns so far");
+  expect(mid[2]).toBe("1,912 turns so far, 1,804 of them your prompts");
   expect(mid[3]).toBe("Claude Code · opus 5.5");
   expect(mid[4]).toBe(`Started ${openWhen(start, base.now)} · last active ${openWhen(base.now - 12 * 60000, base.now)}`);
   expect(mid[5]).toBe("Spans 6d 5h");
