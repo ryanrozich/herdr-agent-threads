@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.4.0](https://github.com/ryanrozich/herdr-agent-threads/compare/v1.3.0...v1.4.0) (2026-11-27)
+
+
+### Features
+
+* **trajectory:** the timeline across the Trajectory (slice 1) ([#299](https://github.com/ryanrozich/herdr-agent-threads/issues/299)) ([9040628](https://github.com/ryanrozich/herdr-agent-threads/commit/904062841397f9cdba219b8dc1448fc00bdd4da4))
+
+
+### Bug Fixes
+
+* a click on a closed pin or turn opens it when the pointer moves on after the release ([#324](https://github.com/ryanrozich/herdr-agent-threads/issues/324)) ([71092c7](https://github.com/ryanrozich/herdr-agent-threads/commit/71092c7f194773ee3a05b9fabc8ae2de0d601512))
+* end a rows build's slice on time in turns with hundreds of steps ([#330](https://github.com/ryanrozich/herdr-agent-threads/issues/330)) ([0d91e16](https://github.com/ryanrozich/herdr-agent-threads/commit/0d91e1675a709e10a8561ffe4f578bd9327f217b))
+* show a wide table in an open reply whole, not cut on both sides ([#325](https://github.com/ryanrozich/herdr-agent-threads/issues/325)) ([fa6b294](https://github.com/ryanrozich/herdr-agent-threads/commit/fa6b294277a2ecd4d73b7bda4813127d881ca9e6))
+* **tests:** the leftover check and the test cleanup read no process's environment ([#317](https://github.com/ryanrozich/herdr-agent-threads/issues/317)) ([60bf9e5](https://github.com/ryanrozich/herdr-agent-threads/commit/60bf9e5a77237149c8d96d064e0e7a84717713a5))
+* **tests:** the still script's cleanup reads no process's environment ([#320](https://github.com/ryanrozich/herdr-agent-threads/issues/320)) ([8733674](https://github.com/ryanrozich/herdr-agent-threads/commit/8733674fb22fc4d1adb0bd67f6ed98a500d330a2))
+* **threads:** a session past 10,000 rows keeps its Chat list, as a window of rows ([#291](https://github.com/ryanrozich/herdr-agent-threads/issues/291)) ([60f2bf8](https://github.com/ryanrozich/herdr-agent-threads/commit/60f2bf85d39e722b3021f8bc1a4d6b8f684cc169))
+* **threads:** a turn keeps its answer as the reply when more work follows ([#322](https://github.com/ryanrozich/herdr-agent-threads/issues/322)) ([ec80ae1](https://github.com/ryanrozich/herdr-agent-threads/commit/ec80ae1e026c816d2e7639fb2a441bffff75713b))
+* **threads:** a window's Threads panes share one memory budget, so a very large session no longer fills the VM ([#329](https://github.com/ryanrozich/herdr-agent-threads/issues/329)) ([a2b70d7](https://github.com/ryanrozich/herdr-agent-threads/commit/a2b70d7d727ec7a387a813e9e40abf66d356a343))
+
 ## [1.3.0](https://github.com/ryanrozich/herdr-agent-threads/compare/v1.2.0...v1.3.0) (2026-11-25)
 
 

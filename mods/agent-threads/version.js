@@ -1,7 +1,7 @@
 // The mod's version: the last release this copy holds, shown under File on the settings card.
 // The release tool bumps the line below when it cuts a release (the marker at its end), so it
 // is not edited by hand. A later update check can compare VERSION with the latest release.
-export const VERSION = "1.3.0"; // x-release-please-version
+export const VERSION = "1.4.0"; // x-release-please-version
 // The mod's title, as in mod.json.
 export const NAME = "Agent Threads";
 
