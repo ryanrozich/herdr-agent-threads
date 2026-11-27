@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { newSession, apply, parseChunk } from "../mods/agent-threads/core/turns.js";
 import {
-  BUDGET, TIGHT_CHUNK, PANE_WEIGHT, LOCK_STALE, QUEUE_STALE, GHOST_MS, measure, sessionBytes, trim, tailOf, tailNote, droppedOf, gut, windowState,
+  BUDGET, TIGHT_CHUNK, PANE_WEIGHT, LOCK_STALE, QUEUE_STALE, GHOST_MS, measure, sessionBytes, trim, shiftKey, tailOf, tailNote, droppedOf, gut, windowState,
   joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, dropRead, pruneWindow,
 } from "../mods/agent-threads/budget.js";
 import { turnId } from "../mods/agent-threads/pins.js";
@@ -535,9 +535,59 @@ test("a trim with the rows over the row window's stop starts the row window, cap
   expect(n).toBeLessThan(60);
   expect(droppedOf(s)).toBe(60 - n);
   expect({ from: v.win.from, to: v.win.to, at: v.win.at, capKey: v.capKey, viewEndKey: v.viewEndKey }).toEqual({ from: null, to: null, at: null, capKey: null, viewEndKey: null });
-  // Placed again, the range starts at a turn of the tail.
+  // Placed again, with a window smaller than the tail's rows, the range starts at a turn of the
+  // tail and ends at its end.
+  expect(n).toBeGreaterThanOrEqual(2);
+  v.win.cap = { ...v.win.cap, slide: 2, block: 1, stop: 3 };
   v.rows();
+  expect(v.winList().rows.length).toBeGreaterThan(3);
   v.win.place(v.winList(), { tail: true });
-  if (v.win.from != null) expect(v.winList().index.has(v.win.from)).toBe(true);
+  expect(v.win.from).not.toBeNull();
+  expect(v.winList().index.has(v.win.from)).toBe(true);
+  expect(v.findTurn(v.win.from)).not.toBeNull();
   expect(v.win.at.z).toBe(v.winList().rows.length);
+}, 20000);
+
+test("shiftKey: after a trim of k turns, a key of session si names the same turn, a key of a turn that went is null, and other keys stay", () => {
+  expect(shiftKey("0:50", 0, 40)).toBe("0:10");
+  expect(shiftKey("md:0:50:2.1", 0, 40)).toBe("md:0:10:2.1");
+  expect(shiftKey("imgs:md:0:50:1", 0, 40)).toBe("imgs:md:0:10:1");
+  expect(shiftKey("0:50:3", 0, 40)).toBe("0:10:3"); // a code editor's key
+  expect(shiftKey("skip:0:50", 0, 40)).toBe("skip:0:10");
+  expect(shiftKey("0:40", 0, 40)).toBeNull();
+  expect(shiftKey("1:50", 0, 40)).toBe("1:50");
+  for (const k of ["day:0:20261101", "hid:0:300", "skip:0:head", "tail:0", "pins:3", "pday:2", "empty:0", "div:0", "sess:0"]) expect(shiftKey(k, 0, 40)).toBe(k);
+  expect(shiftKey(null, 0, 40)).toBeNull();
+});
+
+test("a trim keeps the selection, the open turns, the reader's place and a pending scroll on the same turns, and drops the ones of turns that went", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 60 });
+  const { v } = openPane(file);
+  await settle(v);
+  const s = v.current();
+  expect(s.turns.length).toBe(60);
+  v.follow = false;
+  v.sel = "0:59";
+  v.open.add("0:59");
+  v.open.add("0:3");
+  v.full.add("l:0:59");
+  v.topKey = "md:0:58:0";
+  v.winSeen = "0:58";
+  v.tsel = "0:59";
+  v.scrollTo = { key: "md:0:59:0", how: "land", or: ["0:3", "0:59"], until: Date.now() + 400 };
+  phantom(BUDGET - 100 * 1024);
+  expect(v.guard(s)).toBe(false);
+  const k = droppedOf(s);
+  expect(k).toBeGreaterThanOrEqual(3);
+  expect(s.turns.length).toBeGreaterThanOrEqual(3); // turns 58 and 59 are in the tail
+  const at = (n) => `0:${n - k}`;
+  expect(v.sel).toBe(at(59));
+  expect(v.findTurn(v.sel).prompt).toStartWith("prompt 59 ");
+  expect([...v.open].sort()).toEqual([at(59)]);
+  expect([...v.full]).toEqual([`l:${at(59)}`]);
+  expect(v.topKey).toBe(`md:${at(58)}:0`);
+  expect(v.findTurn(v.winSeen).prompt).toStartWith("prompt 58 ");
+  expect(v.tsel).toBe(at(59));
+  expect(v.scrollTo).toMatchObject({ key: `md:${at(59)}:0`, how: "land", or: [at(59)] });
 }, 20000);

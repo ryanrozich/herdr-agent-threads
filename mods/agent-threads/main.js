@@ -109,7 +109,7 @@ import("./build.js")
   .then((m) => { built = parseBuild(m?.BUILD) ? m.BUILD : null; })
   .catch(() => { built = null; });
 import { isDiagram, drawDiagram } from "./diagram.js";
-import { BUDGET, TIGHT_CHUNK, PANE_WEIGHT, measure, sessionBytes, forgetSize, trim, tailOf, tailNote, droppedOf, gut, joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, holdRead, dropRead, windowState, pruneWindow } from "./budget.js";
+import { BUDGET, TIGHT_CHUNK, PANE_WEIGHT, measure, sessionBytes, forgetSize, trim, shiftKey, tailOf, tailNote, droppedOf, gut, joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, holdRead, dropRead, windowState, pruneWindow } from "./budget.js";
 // A hot reload evaluates this module again in the same VM, beside the old one, and then
 // replaces every copy: the copies it replaces give back what they hold now (budget.js).
 releaseOlder();
@@ -2743,9 +2743,12 @@ export default class Threads extends View {
     let mine = this.heldBytes();
     if (mine > room) {
       if (this.mem.kind !== "chat") { this.refuse(s); return true; }
-      if (trim(s, room - (mine - sessionBytes(s, w)), w)) {
+      const k = trim(s, room - (mine - sessionBytes(s, w)), w);
+      if (k) {
         // Every turn has a new number: every row and place is built again, and the row window
-        // starts over (its keys hold turn numbers, as in restart).
+        // starts over (its keys hold turn numbers, as in restart and pick). The selection,
+        // the open turns and the reader's place keep their turns (shiftKeys).
+        this.shiftKeys(this.sessions.indexOf(s), k);
         this.dropAnchor();
         this.win.reset();
         this.capKey = null;
@@ -2761,6 +2764,33 @@ export default class Threads extends View {
   }
   // The refusal stands for the session it was made for, not one that came after it.
   refusedNow() { return Boolean(this.refused) && this.refused.file === this.current()?.file; }
+  // After trim() let go of k turns of session si: every key the pane keeps of that session's
+  // turns, rows and parts names the same turn under its new number, and one of a turn that
+  // went is dropped (budget.js shiftKey).
+  shiftKeys(si, k) {
+    const sh = (x) => shiftKey(x, si, k);
+    for (const f of ["sel", "topKey", "winSeen", "placeBase", "pinVisit", "tsel", "tscrollTo"]) if (this[f] != null) this[f] = sh(this[f]);
+    for (const set of [this.open, this.full, this.codeDue, this.liveCode]) {
+      if (!(set instanceof Set)) continue;
+      const was = [...set];
+      set.clear();
+      for (const x of was) { const y = sh(x); if (y != null) set.add(y); }
+    }
+    if (this.code instanceof Map) {
+      const was = [...this.code];
+      this.code.clear();
+      for (const [x, c] of was) {
+        const y = sh(x);
+        if (y != null) this.code.set(y, c);
+        else { if (c.st) c.st.release(); this.editorFocused = false; }
+      }
+    }
+    const to = this.scrollTo;
+    if (to?.key != null) {
+      const key = sh(to.key);
+      this.scrollTo = key == null ? null : { ...to, key, ...(to.or ? { or: to.or.map(sh).filter((x) => x != null) } : {}), ...(to.head != null ? { head: sh(to.head) } : {}) };
+    }
+  }
   paneWeight() { return PANE_WEIGHT[this.mem?.kind ?? "chat"]; }
   heldBytes() { const w = this.paneWeight(); let n = 0; for (const x of this.sessions) n += sessionBytes(x, w); return n; }
   refuse(s) {

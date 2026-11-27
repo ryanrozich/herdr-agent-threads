@@ -135,6 +135,19 @@ export function trim(s, bytes, w) {
   m.dropped += k;
   return k;
 }
+// A pane's key for a row, part or turn after trim(s) let go of k turns of session si: the
+// turn's "si:n" in it (a turn's key, or the first two numbers after a part's prefix, as
+// "md:0:12:3") moves down by k, a key of a turn that went is null, and any other key (another
+// session's, a day band's, the hidden-rows note's, the session's own notes) stays as it is.
+const NOT_A_TURN = /^(day|hid|pday|pins|tail|empty|div|sess):/;
+export function shiftKey(key, si, k) {
+  if (typeof key !== "string" || NOT_A_TURN.test(key)) return key;
+  const m = /(^|:)(\d+):(\d+)(?=:|$)/.exec(key);
+  if (!m || Number(m[2]) !== si) return key;
+  const n = Number(m[3]) - k;
+  if (n < 1) return null;
+  return `${key.slice(0, m.index)}${m[1]}${si}:${n}${key.slice(m.index + m[0].length)}`;
+}
 // { shown, of } for a session trim() cut, else null; and the line the list shows over it.
 export function tailOf(s) {
   const d = META.get(s)?.dropped ?? 0;
