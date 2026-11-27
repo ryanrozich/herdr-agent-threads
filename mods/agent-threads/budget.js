@@ -373,17 +373,19 @@ export function holdSession(e, id, file, make) {
   e.shares = true;
   return r.s;
 }
-// Entry e lets go of s; the last holder empties it (gut). True when it was emptied.
-export function letSession(e, s) {
+// Entry e lets go of s; the last holder empties it (gut), unless empty is false (a pane that
+// moves to another transcript: what it was showing is left to the collector, as before). True
+// when it was emptied.
+export function letSession(e, s, empty = true) {
   const r = SHARE.get(s);
-  if (!r) { gut(s); return true; }
+  if (!r) { if (empty) gut(s); return empty; }
   r.holders.delete(e);
   if (r.reader?.e === e) r.reader = null;
   if (r.holders.size) return false;
   if (records().get(r.key) === r) records().delete(r.key);
   SHARE.delete(s);
-  gut(s);
-  return true;
+  if (empty) gut(s);
+  return empty;
 }
 // Whether a pane other than entry e still holds s.
 export const heldElsewhere = (s, e = null) => { const r = SHARE.get(s); return Boolean(r) && [...r.holders].some((h) => h !== e); };

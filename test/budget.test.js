@@ -403,6 +403,9 @@ test("a refusal is for its session: a new, small session in the same side pane i
   fakeReader({ [file]: 60, [small]: 3 });
   const chat = openPane(file);
   await settle(chat.v);
+  // A Pinned pane beside the Chat shares its copy (test/share.test.js): the Chat closes, and
+  // its estimate of the file stays for the Pinned pane to judge by.
+  chat.v.close();
   phantom(BUDGET - windowBytes() - fileBytes(file, PANE_WEIGHT.pinned) / 2);
   const { v, cx } = openPane(file, { view: "pinned" });
   await until(() => v.refused, "the Pinned pane refusing");

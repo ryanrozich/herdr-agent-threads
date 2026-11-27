@@ -3110,8 +3110,10 @@ export default class Threads extends View {
   // (read): on the newest turn while following, at the bottom as the reply grows, or the new
   // turns noted. True when something moved.
   followShared(cx) {
+    // The launcher, the gallery and the output viewer hold no sessions and no registry entry.
+    if (!this.mem || !this.sessions) return false;
     const s = this.current();
-    if (!s || this.reading || !this.mem || readerOf(s) === this || holdersOf(s) < 2) return false;
+    if (!s || this.reading || readerOf(s) === this || holdersOf(s) < 2) return false;
     const was = this.shareSeen;
     if (was && was.s === s && was.v === s.version && was.off === s.offset && was.n === s.turns.length && was.loaded === Boolean(s.loaded)) return false;
     if (!was || was.s !== s) {
@@ -7814,8 +7816,9 @@ export default class Threads extends View {
     this.win.reset();
     this.capKey = null;
     this.viewEndKey = null;
-    // Each session is let go of: the last pane on one empties it (budget.js letSession).
-    if (this.mem) for (const s of this.sessions) letSession(this.mem, s);
+    // Each session is let go of, not emptied: what still reaches it (a count's progress, a
+    // read in flight) sees it whole, as before it was shared (budget.js letSession).
+    if (this.mem) for (const s of this.sessions) letSession(this.mem, s, false);
     this.sessions = [];
     this.shareSeen = null;
     // What the sessions held leaves the window's estimate now (budget.js).
