@@ -206,6 +206,8 @@ test("a registry entry whose pane was collected with no close() stops counting, 
   expect(windowBytes()).toBe(MiB);
   expect(windowState().panes.has(dead)).toBe(false);
   expect(windowState().panes.has(live)).toBe(true);
+  // A phantom has no evaluation of its own (gen null), so releaseOlder would release it too.
+  leaveWindow(live);
   const old = joinWindow({ forget() { throw new Error("old code"); } }, "chat");
   old.gen = {};
   const keep = old.ref.deref?.() ?? old.ref; // held here, so the WeakRef stays full
