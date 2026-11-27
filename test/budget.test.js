@@ -12,7 +12,7 @@ import {
   joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, dropRead, pruneWindow,
 } from "../mods/agent-threads/budget.js";
 import { turnId } from "../mods/agent-threads/pins.js";
-import { fixture, H, makeCx, modDir, settle, setup, Threads, unsliced, until } from "./render-harness.js";
+import { drawRange, fixture, H, makeCx, modDir, settle, setup, Threads, unsliced, until } from "./render-harness.js";
 
 setup();
 
@@ -830,12 +830,21 @@ test("a trim leaves a person's text alone, \"0:30\" in it or not: the unpin hist
   expect(v.trajNotes).toEqual(["0:5 is not a turn"]);
 }, 20000);
 
-test("while a trim's rebuild runs over several frames, the rows drawn are the tail's, under the new keys, and the window, the jump and the selection land on the same turns once it ends", async () => {
+test("while a trim's rebuild runs over several frames, the rows drawn are the tail's, under the new keys, and the window, the top, the jump and the selection land on the same turns once it ends", async () => {
   const { v, cx, trimNow } = await trimmedLater();
-  v.win.cap = { ...v.win.cap, slide: 20, block: 5, stop: 24 };
+  // Under the tail's 20 turns or more: the rows always have a window.
+  v.win.cap = { ...v.win.cap, slide: 10, block: 3, stop: 12 };
+  // A reader who is not following: the window stays where the jump put it.
+  v.follow = false;
+  v.toBottom = false;
   v.rows();
   v.sel = "0:50";
   const target = v.findTurn("0:50");
+  // Two rows left to be sized again (staleRows): one of a turn the trim lets go (turn 2), one
+  // of turn 50.
+  const stale = [v.baseRows.findIndex((r) => r.turn === v.findTurn("0:2")), v.baseIndex.get("0:50")];
+  expect(stale.every((i) => i >= 0)).toBe(true);
+  v.staleRows = stale;
   // Room for about 60% of the session: a tail of 20 turns or more, so its rows take more than
   // one slice, with turn 50 in it.
   const { k, at } = trimNow(Math.floor(v.mem.bytes * 0.6));
@@ -843,6 +852,8 @@ test("while a trim's rebuild runs over several frames, the rows drawn are the ta
   const s = v.current();
   expect(s.turns.length).toBeGreaterThanOrEqual(20);
   expect(v.sel).toBe(at(50));
+  expect(v.staleRows.map((i) => v.baseRows[i].turn)).toEqual([target]);
+  expect(v.baseSizes.length).toBe(v.baseRows.length);
   v.scrollTo = { key: v.sel, how: "center" };
   // A slice a frame, cut every 16 turns (buildRows).
   v.buildMax = () => 0;
@@ -855,18 +866,72 @@ test("while a trim's rebuild runs over several frames, the rows drawn are the ta
     expect(rows.filter((r) => r.turn && r.si === 0 && !kept.has(r.turn)).length).toBe(0);
     expect(rows.filter((r) => r.turn && r.si === 0 && turnOf(r.key) !== `0:${r.turn.n}`).map((r) => r.key)).toEqual([]);
     expect(rows.every((r, i) => v.baseIndex.get(r.key) === i)).toBe(true);
+    expect(v.baseSizes.length).toBe(rows.length);
     expect(v.baseRows[v.baseIndex.get(v.sel)]?.turn).toBe(target);
   };
-  v.render(cx);
+  // A frame drawn from the selected turn's row down: the list writes the top and the end back.
+  const frame = () => {
+    v.render(cx);
+    const rows = v.rows();
+    const i = rows.findIndex((r) => r.key === v.sel);
+    expect(i).toBeGreaterThanOrEqual(0);
+    drawRange(v, i, Math.min(rows.length, i + 3));
+  };
+  const placed = () => {
+    expect(v.baseRows[v.baseIndex.get(v.topKey)]?.turn).toBe(target);
+    expect(kept.has(v.baseRows[v.baseIndex.get(v.viewEndKey)]?.turn)).toBe(true);
+  };
+  frame();
   expect(v.rowJob).not.toBeNull(); // mid-build: the rows on screen are the ones from before the trim
   agree();
+  placed();
   let frames = 0;
-  while (v.rowJob && frames++ < 100) { v.render(cx); if (v.rowJob) agree(); }
+  while (v.rowJob && frames++ < 100) { frame(); if (v.rowJob) { agree(); placed(); } }
   expect(v.rowJob).toBeNull();
   agree();
-  // The window, placed by the frames mid-build and after, names turns of the tail.
+  placed();
+  // The window, placed by the frames mid-build and after, holds the selected turn and starts
+  // at a turn of the tail.
   const list = v.winList();
-  if (v.win.from != null) expect(v.findTurn(v.win.from)).not.toBeNull();
+  expect(v.win.from).not.toBeNull();
+  expect(kept.has(v.findTurn(v.win.from))).toBe(true);
   expect(v.win.has(list, v.sel)).toBe(true);
   expect(v.findTurn(v.sel)).toBe(target);
 }, 30000);
+
+test("a trim lets go of the closed turns' rows kept for every width, and a closed pane empties them", async () => {
+  const { v, cx, trimNow } = await trimmedLater();
+  v.render(cx);
+  const s = v.current();
+  const oldest = s.turns[0];
+  const holds = (pred) => [...(v.keptBases?.values() ?? [])].some((b) => [...b.rows.values()].some((e) => pred(e.turn) || e.rows.some((r) => pred(r.turn))));
+  // The oldest turn's rows are kept before the trim, which lets that turn go.
+  expect(holds((t) => t === oldest)).toBe(true);
+  const before = [...s.turns];
+  trimNow();
+  const kept = new Set(s.turns);
+  const dropped = before.filter((t) => !kept.has(t));
+  expect(dropped).toContain(oldest);
+  expect(holds((t) => dropped.includes(t))).toBe(false);
+  // Kept again by the next frame, then let go with the pane.
+  v.render(cx);
+  const kb = v.keptBases;
+  const widths = [...kb.values()];
+  expect(widths.some((b) => b.rows.size > 0)).toBe(true);
+  v.forget();
+  expect(kb.size).toBe(0);
+  expect(widths.every((b) => b.rows.size === 0 && b.meas.size === 0)).toBe(true);
+}, 20000);
+
+test("a trim moves the jump a stopped render asks for again (renderWant) with its turn, and resets the day band's place above the window and the rail's seen range", async () => {
+  const { v, cx, trimNow } = await trimmedLater();
+  v.render(cx);
+  v.renderWant = { toBottom: false, scrollTo: { key: "0:50", how: "center", or: ["md:0:50:0"] }, wheels: v.wheelN ?? 0 };
+  v.dayAbove = { base: v.baseRows, ver: v.baseVer ?? 0, at: 3, idx: 0 };
+  v.railSeen = "0:40|0:50";
+  const { k, at } = trimNow(Math.floor(v.mem.bytes * 0.6));
+  expect(k).toBeLessThan(50);
+  expect(v.renderWant.scrollTo).toEqual({ key: at(50), how: "center", or: [`md:${at(50)}:0`] });
+  expect(v.dayAbove).toBeNull();
+  expect(v.railSeen).toBeNull();
+}, 20000);

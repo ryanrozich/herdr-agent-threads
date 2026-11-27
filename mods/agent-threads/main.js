@@ -120,7 +120,8 @@ const READ_TURN_MS = 40;
 // by key; "editors", the code editors by key (one of a turn that went is let go); "rail", the
 // rail's ticks ({ key, turn, ... }), as a new list (the old one may be a build's); a list of
 // props, an object whose props hold keys (or lists of keys), gone when its first prop's turn
-// went unless keep (the object still says something without its turn). lazy: not made by
+// went unless keep (the object still says something without its turn); an object of such
+// props by name, an object holding objects of props (renderWant.scrollTo). lazy: not made by
 // init(). A new field keyed by turn goes here or on TURN_KEYED_RESET: test/budget.test.js
 // fails on a field that holds a key and is on neither. A person's text (pins, notes, what was
 // copied) is on neither: a trim never drops it.
@@ -135,11 +136,12 @@ const TURN_KEYED = Object.freeze([
   ["scrollTo", ["key", "or", "head"], { lazy: true }], ["openWait", ["key"], { lazy: true }], ["pinResume", ["key", "part"]],
   ["outlineBack", ["sel", "top"]], ["flash", ["key"], { lazy: true }], ["railGrow", ["key"], { lazy: true }], ["selEditor", ["key"]],
   ["latestDue", ["sel"], { lazy: true, keep: true }], ["trajFrom", ["turn"], { lazy: true, keep: true }],
+  ["renderWant", { scrollTo: ["key", "or", "head"] }, { lazy: true }],
 ]);
-// Fields keyed by turn that a trim does not move: it starts them over (guard, dropAnchor), or
-// they are built again from the rows (the trim starts a new build) or the pins, or checked
-// against what they were made from (a signature), or only read by the debug report, or a
-// hover's.
+// Fields keyed by turn that a trim does not move: it starts them over (guard, dropAnchor,
+// dropBuilt), or they are built again from the rows (the trim starts a new build; the rows on
+// screen until then are moved by shiftRows) or the pins, or checked against what they were
+// made from (a signature, a version), or only read by the debug report, or a hover's.
 const TURN_KEYED_RESET = Object.freeze([
   "capKey", "viewEndKey", "anchor", "rowsKey", "rowBuild", "rowJob", "win", "pinKeys", "pinTurns", "pinMemo", "pinMemoKey",
   "baseRows", "baseIndex", "baseSizes", "rowsMemo", "slotsMemo", "indexedRows", "fitKey", "capSpan", "capLaid", "countsKey", "countsMemo",
@@ -147,6 +149,7 @@ const TURN_KEYED_RESET = Object.freeze([
   "tlModel", "tlJob", "tlKeep", "tlHatch", "fillMemo", "bubbleMemo", "mdMemo", "tableMemo", "outEds",
   "codeInfo", "landed", "diagramOpened", "outputOpened", "drawingRow", "drawError", "lastRange",
   "stickyShown", "stickyNow", "buildRail", "railMemo", "dayOfRows", "stickRows", "staleRows", "buildStale", "hoverPin", "unpinDown", "railHover", "railQuiet", "railHeld",
+  "dayAbove", "railSeen",
 ]);
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -1409,7 +1412,7 @@ export default class Threads extends View {
     if (this.mem) leaveWindow(this.mem);
     // The sessions first: they are what the memory is, whatever the calls below do.
     for (const s of this.sessions ?? []) gut(s);
-    try { this.dropCode(); this.endSelect(); } catch { /* half-made pane */ }
+    try { this.dropKept(); this.dropCode(); this.endSelect(); } catch { /* half-made pane */ }
     for (const k of Object.keys(this)) delete this[k];
     this.forgotten = true;
   }
@@ -2783,6 +2786,7 @@ export default class Threads extends View {
         // the open turns and the reader's place keep their turns (shiftKeys).
         this.shiftKeys(this.sessions.indexOf(s), k);
         this.shiftRows(s, this.sessions.indexOf(s), k);
+        this.dropBuilt();
         this.dropAnchor();
         this.win.reset();
         this.capKey = null;
@@ -2802,6 +2806,11 @@ export default class Threads extends View {
   // under its new number, and a key of a turn that went is dropped (budget.js shiftKey).
   shiftKeys(si, k) {
     const sh = (x) => shiftKey(x, si, k);
+    const props = (v, how, opt) => {
+      const out = { ...v };
+      for (const p of how) out[p] = Array.isArray(v[p]) ? v[p].map(sh).filter((x) => x != null) : sh(v[p]);
+      return !opt?.keep && v[how[0]] != null && out[how[0]] == null ? null : out;
+    };
     const ed = this.selEditor;
     for (const [f, how, opt] of TURN_KEYED) {
       const v = this[f];
@@ -2823,10 +2832,11 @@ export default class Threads extends View {
           // A code editor of a turn that went is let go, as dropCode does.
           else if (how === "editors") { if (c?.st) c.st.release(); this.editorFocused = false; }
         }
-      } else {
+      } else if (Array.isArray(how)) this[f] = props(v, how, opt);
+      else {
         const out = { ...v };
-        for (const p of how) out[p] = Array.isArray(v[p]) ? v[p].map(sh).filter((x) => x != null) : sh(v[p]);
-        this[f] = !opt?.keep && v[how[0]] != null && out[how[0]] == null ? null : out;
+        for (const [p, h] of Object.entries(how)) if (v[p] != null) out[p] = props(v[p], h);
+        this[f] = out;
       }
     }
     // The Select view is one turn's editor and that turn's key: both moved, or the view ends
@@ -2839,7 +2849,7 @@ export default class Threads extends View {
   // so what is drawn agrees with every key the pane keeps, and a frame mid-build (winPlace, the
   // list) writes keys back in the new numbering. With no rows at all, those frames would draw
   // an empty list. A row's only keys are key and turnKey; its turn's number is read from the
-  // turn (turnKeyOf).
+  // turn (rowTurnKey).
   shiftRows(s, si, k) {
     const rows = this.baseRows;
     if (!rows?.length) return;
@@ -2868,6 +2878,35 @@ export default class Threads extends View {
     this.rowsLog = null;
     this.probeList();
     this.fitKey = null;
+  }
+  // What a trim leaves holding the rows or turns from before it, besides the rows on screen
+  // (shiftRows): the memos of the list as fitted and of the day bands, a build's rail and new
+  // kept rows, the closed turns' rows kept per width (dropKept), the status and usage marks and
+  // the rail's reply. Each is made again from the rows or the session on the next frame. The
+  // rail's ticks (railMemo) are read by handlers between frames: they go when the next frame
+  // makes them again from the moved railTurns.
+  dropBuilt() {
+    this.dropKept();
+    this.rowsMemo = null;
+    this.slotsMemo = null;
+    this.indexedRows = null;
+    this.stickRows = null;
+    this.dayOfRows = null;
+    this.dayOf = null;
+    this.dayAbove = null;
+    this.stickyNow = null;
+    this.railSeen = null;
+    this.buildRail = null;
+    this.cacheNew = [];
+    this.statusMemo = null;
+    this.usageMemo = null;
+    this.railReplyMemo = null;
+  }
+  // The closed turns' rows kept per width (keptFor), emptied in place: a width not drawn since
+  // would keep the turns a trim let go, or a closed pane's, for as long as it is kept.
+  dropKept() {
+    for (const k of this.keptBases?.values() ?? []) { k.rows.clear(); k.meas.clear(); }
+    this.keptBases?.clear();
   }
   // For the tests that every field keyed by turn is on a list.
   turnKeyed() { return { moved: TURN_KEYED, reset: TURN_KEYED_RESET }; }
