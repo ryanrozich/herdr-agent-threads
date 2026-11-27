@@ -294,7 +294,7 @@ export function sweepGhosts(e, now = Date.now()) {
 // A read holds the window's turn while it runs the extractor and applies the chunk; others wait
 // in order. A turn not renewed for LOCK_STALE (past the extractor's own 30 s stall) is taken as
 // dead, and a waiter that stopped asking for QUEUE_STALE leaves the line. A turn whose extractor
-// is still running (holdRead with exec) is never taken for dead, as after a computer's sleep: the
+// is still running (holdRead with inCall) is never taken for dead, as after a computer's sleep: the
 // reading pane's own watch (main.js watchRead, EXEC_STALL) lets it go if the call never ends,
 // and a pane that leaves the window lets it go too (leaveWindow).
 export const LOCK_STALE = 35000;
@@ -304,7 +304,7 @@ export function takeRead(e, gen, now = Date.now()) {
   // A pane of a registry that was replaced (another layout's, a test's) is not held up.
   if (!w.panes.has(e)) return true;
   if (w.lock?.e === e) { w.lock = { e, gen, at: now }; return true; }
-  if (w.lock && !w.lock.exec && now - w.lock.at > LOCK_STALE) w.lock = null;
+  if (w.lock && !w.lock.inCall && now - w.lock.at > LOCK_STALE) w.lock = null;
   let q = w.queue.find((x) => x.e === e);
   if (q) q.at = now;
   else w.queue.push((q = { e, at: now }));
@@ -316,12 +316,12 @@ export function takeRead(e, gen, now = Date.now()) {
 }
 // A read still at work (its heartbeat) keeps its turn fresh, so a long extractor call and the
 // apply and measure after it are not taken for a dead turn (LOCK_STALE).
-// exec: whether its extractor call is in flight now (left as it was when not given).
-export function holdRead(e, gen, now = Date.now(), exec) {
+// inCall: whether its extractor call is in flight now (left as it was when not given).
+export function holdRead(e, gen, now = Date.now(), inCall) {
   const w = windowState();
   if (w.lock?.e !== e || w.lock.gen !== gen) return;
   w.lock.at = now;
-  if (exec != null) w.lock.exec = exec;
+  if (inCall != null) w.lock.inCall = inCall;
 }
 // gen: only that read's turn (null: whatever the pane holds or waits for).
 export function dropRead(e, gen = null) {

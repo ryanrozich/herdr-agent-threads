@@ -2713,7 +2713,7 @@ export default class Threads extends View {
               // Superseded (a /clear, a retry) with the chunk applied: its turns are counted
               // all at once before the read ends, as the session stays in the pane's sum
               // (heldBytes). It applies nothing more.
-              if (!live()) { measure(s); return; }
+              if (!live()) { if (this.sessions?.includes(s)) measure(s); return; }
               beat();
             }
             if (this.guard(s)) return;
@@ -2806,7 +2806,8 @@ export default class Threads extends View {
         // before the keys move and the anchor goes (dropAnchor).
         const stay = !this.follow && !this.toBottom && !this.scrollTo && !this.anchor && !this.anchorDue;
         this.shiftKeys(this.sessions.indexOf(s), k);
-        if (stay && this.topKey) this.scrollTo = { key: this.topKey, how: "top" };
+        // The top row's turn went: the tail's first turn is at the top now.
+        if (stay) this.scrollTo = { key: this.topKey ?? `${this.sessions.indexOf(s)}:1`, how: "top" };
         this.shiftRows(s, this.sessions.indexOf(s), k);
         this.dropBuilt();
         this.dropAnchor();

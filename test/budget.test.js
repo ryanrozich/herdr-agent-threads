@@ -1215,6 +1215,20 @@ test("a trim keeps a reader's place who is not following: a jump to the top row 
   expect(v.scrollTo).toEqual({ key: at(58), how: "top" });
 }, 20000);
 
+test("a trim that lets go of the top row's turn puts the tail's first turn at the top for a reader who is not following", async () => {
+  const { v, trimNow } = await trimmedLater();
+  v.rows();
+  v.follow = false;
+  v.toBottom = false;
+  v.scrollTo = null;
+  v.anchor = null;
+  v.anchorDue = false;
+  v.topKey = "md:0:2:0";
+  trimNow();
+  expect(v.topKey).toBeNull();
+  expect(v.scrollTo).toEqual({ key: "0:1", how: "top" });
+}, 20000);
+
 test("a trim that lets go of a code editor without the keyboard leaves the one that has it", async () => {
   const { v, trimNow } = await trimmedLater();
   const ed = () => { const e = { handlers: {}, released: 0, on(n, f) { this.handlers[n] = f; }, release() { this.released++; } }; return e; };
