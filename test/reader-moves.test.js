@@ -75,7 +75,7 @@ test("a key goes through the same count: j once, and a key with no action not at
 // the Trajectory's turn. Its other keys move the Trajectory's own list.
 const LEDGER = {
   lprev: 0, lnext: 0, lfirst: 0, llast: 0, ldetail: 0, lfail: 0, lfailBack: 0, luser: 0, luserBack: 0,
-  trajectory: 1, escape: 1, focus: 0, settings: 0, keys: 0, narrower: 0, wider: 0,
+  trajectory: 1, escape: 1, focus: 0, settings: 0, keys: 0, narrower: 0, wider: 0, timeline: 0,
 };
 const RING = { next: 0, back: 0, press: 0 };
 const CARD = { down: 0, up: 0, pagedown: 0, pageup: 0, home: 0, end: 0 };
@@ -87,6 +87,15 @@ function allKeys() {
 const label = (e) => `${e.modifiers.shift ? "shift-" : ""}${e.key}`;
 // What a key that goes on to keyAction counts (the first walk's rows).
 const onward = (v, e) => { const n = keyAction(e, v.filtering, v.quoteKey); return n ? ACTIONS[n] ?? `no row for ${n}` : 0; };
+// The Trajectory in the Chat's own pane at 800 px: y shows it there under the split width, and
+// the pane is then made wider (from 480 px, y opens the Trajectory's own pane instead).
+function wideTraj(v, cx) {
+  v.paneW = 400;
+  v.width = 400;
+  if (!v.traj) v.action("trajectory", cx);
+  v.paneW = 800;
+  v.width = 800;
+}
 const BEFORE = {
   // The plain list, nothing open: every key goes through key() to keyAction, so a key key()
   // takes on its own in the list only is walked too.
@@ -99,6 +108,18 @@ const BEFORE = {
   trajectory: {
     enter: (v, cx) => { v.paneW = 400; v.width = 400; v.action("trajectory", cx); v.tdetail = false; },
     check: (v) => v.traj && !v.trajPane,
+    want: (_v, e) => { const n = ledgerKey(e); return n ? LEDGER[n] ?? `no row for ${n}` : 0; },
+  },
+  // The same from 540 px, with the timeline shown, then with it hidden: b has something to do
+  // only there (under 540 px it passes on).
+  timeline: {
+    enter: (v, cx) => { wideTraj(v, cx); v.tdetail = false; v.tlHidden = false; },
+    check: (v) => v.traj && !v.trajPane && v.tlShown(),
+    want: (_v, e) => { const n = ledgerKey(e); return n ? LEDGER[n] ?? `no row for ${n}` : 0; },
+  },
+  timelineHidden: {
+    enter: (v, cx) => { wideTraj(v, cx); v.tdetail = false; v.tlHidden = true; },
+    check: (v) => v.traj && !v.trajPane && v.tlCan() && !v.tlShown(),
     want: (_v, e) => { const n = ledgerKey(e); return n ? LEDGER[n] ?? `no row for ${n}` : 0; },
   },
   // The settings card, its ring on nothing and then on its first control that is not a field.
@@ -194,6 +215,12 @@ const HANDLERS = [
   ["on_click", /^th-traj-chat$/, 1, PRESS],
   ["on_click", /^th-traj-fail-(prev|next)$/, 0, PRESS],
   ["on_item_click", /^tr:N:N:N$/, 0, "item"],
+  // From 540 px: its filter buttons, the timeline's button, and a press on the timeline's
+  // lanes (24 px down, in the middle lane of their 48), which selects a row as a press on the
+  // row does. They move nothing of the Chat's.
+  ["on_click", /^th-filter-(failed|user|input|model|tools)$/, 0, PRESS],
+  ["on_click", /^th-traj-timeline$/, 0, PRESS],
+  ["on_mouse_down", /^th-tl-lanes$/, 0, { local_position: { x: 120, y: 24 } }],
   // The keys sheet: its close, its scrim and the sheet itself.
   ["on_click", /^th-keys(-close|-scrim)?$/, 0, PRESS],
   ["on_scroll_wheel", /^th-keys-scrim$/, 0, WHEEL],
@@ -261,6 +288,13 @@ const STATES = {
   trajectory: (v, cx) => v.action("trajectory", cx),
   // The Trajectory in this pane at its compact width: its Chat button is an icon.
   trajIcon: { enter: (v, cx) => { v.paneW = 150; v.width = 150; v.action("trajectory", cx); }, check: (v) => v.traj && trajCompact(v.trajPx()) != null },
+  // The Trajectory in this pane from 540 px, with the timeline shown (the strip built), then
+  // hidden: its button in both, and its lanes.
+  timeline: {
+    enter: (v, cx) => { wideTraj(v, cx); v.tlHidden = false; for (let k = 0; k < 50 && (k === 0 || v.tlJob || v.tlWait); k++) v.render(cx); },
+    check: (v) => v.traj && v.tlShown() && Boolean(v.tlModel) && !v.tlWait,
+  },
+  timelineHidden: { enter: (v, cx) => { wideTraj(v, cx); v.tlHidden = true; }, check: (v) => v.traj && v.tlCan() && !v.tlShown() },
   // A search kept with its field shown and not typing in: a press on the field takes the
   // typing back.
   kept: { enter: (v, cx) => { v.action("search:Turn", cx); v.filtering = false; }, check: (v) => Boolean(v.query) && !v.filtering },

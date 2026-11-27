@@ -218,12 +218,36 @@ export function reset() {
   for (const k of Object.keys(hostReads)) hostReads[k] = 0;
   for (const k of Object.keys(work)) work[k] = 0;
 }
+// gpui-kit's stand-in. With paint (paintKit(true)), a Herdr that paints paths: PathBuilder's
+// fill and stroke keep each call as [name, ...args] in the built path's cmds, and
+// window.paint_path keeps [path, color] in painted. Without (setup leaves it so), no
+// PathBuilder or Background, so the code takes its divs. The two names are always there, so
+// a later stand-in reaches code that imported the module as a namespace.
+export const painted = [];
+let windowWas;
+export function paintKit(on) {
+  const builder = (kind, ...args) => {
+    const cmds = [[kind, ...args]];
+    const b = { move_to: (...a) => { cmds.push(["move_to", ...a]); return b; }, line_to: (...a) => { cmds.push(["line_to", ...a]); return b; }, close: () => { cmds.push(["close"]); return b; }, build: () => ({ cmds }) };
+    return b;
+  };
+  mock.module("gpui-kit", () => ({
+    View: class {}, div: () => el, svg: (p) => { if (rec) rec.push(["svg", p]); return el; }, image: () => el,
+    PathBuilder: on ? { fill: () => builder("fill"), stroke: (w) => builder("stroke", w) } : undefined,
+    Background: on ? { linear_gradient: (...a) => ({ gradient: a }), stop: (...a) => ({ stop: a }) } : undefined,
+  }));
+  painted.length = 0;
+  if (on) {
+    windowWas = globalThis.window;
+    globalThis.window = { paintKit: true, paint_path: (path, color) => { painted.push([path, color]); return el; } };
+  } else if (globalThis.window?.paintKit) globalThis.window = windowWas;
+}
 // The module stand-ins for gpui-kit, gpui-base and Herdr, and the settings reset. Installed
 // here before main.js is imported, and again by each test file as it starts: another file may
 // have put its own stand-ins in, or left settings behind.
 export function setup() {
   reset();
-  mock.module("gpui-kit", () => ({ View: class {}, div: () => el, svg: (p) => { if (rec) rec.push(["svg", p]); return el; }, image: () => el }));
+  paintKit(false);
   mock.module("gpui-base", () => ({
     v_flex: () => el, h_flex: () => el,
     InputState: { new: () => { const st = { handlers: {}, text: "", on(ev, f) { st.handlers[ev] = f; return true; }, value: () => st.text, set_value(x) { st.text = x; }, focus() {} }; return st; } },

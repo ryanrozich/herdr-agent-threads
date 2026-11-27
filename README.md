@@ -78,7 +78,7 @@ Press `p` to pin a turn. Your pins show in a column beside the list, oldest firs
 
 ### See what the agent did, step by step
 
-Press `y` for the Trajectory: a pane beside the chat with one row per step of each turn. Your message, each text the agent wrote, each tool call, the reply. Each row has when it started in the turn, how long it took and a small bar for that. Failed calls are red, and `f` steps through them. `m` steps through your own messages. The buttons at the top hide or show the input, model and tool rows. `Enter` shows a row's detail. The Chat and the Trajectory select the same turn. In a pane under 480 px wide, the Trajectory shows in the same pane, and `y`, `Esc` or its Chat button goes back.
+Press `y` for the Trajectory: a pane beside the chat with one row per step of each turn. Your message, each text the agent wrote, each tool call, the reply. Each row has when it started in the turn, how long it took and a small bar for that. Failed calls are red, and `f` steps through them. `m` steps through your own messages. The buttons at the top hide or show the input, model and tool rows. `Enter` shows a row's detail. From 540 px a timeline across the top shows every turn's calls side by side; click a bar to go to its step. In a pane too short for it, where it would leave fewer than four rows of the list, it starts hidden; `b` or the timeline button shows or hides it. The Chat and the Trajectory select the same turn. In a pane under 480 px wide, the Trajectory shows in the same pane, and `y`, `Esc` or its Chat button goes back.
 
 ### Quote a reply back to the agent
 
@@ -131,6 +131,7 @@ Press `,` for settings, a card over the list with one page: text size, your mess
 | `v` | Show the Pinned column |
 | `-` `=` | Make the Pinned column or the Trajectory pane narrower or wider |
 | `y` | Open or go to the Trajectory |
+| `b` | Show or hide the timeline, in the Trajectory |
 | `g` | Go to a turn number |
 | `[` `]` | Previous or next day |
 | `End` or `G` | Newest turn |

@@ -35,12 +35,12 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : SEARCH_KEYS[k] ?? PIN_KEYS[k] ?? TRAJ_KEYS[k] ?? null);
 }
 // The Trajectory's own keys (the ledger): moving through its rows, the detail, the next or
-// previous failure and user message. The Chat's other keys do nothing there, but for y (back
+// previous failure and user message, the timeline (b, TRD-23). The Chat's other keys do nothing there, but for y (back
 // to the Chat), t, the settings and the key sheet. No quote: the Trajectory quotes nothing.
 const LEDGER_KEYS = {
   up: "lprev", k: "lprev", down: "lnext", j: "lnext", home: "lfirst", end: "llast", enter: "ldetail", space: "ldetail",
   f: "lfail", m: "luser", y: "trajectory", escape: "escape", t: "focus", ",": "settings", "?": "keys",
-  "-": "narrower", "=": "wider",
+  "-": "narrower", "=": "wider", b: "timeline",
 };
 export function ledgerKey(e) {
   const m = e?.modifiers ?? {};
@@ -106,12 +106,14 @@ export function keyInstaller(bindings) {
 // to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then. The Pinned
 // column has no outline (outline false), so its sheet leaves o out.
 // bottom: the Trajectory pane along the bottom of the tab, where - and = do nothing.
-export function keySheet(quoteKey = "q", { outline = true, ledger = false, inPane = false, bottom = false } = {}) {
+// timeline: the pane is wide enough for the timeline (TRD-23), which b shows and hides.
+export function keySheet(quoteKey = "q", { outline = true, ledger = false, inPane = false, bottom = false, timeline = false } = {}) {
   const pin = (k) => quoteKey !== k;
   if (ledger) return [
     ["Trajectory", [
       [["↑", "↓", "j", "k"], "Move between steps"], [["Home", "End"], "First or last step"], [["↵", "Space"], "Show or hide the detail"],
       [["f", "Shift f"], "Next or previous failed call"], [["m", "Shift m"], "Next or previous user message"],
+      ...(timeline ? [[["b"], "Show or hide the timeline"]] : []),
       [["y"], inPane ? "Back to the Chat" : "Go to the Chat"], [["Esc"], inPane ? "Close the detail, then back to the Chat" : "Close the detail"],
     ]],
     ["Pane", [
