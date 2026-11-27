@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cardKey, keyAction, ledgerKey, ringKey } from "../mods/agent-threads/ui.js";
 import { trajCompact } from "../mods/agent-threads/ledger.js";
-import { H, draw, drawRange, dropTimers, fixture, keyEv, pane, pinsShown, probeFrame, root, scripted, settleList, settleRows, setup, simList, state, stillAt } from "./render-harness.js";
+import { H, draw, drawRange, dropTimers, fixture, keyEv, openAt, pane, pinsShown, probeFrame, root, scripted, settleList, settleRows, setup, simList, state, stillAt } from "./render-harness.js";
 
 setup();
 
@@ -398,6 +398,28 @@ test("no scroll the pane makes itself counts as the reader's", () => {
   expect(found).toEqual(Object.fromEntries(PANE.map((n) => [n, "no"])));
 });
 
+// ownAsk counts a row ask as the pane's own (askN), so every one is made there: askScroll is
+// named in the code in two places, its own line and ownAsk's. Any other naming fails, in
+// whatever form (a call, ["askScroll"]), a comment after code and a block comment too. Read a
+// line at a time: over the whole file the strip above loses its place and leaves comments in.
+// A line the strip takes the name out of must be a comment from its start, so a regex it
+// misreads cannot hide a call.
+function namings(src, name) {
+  const lines = src.split("\n").filter((l) => l.includes(name));
+  return lines.filter((l) => code(l).includes(name) || !/^\s*\/\//.test(l)).map((l) => l.trim().split("(")[0]);
+}
+test("askScroll is called only from ownAsk", () => {
+  const cases = {
+    call: "  bodyNow() {\n    this.askScroll(i, how);\n  }",
+    bracket: "    this[\"askScroll\"](i, how);",
+    afterRegex: "    if (/a\\//.test(u)) this.askScroll(i, how);",
+    trailing: "    this.x = 1; // askScroll",
+    comment: "    // askScroll is not called here",
+  };
+  expect(Object.fromEntries(Object.entries(cases).map(([k, src]) => [k, namings(src, "askScroll").length]))).toEqual({ call: 1, bracket: 1, afterRegex: 1, trailing: 1, comment: 0 });
+  expect(namings(SRC, "askScroll")).toEqual(["askScroll", "ownAsk"]);
+});
+
 test("the pane's own scrolls leave the count: a reply growing while following, a build, and a stopped render's scroll asked for again", async () => {
   const { v, cx } = await pane(fixture("--extra", "20"));
   settleRows(v, cx);
@@ -596,6 +618,87 @@ async function landThenDrag(gap) {
 for (const gap of [1, 2]) test(`a drag on the bar ${gap} frame${gap > 1 ? "s" : ""} after the pane's own asks land counts once, and the asks count nothing`, async () => {
   expect(await landThenDrag(gap)).toEqual({ asks: [1, 1], moved16: true, moved48: true, landing: 1, dragMoved: true, sameRows: true, drag: 1 });
 });
+
+// A jump held while it waits (the cut moved, and the rows are still being built in slices):
+// every frame asks for its row again (the held ask, one of the pane's own asks), so the turn it
+// goes to stays on screen until it lands. A drag on the bar in that wait does not count: the
+// jump the reader asked for is still under way (scrollTo, busy), and it lands where it was
+// asked, from wherever the drag left the list. A jump to the centre (a key) has the drag put
+// back by the same frame's held ask, before the list is laid out; one to the top (debugScroll's
+// "land") only brings the turn to the nearest edge, so a drag that keeps it on screen stays
+// until the landing. The jump then lands, and a drag after it counts once: the held asks, one
+// a frame, leave no mark that swallows the reader's later moves. The whole jump counts once,
+// at its key or command. A key's jump is settled for 500 ms after it lands (scrollBusyUntil),
+// and a drag in that time does not count either; the test moves past it.
+const capTurn = (i, long = false, parts = 25) => {
+  const ts = new Date(Date.UTC(2026, 10, 1, 9, 0, 0) + i * 1000).toISOString();
+  const said = long ? Array.from({ length: parts }, (_, j) => `Part ${j}: ${"word ".repeat(600)}`).join("\n\n") : `Reply ${i}: the order is fine.`;
+  return [{ k: "p", o: "human", t: `Prompt ${i}: check order ${i}.`, ts }, { k: "t", t: said }, { k: "d", ts }];
+};
+// The rows a simList frame shows, by key: those between its offset and the list's height on,
+// not every item the list holds.
+function shownIn(v, f) {
+  const pre = [0];
+  for (const x of f.sizes) pre.push(pre[pre.length - 1] + x);
+  return f.keys.filter((_k, i) => pre[i + 1] > f.off && pre[i] < f.off + v.listH);
+}
+async function heldThenDrag(go) {
+  const ev = [];
+  for (let i = 0; i < 80; i++) ev.push(...capTurn(i, i === 40, 170));
+  const { v, cx } = await scripted(ev);
+  v.debug = false;
+  v.win.cap = { ...v.win.cap, max: 60 };
+  v.width = 560; v.rootH = 1100; v.listH = 1000;
+  const sim = simList(v);
+  try {
+    // Past a cap of 60 items, with #41's long reply open: #65 is past the cut.
+    openAt(v, cx, sim, 562);
+    v.open.add("0:41");
+    v.command("search:#41", cx);
+    settleList(v, cx, sim);
+    const cut = v.rows().at(-1).key;
+    // The jump waits on a rows build in slices, at the same width.
+    v.buildMax = () => 0;
+    v.rowsKey = null;
+    probeFrame(v, cx);
+    // The search's own landing is settled before the jump.
+    v.scrollBusyUntil = 0;
+    const n00 = moves(v);
+    go(v, cx);
+    probeFrame(v, cx);
+    probeFrame(v, cx);
+    const held = Boolean(v.scrollTo?.held);
+    const off0 = sim.last().off;
+    const n0 = moves(v);
+    const a0 = v.askN ?? 0;
+    // The reader's drag on the bar, up 300 px.
+    sim.off = Math.max(0, sim.off - 300);
+    probeFrame(v, cx);
+    const during = { asked: (v.askN ?? 0) > a0, moved: sim.last().off !== off0, drag: moves(v) - n0, waiting: v.scrollTo?.key ?? null };
+    delete v.buildMax;
+    settleList(v, cx, sim);
+    const landed = { scrollTo: v.scrollTo, shows: shownIn(v, sim.last()).includes("0:65"), jump: moves(v) - n00 };
+    // The landing's settle (scrollBusyUntil, 500 ms on) is over by the reader's next drag.
+    v.scrollBusyUntil = 0;
+    const off1 = sim.last().off;
+    const n1 = moves(v);
+    sim.off = Math.max(0, sim.off - 300);
+    probeFrame(v, cx);
+    const after = { moved: sim.last().off !== off1, drag: moves(v) - n1 };
+    return { cut, held, during, landed, after };
+  } finally { H.listWindow = null; }
+}
+for (const [name, go, moved] of [
+  ["a key", (v, cx) => { v.sel = "0:64"; v.action("next", cx); }, false],
+  ["debugScroll", (v, cx) => { v.debug = true; v.command("debugScroll:0:65", cx); v.debug = false; }, true],
+]) test(`a drag on the bar while a jump by ${name} is held counts nothing, the jump counts once and lands, and a drag once it has landed counts once`, async () => {
+  expect(await heldThenDrag(go)).toEqual({
+    cut: "capped-later", held: true,
+    during: { asked: true, moved, drag: 0, waiting: "0:65" },
+    landed: { scrollTo: null, shows: true, jump: 1 },
+    after: { moved: true, drag: 1 },
+  });
+}, 60000);
 
 // Two of the pane's own moves of the list, with no wheel and no bar, in the list, the outline
 // and the Pinned view: neither counts.

@@ -2,7 +2,7 @@
 // process and loads test/render-harness.js once, so a setting one file leaves behind would
 // reach the next file that uses the harness; setup() puts them all back.
 import { test, expect, describe, beforeAll } from "bun:test";
-import { allPins, closed, editors, heldClock, hostReads, keyBinds, lacking, mdSources, overlays, pinPane, pinsIdle, PINS, saved, scrollHandles, settingsWrites, setup, stubHas, views, work, H } from "./render-harness.js";
+import { allPins, closed, editors, fixture, heldClock, hostReads, keyBinds, lacking, mdSources, overlays, pane, pinPane, pinsIdle, PINS, probeFrame, saved, scrollHandles, settingsWrites, setup, stubHas, views, work, H } from "./render-harness.js";
 
 const DEFAULTS = {
   calls: 0,
@@ -25,6 +25,7 @@ const DEFAULTS = {
   extractHook: null,
   keepSettings: false,
   settingsStale: false,
+  drawBetweenAsks: false,
 };
 const LISTS = { closed, editors, mdSources, overlays, scrollHandles, settingsWrites, views };
 
@@ -216,4 +217,80 @@ test("the hook before each test: a pane whose save never ends fails one call, an
     await chain; // the late write lands now, and the call after clears it
     await hook();
   }
+});
+
+// probeFrame with drawBetweenAsks runs the timers due before the next frame (120 ms) in the
+// order Herdr would, from a clock it moves on: a timer a callback sets joins at its own due
+// time, and a draw follows each group due at the same time.
+test("probeFrame draws between asks in due order: a timer a 16 ms callback sets for 16 ms on runs at 32 ms, before a 48 ms one, with a draw after each", async () => {
+  const { v, cx } = await pane(fixture("--only", "1"));
+  v.debug = false;
+  const proto = Object.getPrototypeOf(v);
+  const realDue = proto.probeDue;
+  proto.probeDue = () => [];
+  const log = [];
+  v.render = function (c) { log.push("draw"); return proto.render.call(this, c); };
+  try {
+    H.drawBetweenAsks = true;
+    cx.timers = [];
+    cx.timers.push({ ms: 16, fn: (c) => { log.push("16"); c.timer.after(16, () => log.push("32")); } }, { ms: 48, fn: () => log.push("48") });
+    probeFrame(v, cx);
+  } finally {
+    proto.probeDue = realDue;
+    delete v.render;
+    H.drawBetweenAsks = false;
+  }
+  // Runs of draws count as one: the pane's own timers may add draws of their own.
+  const seq = log.filter((x, i) => x !== "draw" || log[i - 1] !== "draw");
+  expect(seq).toEqual(["draw", "16", "draw", "32", "draw", "48", "draw"]);
+});
+
+// A timer due after the frame waits for the frame it is due in: one a 100 ms callback sets for
+// 48 ms on runs 28 ms into the next, and one set for 300 ms runs 60 ms into the third.
+test("probeFrame drawing between asks keeps a timer due after the frame for the frame it is due in, with a draw after it", async () => {
+  const { v, cx } = await pane(fixture("--only", "1"));
+  v.debug = false;
+  const proto = Object.getPrototypeOf(v);
+  const realDue = proto.probeDue;
+  proto.probeDue = () => [];
+  const log = [];
+  v.render = function (c) { log.push("draw"); return proto.render.call(this, c); };
+  try {
+    H.drawBetweenAsks = true;
+    cx.timers = [];
+    cx.timers.push({ ms: 100, fn: (c) => { log.push("100"); c.timer.after(48, () => log.push("148")); } }, { ms: 300, fn: () => log.push("300") });
+    for (const k of [1, 2, 3, 4]) { log.push(`frame ${k}`); probeFrame(v, cx); }
+  } finally {
+    proto.probeDue = realDue;
+    delete v.render;
+    H.drawBetweenAsks = false;
+  }
+  // Runs of draws count as one: the pane's own timers may add draws of their own.
+  const seq = log.filter((x, i) => x !== "draw" || log[i - 1] !== "draw");
+  expect(seq).toEqual(["frame 1", "draw", "100", "draw", "frame 2", "draw", "148", "draw", "frame 3", "draw", "300", "draw", "frame 4", "draw"]);
+});
+
+// Every draw of the frame asks the probe for parts to measure, and each ask spends one of a
+// part's tries: probeFrame answers the asks of every draw it makes, not only the first's.
+test("probeFrame answers the probe's asks from every draw of the frame, the last ask of a part winning", async () => {
+  const { v, cx } = await pane(fixture("--only", "1"));
+  v.debug = false;
+  const proto = Object.getPrototypeOf(v);
+  const realDue = proto.probeDue;
+  const asks = [[[{ key: "pa" }, "a1"]], [[{ key: "pb" }, "b1"], [{ key: "pa" }, "a2"]]];
+  let n = 0;
+  proto.probeDue = () => asks[n++] ?? [];
+  const got = [];
+  v.probed = (key, sig) => { got.push([key, sig]); };
+  try {
+    H.drawBetweenAsks = true;
+    cx.timers = [];
+    cx.timers.push({ ms: 16, fn: () => {} });
+    probeFrame(v, cx);
+  } finally {
+    proto.probeDue = realDue;
+    delete v.probed;
+    H.drawBetweenAsks = false;
+  }
+  expect([n >= 2, got.sort()]).toEqual([true, [["pa", "a2"], ["pb", "b1"]]]);
 });
