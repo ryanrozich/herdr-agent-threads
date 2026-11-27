@@ -408,6 +408,28 @@ test("a running answer rewritten to a text of the same length shows the new one,
   expect([shown().includes("https://linear.example/ACME-34"), shown().includes("ACME-12")]).toEqual([true, false]);
 });
 
+// Red before its cure: a part's measure is kept by the length of its text, so a new text of
+// the same length took the old one's height, and the probe let it be.
+test("a running answer rewritten to a text of the same length is measured again, and the same text is not", async () => {
+  const { v, cx, s } = await live([PROMPT, call(), answer("xxxx"), call()]);
+  const part = () => mine(v).find((r) => r.kind === "md");
+  const first = part();
+  v.probed(first.key, v.partSig(first), { width: 300, height: 40 * v.zoom() }, cx);
+  expect(v.measured(part())).toBe(40);
+  const turn = s.turns[0];
+  // Read again with the same text: its rows are built again and keep the measure.
+  turn.v = ++s.version;
+  settleRows(v, cx);
+  v.sel = null;
+  expect(v.measured(part())).toBe(40);
+  turn.finals[0].t = "x\n\nx";
+  turn.v = ++s.version;
+  settleRows(v, cx);
+  v.sel = null;
+  const next = part();
+  expect([next.key, next.md.length, v.measured(next)]).toEqual([first.key, 4, null]);
+});
+
 // Red if the middle of a read kept a cut made under other link rules: the old links stay until
 // the read ends.
 test("link rules changed in the middle of a read cut the running answer again under them", async () => {
