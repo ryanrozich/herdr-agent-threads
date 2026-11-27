@@ -1367,9 +1367,12 @@ test("a read superseded while it applies its chunk, past the budget: the next re
   expect(v.mem.bytes).toBe(v.heldBytes());
 }, 20000);
 
-// Red at ae69b5c9: the older session kept every turn it applied, past the budget, and only the
-// newer session's guard could trim, which trims the newer session.
-test("a read a /clear supersedes while it applies its chunk lets the older session's excess go, and leaves the newer session's keys and place", async () => {
+// A read a /clear supersedes while it applies its chunk. The hook gives the newer session two
+// turns and builds the rows of both, the older one's above; the window has room for the newer
+// session and half of what the older one holds. A reader is up in the list on the newer
+// session's second turn, not following, with the row window from the older session's first
+// turn (which goes) to the newer one's. ready(v, s), if given, runs then too.
+async function clearMidChunk(ready = null) {
   windowState().panes.clear();
   const file = fixture("--only", "1");
   const next = fixture("--only", "2");
@@ -1377,46 +1380,54 @@ test("a read a /clear supersedes while it applies its chunk lets the older sessi
   const { v, cx } = openPane(file);
   const real = performance.now;
   let t = 0;
-  let s2 = null;
-  let held = 0;
-  let both = null;
+  const out = { v, cx, s2: null, held: 0, room: 0, both: null };
   performance.now = () => (t += 20);
   cx.sleepHook = () => {
     const s = v.current();
-    if (!s2 && s?.partial && s.turns.length > 1) {
-      // The agent's /clear, its first two turns in, with the window left room for half of what
-      // the two sessions hold.
-      s2 = newSession("s2", next);
+    if (!out.s2 && s?.partial && s.turns.length > 3) {
+      const s2 = newSession("s2", next);
       for (let i = 0; i < 2; i++) for (const e of turnEvents(i)) apply(s2, e);
       v.sessions.push(s2);
       measure(s);
       measure(s2);
-      phantom(BUDGET - windowBytes(v.mem) - Math.floor(v.heldBytes() / 2));
-      held = v.heldBytes();
-      // The rows of both sessions, the older one's above, and a reader up in the list on the
-      // newer session's second turn: the rows that go above it would move it.
+      const w = PANE_WEIGHT.chat;
+      phantom(BUDGET - windowBytes(v.mem) - (sessionBytes(s2, w) + Math.floor(sessionBytes(s, w) / 2)));
+      out.held = v.heldBytes();
+      out.room = BUDGET - windowBytes(v.mem);
       v.rows();
-      both = [v.baseRows?.some((r) => r.si === 0 && r.turn), v.baseRows?.some((r) => r.si === 1 && r.turn?.n === 2)];
+      out.both = [v.baseRows?.some((r) => r.si === 0 && r.turn), v.baseRows?.some((r) => r.si === 1 && r.turn?.n === 2)];
       v.follow = false;
       v.toBottom = false;
       v.scrollTo = null;
       v.topKey = "1:2";
       v.sel = "1:2";
-      // The row window from the older session's first turn, which goes, to the newer one's.
       v.win.from = "0:1";
       v.win.to = "1:2";
+      ready?.(v, s);
+      out.s2 = s2;
     }
     return new Promise((r) => setTimeout(r, 0));
   };
   try {
-    await until(() => s2, "the /clear");
+    await until(() => out.s2, "the /clear");
     await new Promise((r) => setTimeout(r, 50));
   } finally { performance.now = real; cx.sleepHook = null; }
-  const [s] = v.sessions;
+  out.s = v.sessions[0];
+  return out;
+}
+
+// Red at ae69b5c9: the older session kept every turn it applied, past the budget, and only the
+// newer session's guard could trim, which trims the newer session.
+test("a read a /clear supersedes while it applies its chunk lets the older session's excess go, and leaves the newer session's keys and place", async () => {
+  const { v, cx, s, s2, held, room, both } = await clearMidChunk();
   expect(both).toEqual([true, true]);
+  expect(held).toBeGreaterThan(room);
   expect(s.partial).toBe(true);
-  expect(tailOf(s)).not.toBeNull();
-  expect(v.heldBytes()).toBeLessThan(held);
+  // The older session keeps the newest turns that fit beside the newer one, at least one.
+  const tail = tailOf(s);
+  expect(tail).not.toBeNull();
+  expect(tail.shown).toBeGreaterThan(0);
+  expect(v.heldBytes()).toBeLessThanOrEqual(room);
   expect(v.mem.bytes).toBe(v.heldBytes());
   // The newer session's keys and place are as they were: the list goes back to its top row,
   // and its rows stay in the window, from the older session's first kept turn.
@@ -1426,6 +1437,70 @@ test("a read a /clear supersedes while it applies its chunk lets the older sessi
   expect([v.win.from, v.win.to]).toEqual(["0:1", "1:2"]);
   expect(v.current()).toBe(s2);
   expect(s2.turns.length).toBe(2);
+  expect(() => v.render(cx)).not.toThrow();
+}, 20000);
+
+// Red at 145573e5: the jump was dropped with its turn, and nothing kept the top row.
+test("a jump on its way to an older turn the trim lets go leaves the reader's top row kept", async () => {
+  const { v } = await clearMidChunk((v) => { v.scrollTo = { key: "0:1", how: "top" }; });
+  expect(tailOf(v.sessions[0])).not.toBeNull();
+  expect(v.scrollTo).toEqual({ key: "1:2", how: "top" });
+}, 20000);
+
+// Red at 145573e5: the link rules' memo and the Markdown heights kept the text of the older
+// session's turns the trim let go.
+test("a trim of the older session lets go of the text of its turns that went: the link rules' memo and the Markdown heights", async () => {
+  let gone = null;
+  const { v } = await clearMidChunk((v, s) => {
+    gone = s.turns[0].prompt;
+    v.applyPrefs(JSON.stringify({ links: [{ name: "Issue", pattern: "\\bprompt (\\d+)\\b", url: "https://linear.example/P-$1" }] }));
+    v.linkedSegs("0:1", [{ kind: "md", text: gone }]);
+    v.mdHeight(gone);
+  });
+  expect(gone).toContain(PAD);
+  expect(tailOf(v.sessions[0])).not.toBeNull();
+  // Whether x holds that text, through Maps (keys too), Sets, arrays and own values; the
+  // sessions not walked (the kept turns are theirs).
+  const skip = new Set([v.sessions, ...v.sessions]);
+  const holds = (x, depth = 12, seen = new Set()) => {
+    if (typeof x === "string") return x.includes(gone);
+    if (!x || typeof x !== "object" || depth <= 0 || seen.has(x) || skip.has(x)) return false;
+    seen.add(x);
+    const d = depth - 1;
+    if (x instanceof Map) return [...x].some(([k, y]) => holds(k, d, seen) || holds(y, d, seen));
+    if (x instanceof Set || Array.isArray(x)) return [...x].some((y) => holds(y, d, seen));
+    return Object.keys(x).some((k) => holds(x[k], d, seen));
+  };
+  expect(Object.keys(v).filter((k) => k !== "sessions" && holds(v[k]))).toEqual([]);
+}, 20000);
+
+// Red at 145573e5: the preview landed after the refusal and wrote the prompt back.
+test("a preview still being read when its side pane refuses the session is not kept", async () => {
+  windowState().panes.clear();
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 60 });
+  const { v, cx } = openPane(file, { view: "pinned" });
+  await settle(v);
+  const s = v.current();
+  let asked = null;
+  let land = null;
+  const held = new Promise((r) => { land = r; });
+  H.extractHook = async (args) => {
+    asked = args;
+    await held;
+    return { code: 0, stdout: `${JSON.stringify({ k: "p", o: "human", ts: ts(0), t: "QZPEEKMARK the newest prompt" })}\n`, stderr: "" };
+  };
+  // The loading state, and a file past one chunk: openPeek reads the file's end.
+  v.opening = { list: v.sessions, at: Date.now(), painted: true, done: false, pct: null, peek: false, v: null, stats: null, newest: null, mtime: null };
+  s.size = 64 * MiB;
+  v.openPeek(s, cx);
+  await until(() => asked, "the preview asked for");
+  phantom(BUDGET);
+  expect(v.guard(s)).toBe(true);
+  expect(v.refusedNow()).toBe(true);
+  land();
+  await new Promise((r) => setTimeout(r, 30));
+  expect(v.opening.newest).toBeNull();
   expect(() => v.render(cx)).not.toThrow();
 }, 20000);
 
@@ -1490,6 +1565,7 @@ test("leaving the Select view gives the keyboard back to the pane only when no c
 }, 20000);
 
 // Red at ae69b5c9: the link rules' memo and the Markdown heights still held the replies' text.
+// Red at 145573e5: the sender rule's count still held the session's last turn it read.
 test("a side pane that refuses a session it has read lets go of everything built from its turns, and of its text", async () => {
   const file = fixture("--only", "1");
   // Each prompt and reply carries a mark found nowhere else, so a string that holds one was
@@ -1536,6 +1612,9 @@ test("a side pane that refuses a session it has read lets go of everything built
   v.calls.set(`${file}#toolu_mark`, { st: "ok", input: `${markP(0)} input`, out: `${markR(0)} output`, ver: s.version });
   v.outEds = new Map([[`cout:0:${last.n}:0:0`, { st: false, text: `${markR(0)} output` }]]);
   v.cutKept = { key: `0:${last.n}`, text: reply, ver: "", segs: [{ kind: "md", text: reply }], cut: [], left: 0 };
+  // The sender rule's count, as its editor draws it: it holds the last turn it read.
+  v.senderMatches({ re: /QZPROMPTMARK/, named: false });
+  expect(v.senderHits?.per?.[0]?.last).toBeTruthy();
   v.opening = { ...(v.opening ?? { list: v.sessions, at: Date.now(), painted: true, done: true, pct: null, peek: false, v: null, stats: null, mtime: null }), newest: { text: `${markP(0)} newest`, ts: null } };
   const marked = (x) => typeof x === "string" && (x.includes("QZPROMPTMARK") || x.includes("QZREPLYMARK"));
   // Whether x reaches one of the session's turns before the refusal, or a string made from

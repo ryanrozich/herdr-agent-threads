@@ -2820,13 +2820,14 @@ export default class Threads extends View {
         // A reader who is not following and has no jump on the way keeps the row at the top:
         // the list's offset in px would now land on later turns. A held place (a re-wrap's
         // anchor, due or taken) goes with the rows (dropAnchor), so it is no reason not to.
-        // Asked before the keys move.
-        const stay = !this.follow && !this.toBottom && !this.scrollTo;
+        // Asked once the keys moved: a jump to a turn that went is gone, and the top row is
+        // kept instead.
         this.shiftKeys(this.sessions.indexOf(s), k);
         // The top row's turn went: the tail's first turn is at the top now.
-        if (stay) this.scrollTo = { key: this.topKey ?? `${this.sessions.indexOf(s)}:1`, how: "top" };
+        if (!this.follow && !this.toBottom && !this.scrollTo) this.scrollTo = { key: this.topKey ?? `${this.sessions.indexOf(s)}:1`, how: "top" };
         this.shiftRows(s, this.sessions.indexOf(s), k);
         this.dropBuilt();
+        this.dropTexts(s);
         this.dropAnchor();
         this.win.reset();
         this.capKey = null;
@@ -2859,11 +2860,12 @@ export default class Threads extends View {
     const its = (key) => typeof key === "string" && key.startsWith(`${si}:`);
     // The older session's rows sit above the newer one's, and the list keeps its offset in px:
     // a reader who is not following keeps the row at the top, in either session, as in guard.
-    const stay = !this.follow && !this.toBottom && !this.scrollTo;
+    // Asked once the keys moved, so a jump to a turn that went leaves the top row kept.
     this.shiftKeys(si, k);
-    if (stay) this.scrollTo = { key: this.topKey ?? `${si}:1`, how: "top" };
+    if (!this.follow && !this.toBottom && !this.scrollTo) this.scrollTo = { key: this.topKey ?? `${si}:1`, how: "top" };
     this.shiftRows(s, si, k);
     this.dropBuilt();
+    this.dropTexts(s);
     const a = this.anchor;
     if (a && !a.end && (its(a.key) || its(a.turn) || [...(a.held?.keys() ?? [])].some(its))) this.dropAnchor();
     for (const f of ["capKey", "viewEndKey"]) if (its(this[f])) this[f] = shiftKey(this[f], si, k);
@@ -2876,6 +2878,8 @@ export default class Threads extends View {
       if (this.win.to != null && to == null) this.win.reset();
       else { this.win.from = from; this.win.to = to; this.win.at = null; }
     }
+    // The window's counts of the rows outside it hold the rows from before the trim.
+    this.win.outMemo = null;
     this.rowsKey = null;
     this.rowBuild = null;
     this.rowJob = null;
@@ -2998,6 +3002,26 @@ export default class Threads extends View {
     for (const k of this.keptBases?.values() ?? []) { k.rows.clear(); k.meas.clear(); }
     this.keptBases?.clear();
   }
+  // What holds a session's text or turns besides the rows (dropBuilt), after a trim or a
+  // refusal of s: the memos keyed by text (the link rules on replies, the Markdown heights,
+  // splits and table widths), the running answer's cut, the sender rule's count (it holds the
+  // last turn it read), the pins' turns, and the calls read for turns that went (all of the
+  // session's, all). Each is made again on demand from the turns kept.
+  dropTexts(s, all = false) {
+    this.linkMemo = null;
+    this.mdHeights = null;
+    this.mdMemo = null;
+    this.tableMemo = null;
+    this.cutKept = null;
+    this.senderHits = null;
+    this.pinMemo = null;
+    this.pinMemoKey = null;
+    this.pinTurns = new Set();
+    const pre = `${s.file}#`;
+    const kept = new Set();
+    if (!all) for (const t of s.turns) for (const st of t.steps ?? []) for (const id of st.ids ?? []) if (id) kept.add(id);
+    for (const k of [...this.calls.keys()]) if (k.startsWith(pre) && !kept.has(k.slice(pre.length))) this.calls.delete(k);
+  }
   // For the tests that every field keyed by turn is on a list.
   turnKeyed() { return { moved: TURN_KEYED, reset: TURN_KEYED_RESET }; }
   paneWeight() { return PANE_WEIGHT[this.mem?.kind ?? "chat"]; }
@@ -3025,23 +3049,15 @@ export default class Threads extends View {
     this.staleRows = null;
     this.stickyNow = null;
     this.railTurns = null;
-    this.pinMemo = null;
-    this.pinMemoKey = null;
-    this.pinTurns = new Set();
     this.railMemo = null;
-    this.mdMemo = null;
-    this.tableMemo = null;
     this.fillMemo = null;
     this.bubbleMemo = null;
-    // The memos keyed by or holding the session's text: the link rules on its replies, the
-    // heights of its Markdown, the running answer's cut, its calls' inputs and outputs and
-    // their editors, and the loading state's newest prompt. Retry builds them again; the pins
-    // and what the person wrote stay.
-    this.linkMemo = null;
-    if (this.opening) this.opening.newest = null;
-    this.mdHeights = null;
-    this.cutKept = null;
-    for (const k of [...this.calls.keys()]) if (k.startsWith(`${s.file}#`)) this.calls.delete(k);
+    // The memos keyed by or holding the session's text and turns (dropTexts, with all its
+    // calls), its calls' output editors, and the loading state's newest prompt: the loading
+    // state is a new one, so a preview still being read for the session is not kept
+    // (openPeek). Retry builds them again; the pins and what the person wrote stay.
+    this.dropTexts(s, true);
+    if (this.opening) this.opening = { ...this.opening, newest: null };
     for (const e of this.outEds?.values() ?? []) this.letGoEditor(e);
     this.outEds = null;
     this.restart(s, true);
@@ -4266,10 +4282,14 @@ export default class Threads extends View {
       if (!c) fresh.push(id);
       else if (!tail && c.out == null && c.ver !== s.version) again.push(id);
     }
-    for (const id of [...fresh, ...again]) this.calls.set(`${s.file}#${id}`, { ...this.calls.get(`${s.file}#${id}`), st: "wait" });
+    if (!fresh.length && !again.length) return;
+    // The request's number: a read lands only in the entries still waiting for it, not in one a
+    // later request made after the entry was dropped (a refusal, then Retry).
+    const tok = (this.callTok = (this.callTok ?? 0) + 1);
+    for (const id of [...fresh, ...again]) this.calls.set(`${s.file}#${id}`, { ...this.calls.get(`${s.file}#${id}`), st: "wait", tok });
     // A call read again is recent, so only the file's end is read for it.
-    if (fresh.length) (this.callDue ??= []).push({ file: s.file, ver: s.version, ids: fresh, tail });
-    if (again.length) (this.callDue ??= []).push({ file: s.file, ver: s.version, ids: again, tail: true });
+    if (fresh.length) (this.callDue ??= []).push({ file: s.file, ver: s.version, ids: fresh, tail, tok });
+    if (again.length) (this.callDue ??= []).push({ file: s.file, ver: s.version, ids: again, tail: true, tok });
   }
   flushCalls(cx) {
     if (this.callBusy || !this.callDue?.length) return;
@@ -4298,8 +4318,9 @@ export default class Threads extends View {
         for (const id of job.ids) {
           const k = `${job.file}#${id}`;
           const was = this.calls.get(k);
-          // Gone while it was read (a refused session lets go of its calls): not kept.
-          if (!was) continue;
+          // Gone while it was read (a refused session lets go of its calls), or asked for again
+          // since by another request: not kept.
+          if (!was || was.tok !== job.tok) continue;
           const c = got.get(id);
           // A tail read that misses a call's input keeps the input read before.
           if (c || was?.input != null) this.calls.set(k, { ...was, ...c, st: "ok", ver: job.ver });
@@ -10511,7 +10532,7 @@ export default class Threads extends View {
         const t0 = now();
         const r = await exec("sh", readArgs(s.file, from, OPEN_PEEK));
         o.peekMs = now() - t0;
-        if (this.opening !== o || this.current() !== s || o.done || r.code !== 0) return;
+        if (this.opening !== o || this.current() !== s || o.done || r.code !== 0 || this.refusedNow()) return;
         const c = newChunk();
         for (const l of r.stdout.split("\n")) parseLine(c, l);
         const tail = newSession(s.id, s.file);

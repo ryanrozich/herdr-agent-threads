@@ -684,3 +684,28 @@ test("a render Herdr stops as a held column asks for its draw once the pane is s
   }
   expect(got).toEqual([[1, false, 1, true, false, true, false], [2, false, 0, true, false, true, false]]);
 }, 60000);
+
+// Red at 145573e5: the first read landed in the entry the second request made, as its result.
+test("a call read that lands after its entry was dropped and asked for again leaves the newer request waiting", async () => {
+  const { v, cx } = await callsPane();
+  const k = `${v.sessions[0].file}#toolu_b1`;
+  v.wantCalls(0, ["toolu_b1"]);
+  expect(v.calls.get(k)?.st).toBe("wait");
+  // The read's timer: its call goes out.
+  v.flushCalls(cx);
+  cx.flush(0);
+  expect(v.callBusy).toBe(true);
+  // A refusal lets go of the call, and Retry asks for it again before the first read lands.
+  v.calls.delete(k);
+  v.wantCalls(0, ["toolu_b1"]);
+  const newer = v.calls.get(k);
+  expect(newer?.st).toBe("wait");
+  await settleCx(cx);
+  expect(v.callBusy).toBe(false);
+  expect(v.calls.get(k)).toBe(newer);
+  // The newer request's own read fills it.
+  v.flushCalls(cx);
+  cx.flush(0);
+  await settleCx(cx);
+  expect(v.calls.get(k)?.st).toBe("ok");
+});
