@@ -109,7 +109,7 @@ import("./build.js")
   .then((m) => { built = parseBuild(m?.BUILD) ? m.BUILD : null; })
   .catch(() => { built = null; });
 import { isDiagram, drawDiagram } from "./diagram.js";
-import { BUDGET, TIGHT_CHUNK, PANE_WEIGHT, measure, sessionBytes, forgetSize, trim, shiftKey, holdsTurnKey, dropTurnKeys, tailOf, tailNote, droppedOf, gut, joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, holdRead, dropRead, windowState, pruneWindow } from "./budget.js";
+import { BUDGET, TIGHT_CHUNK, PANE_WEIGHT, measure, sessionBytes, forgetSize, trim, shiftKey, tailOf, tailNote, droppedOf, gut, joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, holdRead, dropRead, windowState, pruneWindow } from "./budget.js";
 // A hot reload evaluates this module again in the same VM, beside the old one, and then
 // replaces every copy: the copies it replaces give back what they hold now (budget.js).
 releaseOlder();
@@ -117,12 +117,13 @@ releaseOlder();
 const READ_TURN_MS = 40;
 // Every field of a pane that keeps a turn's key ("si:n", or a row or part key that holds one),
 // which a trim moves with its turn (shiftKeys): "key", a key; "set", a Set of keys; "map", a Map
-// by key; "editors", the code editors by key (one of a turn that went is let go); a list of
+// by key; "editors", the code editors by key (one of a turn that went is let go); "rail", the
+// rail's ticks ({ key, turn, ... }), as a new list (the old one may be a build's); a list of
 // props, an object whose props hold keys (or lists of keys), gone when its first prop's turn
 // went unless keep (the object still says something without its turn). lazy: not made by
-// init(). A new field keyed by turn goes here or on TURN_KEYED_RESET: test/budget.test.js fails
-// on a field that holds a key and is on no list, and shiftKeys lets go of what such a field
-// holds of the session (a debug pane says which, once).
+// init(). A new field keyed by turn goes here or on TURN_KEYED_RESET: test/budget.test.js
+// fails on a field that holds a key and is on neither. A person's text (pins, notes, what was
+// copied) is on neither: a trim never drops it.
 const TURN_KEYED = Object.freeze([
   ["sel", "key"], ["topKey", "key"], ["winSeen", "key", { lazy: true }], ["placeBase", "key", { lazy: true }],
   ["pinVisit", "key"], ["pinAgain", "key"], ["tsel", "key"], ["tscrollTo", "key", { lazy: true }],
@@ -130,32 +131,23 @@ const TURN_KEYED = Object.freeze([
   ["open", "set"], ["full", "set"], ["lineOpen", "set"], ["lineTouched", "set"], ["groupOpen", "set"], ["groupTouched", "set"],
   ["callOpen", "set"], ["callAll", "set"], ["codeDue", "set", { lazy: true }], ["liveCode", "set", { lazy: true }],
   ["mdBroken", "set", { lazy: true }],
-  ["code", "editors"], ["cutRows", "map", { lazy: true }],
+  ["code", "editors"], ["cutRows", "map", { lazy: true }], ["railTurns", "rail", { lazy: true }],
   ["scrollTo", ["key", "or", "head"], { lazy: true }], ["openWait", ["key"], { lazy: true }], ["pinResume", ["key", "part"]],
   ["outlineBack", ["sel", "top"]], ["flash", ["key"], { lazy: true }], ["railGrow", ["key"], { lazy: true }], ["selEditor", ["key"]],
   ["latestDue", ["sel"], { lazy: true, keep: true }], ["trajFrom", ["turn"], { lazy: true, keep: true }],
 ]);
 // Fields keyed by turn that a trim does not move: it starts them over (guard, dropAnchor), or
-// they are built again from the rows or the pins, or checked against what they were made from
-// (a signature), or only read by the debug report, or a hover's.
+// they are built again from the rows (the trim starts a new build) or the pins, or checked
+// against what they were made from (a signature), or only read by the debug report, or a
+// hover's.
 const TURN_KEYED_RESET = Object.freeze([
   "capKey", "viewEndKey", "anchor", "rowsKey", "rowBuild", "rowJob", "win", "pinKeys", "pinTurns", "pinMemo", "pinMemoKey",
   "baseRows", "baseIndex", "baseSizes", "rowsMemo", "slotsMemo", "indexedRows", "fitKey", "capSpan", "capLaid", "countsKey", "countsMemo",
   "ledgerMemo", "selIdMemo", "selSent", "probeWalk", "probeTries", "meas", "measDrops", "dayOf", "keptBases", "cachedH",
   "tlModel", "tlJob", "tlKeep", "tlHatch", "fillMemo", "bubbleMemo", "mdMemo", "tableMemo", "outEds",
   "codeInfo", "landed", "diagramOpened", "outputOpened", "drawingRow", "drawError", "lastRange",
-  "stickyShown", "stickyNow", "hoverPin", "unpinDown", "railHover", "railQuiet", "railHeld",
+  "stickyShown", "stickyNow", "buildRail", "railMemo", "dayOfRows", "stickRows", "staleRows", "buildStale", "hoverPin", "unpinDown", "railHover", "railQuiet", "railHeld",
 ]);
-// Fields holding a transcript's, the settings' or a person's text, where "si:n" is words, not
-// a key: never walked for keys.
-const NOT_KEYED = Object.freeze([
-  "sessions", "res", "prefs", "prefsRaw", "prefsNotes", "prefsError", "pinStore", "pinRaw", "calls", "links", "senders", "linkList",
-  "senderList", "toast", "copied", "lastQuote", "remote", "quoteDraft", "quoteFileNote", "ruleEdit", "ruleUndo", "rulesPending",
-  "opening", "shownList", "known", "terminal", "query", "imgs", "cardBody", "cardPlaces", "mem",
-]);
-const KEYED_KNOWN = new Set([...TURN_KEYED.map(([f]) => f), ...TURN_KEYED_RESET, ...NOT_KEYED]);
-// The fields a trim let go of in this window (shiftKeys), each said once in a debug pane.
-const KEYED_MISSED = new Set();
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
 // The turn a list row belongs to, or null (a day band, the spacer, the tail).
@@ -2809,12 +2801,6 @@ export default class Threads extends View {
   // under its new number, and a key of a turn that went is dropped (budget.js shiftKey).
   shiftKeys(si, k) {
     const sh = (x) => shiftKey(x, si, k);
-    // A field on no list that holds a key of the session: found before the move, as one that
-    // goes no further than the walk (holdsTurnKey) into the sessions and their turns.
-    const walked = new Set();
-    for (const x of this.sessions) { walked.add(x); for (const t of x.turns) walked.add(t); }
-    const skip = (o) => walked.has(o);
-    const missed = Object.keys(this).filter((f) => !KEYED_KNOWN.has(f) && holdsTurnKey(this[f], si, skip));
     const ed = this.selEditor;
     for (const [f, how, opt] of TURN_KEYED) {
       const v = this[f];
@@ -2824,6 +2810,9 @@ export default class Threads extends View {
         const was = [...v];
         v.clear();
         for (const x of was) { const y = sh(x); if (y != null) v.add(y); }
+      } else if (how === "rail") {
+        // A new list: the old one can be a build's too (buildRail, a job's railRows).
+        this[f] = v.map((x) => ({ ...x, key: sh(x.key) })).filter((x) => x.key != null);
       } else if (how === "map" || how === "editors") {
         const was = [...v];
         v.clear();
@@ -2843,16 +2832,9 @@ export default class Threads extends View {
     // as endSelect ends it (its editor let go, and the keyboard back to the pane).
     if (ed && !this.selEditor) this.selEditor = ed;
     if ((this.selEditor || this.selecting) && this.selEditor?.key !== this.selecting) this.endSelect();
-    // The backstop: what a field on no list holds of the session goes, so it cannot name
-    // another turn.
-    for (const f of missed) {
-      this[f] = dropTurnKeys(this[f], si, skip);
-      if (this.debug && !KEYED_MISSED.has(f)) { KEYED_MISSED.add(f); console.log(`agent-threads: a trim let go of ${f}, which holds turn keys and is on no list (TURN_KEYED)`); }
-    }
-    return missed;
   }
   // For the tests that every field keyed by turn is on a list.
-  turnKeyed() { return { moved: TURN_KEYED, reset: TURN_KEYED_RESET, text: NOT_KEYED }; }
+  turnKeyed() { return { moved: TURN_KEYED, reset: TURN_KEYED_RESET }; }
   paneWeight() { return PANE_WEIGHT[this.mem?.kind ?? "chat"]; }
   heldBytes() { const w = this.paneWeight(); let n = 0; for (const x of this.sessions) n += sessionBytes(x, w); return n; }
   refuse(s) {

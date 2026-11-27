@@ -150,51 +150,6 @@ export function shiftKey(key, si, k) {
   if (n < 1) return null;
   return `${key.slice(0, m.index)}${m[1]}${si}:${n}${key.slice(m.index + m[0].length)}`;
 }
-// Whether a string holds a key of session si's turns anywhere in it: "si:n" that is not part of
-// a longer number or word (as in "10:30", "1.0:5" or "x0:5").
-const KEY_RE = new Map();
-export function hasTurnKey(str, si) {
-  let re = KEY_RE.get(si);
-  if (!re) KEY_RE.set(si, (re = new RegExp(`(?:^|[^0-9A-Za-z.])${si}:\\d+(?![0-9.])`)));
-  return re.test(str);
-}
-// Whether x holds such a key: a string, or one in a Set, a Map (keys and values), an array or an
-// object's own values, down to depth levels. skip(o): an object not walked (a session, a turn).
-export function holdsTurnKey(x, si, skip = () => false, depth = 6, seen = new Set()) {
-  if (typeof x === "string") return hasTurnKey(x, si);
-  if (!x || typeof x !== "object" || depth <= 0 || seen.has(x) || skip(x)) return false;
-  seen.add(x);
-  const d = depth - 1;
-  try {
-    if (x instanceof Map) {
-      for (const [k, y] of x) if (holdsTurnKey(k, si, skip, d, seen) || holdsTurnKey(y, si, skip, d, seen)) return true;
-      return false;
-    }
-    if (x instanceof Set || Array.isArray(x)) {
-      for (const y of x) if (holdsTurnKey(y, si, skip, d, seen)) return true;
-      return false;
-    }
-    for (const k of Object.keys(x)) if (holdsTurnKey(x[k], si, skip, d, seen)) return true;
-  } catch { /* a host object */ }
-  return false;
-}
-// What is left of x once what holds such a key goes: a Set's or an array's elements and a
-// Map's entries go in place; a string or a plain object that holds one becomes null; any other
-// object (the host's, a class's) stays as it is.
-export function dropTurnKeys(x, si, skip = () => false) {
-  const has = (y) => holdsTurnKey(y, si, skip);
-  if (typeof x === "string") return has(x) ? null : x;
-  if (x instanceof Set) { for (const y of [...x]) if (has(y)) x.delete(y); return x; }
-  if (x instanceof Map) { for (const [k, y] of [...x]) if (has(k) || has(y)) x.delete(k); return x; }
-  if (Array.isArray(x)) {
-    let n = 0;
-    for (const y of x) if (!has(y)) x[n++] = y;
-    x.length = n;
-    return x;
-  }
-  if (x && Object.getPrototypeOf(x) === Object.prototype) return has(x) ? null : x;
-  return x;
-}
 // { shown, of } for a session trim() cut, else null; and the line the list shows over it.
 export function tailOf(s) {
   const d = META.get(s)?.dropped ?? 0;

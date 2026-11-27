@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { newSession, apply, parseChunk } from "../mods/agent-threads/core/turns.js";
 import {
-  BUDGET, TIGHT_CHUNK, PANE_WEIGHT, LOCK_STALE, QUEUE_STALE, GHOST_MS, measure, sessionBytes, trim, shiftKey, hasTurnKey, holdsTurnKey, dropTurnKeys, tailOf, tailNote, droppedOf, gut, windowState,
+  BUDGET, TIGHT_CHUNK, PANE_WEIGHT, LOCK_STALE, QUEUE_STALE, GHOST_MS, measure, sessionBytes, trim, shiftKey, tailOf, tailNote, droppedOf, gut, windowState,
   joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, dropRead, pruneWindow,
 } from "../mods/agent-threads/budget.js";
 import { turnId } from "../mods/agent-threads/pins.js";
@@ -593,6 +593,44 @@ test("a trim keeps the selection, the open turns, the reader's place and a pendi
   expect(v.scrollTo).toMatchObject({ key: `md:${at(59)}:0`, how: "land", or: [at(59)] });
 }, 20000);
 
+// The completeness test's walk (not the mod's: a trim moves only the fields on its lists).
+// A string holds a key of session si's turns when "si:n" is in it and not part of a longer
+// number or word (as in "10:30", "1.0:5" or "x0:5").
+const hasTurnKey = (str, si) => new RegExp(`(?:^|[^0-9A-Za-z.])${si}:\\d+(?![0-9.])`).test(str);
+// Whether x holds one: a string, or one in a Set, a Map (keys and values), an array or an
+// object's own values, down to depth levels; skip(o), an object not walked (a session, a turn).
+function holdsTurnKey(x, si, skip = () => false, depth = 6, seen = new Set()) {
+  if (typeof x === "string") return hasTurnKey(x, si);
+  if (!x || typeof x !== "object" || depth <= 0 || seen.has(x) || skip(x)) return false;
+  seen.add(x);
+  const d = depth - 1;
+  if (x instanceof Map) return [...x].some(([k, y]) => holdsTurnKey(k, si, skip, d, seen) || holdsTurnKey(y, si, skip, d, seen));
+  if (x instanceof Set || Array.isArray(x)) return [...x].some((y) => holdsTurnKey(y, si, skip, d, seen));
+  return Object.keys(x).some((k) => holdsTurnKey(x[k], si, skip, d, seen));
+}
+// Fields holding a transcript's, the settings' or a person's text, where "si:n" is words: not
+// walked, and never on a list a trim moves or starts over.
+const TEXT_FIELDS = [
+  "sessions", "res", "prefs", "prefsRaw", "prefsNotes", "prefsError", "pinStore", "pinRaw", "pinUndo", "calls", "links", "senders",
+  "linkList", "senderList", "linkNotes", "senderNotes", "trajNotes", "toast", "copied", "toldPart", "choices", "lastQuote", "remote",
+  "quoteDraft", "quoteFileNote", "ruleEdit", "ruleUndo", "rulesPending", "opening", "shownList", "known", "terminal", "query", "imgs",
+  "cardBody", "cardPlaces", "mem", "rowsLog", "readerMoves",
+];
+
+test("the completeness test's walk finds a turn's key anywhere in a string but not in a longer number, through Maps, Sets, arrays and nested objects", () => {
+  for (const s of ["0:5", "md:0:5:1", "0:59|abc", "w:0:5|x", "at 0:30"]) expect([s, hasTurnKey(s, 0)]).toEqual([s, true]);
+  for (const s of ["10:30", "1.0:5", "x0:5", "12:00", "1:5", ""]) expect([s, hasTurnKey(s, 0)]).toEqual([s, false]);
+  expect(holdsTurnKey(new Map([["a", { x: [{ k: "zz|0:3" }] }]]), 0)).toBe(true);
+  expect(holdsTurnKey(new Map([["0:3", 1]]), 0)).toBe(true);
+  expect(holdsTurnKey(new Set([["md:0:4:0"]]), 0)).toBe(true);
+  expect(holdsTurnKey({ a: { b: "1:2" } }, 0)).toBe(false);
+  const turn = { prompt: "at 0:30" };
+  expect(holdsTurnKey({ turn }, 0, (o) => o === turn)).toBe(false);
+  const cyc = { a: null };
+  cyc.a = cyc;
+  expect(holdsTurnKey(cyc, 0)).toBe(false);
+});
+
 // A pane with a 60-turn session read in full, and a trim of it past the budget: k, the turns
 // that went, and at(n), turn n's key after it.
 async function trimmedLater(file = fixture("--only", "1")) {
@@ -686,15 +724,17 @@ test("a trim keeps the Select view on its turn, so its rows show that turn's rep
 
 test("every field of a pane that holds a turn's key, walked through Maps, Sets, arrays and nested objects after a session's worth of use, is on TURN_KEYED or TURN_KEYED_RESET, and every name on them is the pane's", async () => {
   const { v, cx } = await trimmedLater();
-  const { moved, reset, text } = v.turnKeyed();
-  const known = new Set([...moved.map(([f]) => f), ...reset, ...text]);
+  const { moved, reset } = v.turnKeyed();
+  const known = new Set([...moved.map(([f]) => f), ...reset, ...TEXT_FIELDS]);
+  // A person's text is on no list a trim moves or starts over.
+  expect([...moved.map(([f]) => f), ...reset].filter((f) => TEXT_FIELDS.includes(f))).toEqual([]);
   // Each name on the lists is a field main.js sets; one init() does not make is marked lazy.
   const source = readFileSync(join(modDir, "main.js"), "utf8");
   for (const f of [...moved.map(([f]) => f), ...reset]) expect([f, new RegExp(`this\\.${f}\\b`).test(source)]).toEqual([f, true]);
   for (const [f, , opt] of moved) if (!opt?.lazy) expect([f, Object.hasOwn(v, f)]).toEqual([f, true]);
   // A session's worth of use: the outline, the Select view, a turn opened with its line, a
-  // step group and a call, a pin, a flash and a rail tick, the newest turn asked for while rows
-  // are built, the Trajectory, and a frame drawn.
+  // step group and a call, a pin, a flash and a rail tick, a frame drawn, a click on the rail,
+  // the Trajectory, and the newest turn asked for while rows are built.
   v.sel = "0:55";
   v.setOutline(true);
   v.toggleSelect("0:59", cx);
@@ -707,83 +747,25 @@ test("every field of a pane that holds a turn's key, walked through Maps, Sets, 
   v.flashTurn("0:57", cx);
   cx.timers[due].fn(cx);
   v.railGrowStart("0:56", cx);
+  v.rows();
+  v.render(cx);
+  v.action("debugRailJump:54", cx); // a click on turn #54's tick
+  v.enterTraj();
+  // Last: the newest turn asked for while rows are built. A build that ends (rows) settles the
+  // ask (latestAfterBuild clears latestDue), so it comes after the frame.
   const job = v.rowJob;
   v.rowJob = job ?? { going: true };
   v.selectNewest();
   v.rowJob = job;
-  v.rows();
-  v.render(cx);
-  v.enterTraj();
   const walked = new Set();
   for (const s of v.sessions) { walked.add(s); for (const t of s.turns) walked.add(t); }
   const skip = (o) => walked.has(o);
   // The use above reached these, so the walk below is not over empty fields.
-  for (const f of ["outlineBack", "selecting", "selEditor", "open", "lineOpen", "groupOpen", "groupTouched", "callOpen", "flash", "railGrow", "latestDue", "trajFrom", "tsel"]) {
+  for (const f of ["outlineBack", "selecting", "selEditor", "open", "lineOpen", "groupOpen", "groupTouched", "callOpen", "flash", "railGrow", "latestDue", "trajFrom", "tsel", "railTurns", "railMemo"]) {
     expect([f, holdsTurnKey(v[f], 0, skip)]).toEqual([f, true]);
   }
   const left = Object.keys(v).filter((f) => !known.has(f) && holdsTurnKey(v[f], 0, skip));
   expect(left).toEqual([]);
-}, 20000);
-
-test("hasTurnKey finds a turn's key anywhere in a string, not in a longer number; holdsTurnKey walks Maps, Sets, arrays and nested objects; dropTurnKeys lets go of what holds one", () => {
-  for (const s of ["0:5", "md:0:5:1", "0:59|abc", "w:0:5|x", "at 0:30"]) expect([s, hasTurnKey(s, 0)]).toEqual([s, true]);
-  for (const s of ["10:30", "1.0:5", "x0:5", "12:00", "1:5", ""]) expect([s, hasTurnKey(s, 0)]).toEqual([s, false]);
-  expect(holdsTurnKey(new Map([["a", { x: [{ k: "zz|0:3" }] }]]), 0)).toBe(true);
-  expect(holdsTurnKey(new Map([["0:3", 1]]), 0)).toBe(true);
-  expect(holdsTurnKey(new Set([["md:0:4:0"]]), 0)).toBe(true);
-  expect(holdsTurnKey({ a: { b: "1:2" } }, 0)).toBe(false);
-  const turn = { prompt: "at 0:30" };
-  expect(holdsTurnKey({ turn }, 0)).toBe(true);
-  expect(holdsTurnKey({ turn }, 0, (o) => o === turn)).toBe(false);
-  const cyc = { a: null };
-  cyc.a = cyc;
-  expect(holdsTurnKey(cyc, 0)).toBe(false);
-  const m = new Map([["0:3", 1], ["q", "r"], ["s", { k: "0:9" }]]);
-  expect(dropTurnKeys(m, 0)).toBe(m);
-  expect([...m.keys()]).toEqual(["q"]);
-  const set = new Set(["0:1", "x"]);
-  dropTurnKeys(set, 0);
-  expect([...set]).toEqual(["x"]);
-  const arr = ["0:1", "x", { k: "0:2" }];
-  dropTurnKeys(arr, 0);
-  expect(arr).toEqual(["x"]);
-  expect(dropTurnKeys("a|0:3", 0)).toBeNull();
-  expect(dropTurnKeys("plain", 0)).toBe("plain");
-  expect(dropTurnKeys({ k: "0:3" }, 0)).toBeNull();
-  expect(dropTurnKeys({ k: "x" }, 0)).toEqual({ k: "x" });
-});
-
-test("a trim lets go of what a field on no list holds of the session, in place for a Set, a Map or an array, and a debug pane names each such field once", async () => {
-  const { v, trimNow } = await trimmedLater();
-  expect(v.debug).toBe(true);
-  v.zzKeyA = "0:59";
-  v.zzKeyB = new Set(["0:3", "x"]);
-  v.zzKeyC = { deep: [{ k: "md:0:5:0" }] };
-  v.zzKeyD = new Map([["w:0:58|1", 1], ["keep", 2]]);
-  v.zzKeyE = ["a", "0:2"];
-  const setB = v.zzKeyB;
-  const said = [];
-  const log = console.log;
-  console.log = (...a) => { said.push(a.join(" ")); };
-  try {
-    trimNow();
-    // Another trim, with the same fields holding keys again: not said a second time.
-    v.zzKeyA = "0:2";
-    phantom(BUDGET); // no room: the session keeps its newest turn
-    const n = v.current().turns.length;
-    v.guard(v.current());
-    expect(v.current().turns.length).toBeLessThan(n);
-  } finally {
-    console.log = log;
-  }
-  expect(v.zzKeyB).toBe(setB);
-  expect([...v.zzKeyB]).toEqual(["x"]);
-  expect(v.zzKeyC).toBeNull();
-  expect([...v.zzKeyD.keys()]).toEqual(["keep"]);
-  expect(v.zzKeyE).toEqual(["a"]);
-  const named = (f) => said.filter((x) => x.includes(`let go of ${f},`)).length;
-  for (const f of ["zzKeyB", "zzKeyC", "zzKeyD", "zzKeyE"]) expect([f, named(f)]).toEqual([f, 1]);
-  expect(named("zzKeyA")).toBe(1);
 }, 20000);
 
 test("a trim that lets the Select view's turn go ends the view as endSelect does, so the keyboard comes back to the pane", async () => {
@@ -817,4 +799,33 @@ test("a trim moves the newest-turn ask, the way back from the Trajectory and the
   v.rows();
   v.latestAfterBuild();
   expect(v.sel).toBe(`0:${v.current().turns.length}`);
+}, 20000);
+
+test("a trim moves the rail's ticks with their turns into a new list, leaving the old one (a build's too) as it was", async () => {
+  const { v, trimNow } = await trimmedLater();
+  v.rows();
+  const old = v.railTurns;
+  expect(old.length).toBe(60);
+  const was = old.map((x) => x.key);
+  const { k, at } = trimNow();
+  expect(v.railTurns).not.toBe(old);
+  expect(old.map((x) => x.key)).toEqual(was);
+  expect(v.railTurns.map((x) => x.key)).toEqual(Array.from({ length: 60 - k }, (_, i) => at(k + i + 1)));
+  // Each tick keeps its turn: the key names the same turn as before.
+  for (const x of v.railTurns) expect(v.findTurn(x.key)).toBe(x.turn);
+}, 20000);
+
+test("a trim leaves a person's text alone, \"0:30\" in it or not: the unpin history, what was copied, the notes", async () => {
+  const { v, trimNow } = await trimmedLater();
+  const undo = { k: v.sessionKey(v.current()), at: 0, pin: { id: "1|x|1", n: 1, text: "split arr[0:3] at 0:30", at: 0, seen: { len: 0, fu: 0 } } };
+  v.pinUndo.push(undo);
+  v.toldPart = "see 0:12 in the log";
+  v.linkNotes = ["rule 0:2 has no URL"];
+  v.trajNotes = ["0:5 is not a turn"];
+  trimNow();
+  expect(v.pinUndo.at(-1)).toBe(undo);
+  expect(undo.pin.text).toBe("split arr[0:3] at 0:30");
+  expect(v.toldPart).toBe("see 0:12 in the log");
+  expect(v.linkNotes).toEqual(["rule 0:2 has no URL"]);
+  expect(v.trajNotes).toEqual(["0:5 is not a turn"]);
 }, 20000);
