@@ -2916,19 +2916,25 @@ export default class Threads extends View {
   }
   // Side panes alone on s, past the budget: the ones that joined last stand back, newest first,
   // while the window is over; when the first one alone is still over, it lets s go (refuse).
+  // The order is of joining s (sharers: the copy's holders as they came, a Retry's at the end).
+  // The first keeps it, and so does a pane that holds s as an older session: it has no refusal
+  // view to say it went (standBack).
   // True when this pane no longer shows s (it stood back, or s was refused): its read stops.
   sideOver(s) {
-    const ps = sharers(s).sort((a, b) => (a.mem?.born ?? 0) - (b.mem?.born ?? 0));
-    if (!ps.includes(this)) ps.push(this);
-    while (ps.length > 1 && windowBytes() > BUDGET) ps.pop().standBack(s);
-    if (windowBytes() > BUDGET) { ps[0].refuse(s); return true; }
+    const all = sharers(s);
+    if (!all.includes(this)) all.push(this);
+    const back = all.slice(1).filter((p) => p.current() === s);
+    while (back.length && windowBytes() > BUDGET) back.pop().standBack(s);
+    if (windowBytes() > BUDGET) { all[0].refuse(s); return true; }
     return !this.sessions.includes(s);
   }
   // This pane alone lets s go: refused, with an empty session of its own in s's place (Retry
   // takes the window's copy again), and the panes still on s read on if it is not read in full.
+  // Only for a pane's current session: its refusal view says so (sideOver never asks it of an
+  // older one, which would go with nothing on screen to say so).
   standBack(s) {
     const i = this.sessions.indexOf(s);
-    if (i < 0) return;
+    if (i < 0 || s !== this.current()) return;
     this.refuseView(s);
     this.restartView(s);
     if (this.mem) letSession(this.mem, s, false);

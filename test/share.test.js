@@ -325,3 +325,93 @@ test("a Pinned pane beside a Chat being trimmed keeps the copy, and each pane's 
   expect(windowBytes()).toBeLessThanOrEqual(BUDGET);
   for (const p of [chat, pin]) expect(() => p.v.render(p.cx)).not.toThrow();
 }, 20000);
+
+// A side pane's whole read of file, then closed: the copy's estimate stays for the next read to
+// be judged by (budget.js noteFile), with its cost and a Trajectory's view of it.
+async function measured(file) {
+  const a = openPane(file, { view: "pinned" });
+  await settle(a.v, 800);
+  const s = a.v.current();
+  const out = { cost: windowBytes(), view: viewOf(s, "trajectory"), n: s.turns.length };
+  a.v.close();
+  expect(windowBytes()).toBe(0);
+  return out;
+}
+
+test("a Trajectory that joins a Pinned pane mid-read stands back once the read passes the budget, and the Pinned pane reads on to the end", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 200 }, 16000);
+  const m = await measured(file);
+  phantom(BUDGET - m.cost - Math.floor(m.view / 2));
+  const st = fakeReader({ [file]: 200 }, 16000, 10);
+  const pin = openPane(file, { view: "pinned" });
+  await until(() => pin.v.current()?.offset > 0, "the Pinned pane's first chunk");
+  const s = pin.v.current();
+  const traj = openPane(file, { view: "trajectory" });
+  expect(traj.v.current()).toBe(s);
+  await until(() => traj.v.refused, "the Trajectory standing back");
+  await settle(pin.v, 800);
+  expect(traj.v.refusedNow()).toBe(true);
+  expect(traj.v.current()).not.toBe(s);
+  expect(pin.v.refused).toBeFalsy();
+  expect(s.turns.length).toBe(200);
+  expect(tailOf(s)).toBeNull();
+  expect(holdersOf(s)).toBe(1);
+  const offs = callsOf(st, file);
+  expect(new Set(offs).size).toBe(offs.length);
+  expect(windowBytes()).toBeLessThanOrEqual(BUDGET);
+}, 60000);
+
+test("a Trajectory that joins before any of the session is read stands back at once when the Pinned pane would fit alone, with no call", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 60 });
+  const m = await measured(file);
+  phantom(BUDGET - m.cost - Math.floor(m.view / 2));
+  // The Pinned pane's first call is held, so the session is still at its top when the
+  // Trajectory opens on it.
+  let release = null;
+  const held = new Promise((r) => { release = r; });
+  const st = fakeReader({ [file]: 60 });
+  const inner = H.extractHook;
+  H.extractHook = async (args) => { await held; return inner(args); };
+  const pin = openPane(file, { view: "pinned" });
+  await until(() => st.asked.length === 0 && pin.v.readWaiting, "the Pinned pane's call");
+  const s = pin.v.current();
+  expect(s.offset).toBe(0);
+  const traj = openPane(file, { view: "trajectory" });
+  await until(() => traj.v.refused, "the Trajectory standing back");
+  expect(traj.v.current()).not.toBe(s);
+  expect(holdersOf(s)).toBe(1);
+  release();
+  await settle(pin.v);
+  expect(pin.v.refused).toBeFalsy();
+  expect(s.turns.length).toBe(60);
+  // One pane read it: each offset asked once, from the top.
+  const offs = callsOf(st, file);
+  expect(offs[0]).toBe(0);
+  expect(new Set(offs).size).toBe(offs.length);
+}, 20000);
+
+test("a follower that is not following notes a turn that came with the chunk that trimmed the copy", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 60 });
+  const chat = openPane(file);
+  await settle(chat.v);
+  const other = openPane(file);
+  await settle(other.v);
+  const s = chat.v.current();
+  other.v.follow = false;
+  other.v.sel = "0:30";
+  other.v.followShared(other.cx);
+  expect(other.v.shareSeen?.n).toBe(60);
+  expect(other.v.unseen).toBeFalsy();
+  phantom(BUDGET - windowBytes() - 1);
+  fakeReader({ [file]: 70 });
+  chat.v.read(chat.cx);
+  await settle(chat.v);
+  expect(tailOf(s)?.of).toBe(70);
+  // What it last saw moved with the trim, so the new turn is told from the old ones.
+  expect(other.v.shareSeen?.n).toBe(60 - tailOf(s).of + tailOf(s).shown);
+  expect(other.v.followShared(other.cx)).toBe(true);
+  expect(other.v.unseen).toBe("pending");
+}, 20000);
