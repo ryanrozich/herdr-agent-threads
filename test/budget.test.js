@@ -247,7 +247,7 @@ test("past the budget a Chat opens at its tail: the newest turns that fit, numbe
   expect(turnNumbers(v)).toEqual(Array.from({ length: n }, (_, i) => i + 1));
   const note = v.rows().find((r) => r.kind === "note" && r.key === "tail:0");
   expect(note.text).toBe(`This session is too large to show in full: showing the newest ${n} of 60 turns`);
-  expect(v.win.bytes).toBeLessThanOrEqual(100 * 1024);
+  expect(v.mem.bytes).toBeLessThanOrEqual(100 * 1024);
   expect(windowBytes()).toBeLessThanOrEqual(BUDGET);
   v.report();
   expect(H.state.shared["threads.debug"].t4.sessions[0].tail).toEqual({ shown: n, of: 60 });
@@ -287,7 +287,7 @@ test("a Pinned pane on a session too large for the window reads none of it and s
   const t = openPane(other, { view: "trajectory" });
   await until(() => t.v.refused, "the Trajectory pane refusing");
   expect(t.v.current().turns.length).toBe(0);
-  expect(t.v.win.bytes).toBe(0);
+  expect(t.v.mem.bytes).toBe(0);
   expect(() => t.v.render(t.cx)).not.toThrow();
 }, 20000);
 
@@ -316,7 +316,7 @@ test("two panes read one chunk at a time between them, and over half the budget 
 test("a pane that closes, or that a newer copy of the mod replaces, empties its sessions, leaves the window, draws a note and its timers do nothing", async () => {
   const a = openPane(fixture("--extra", "3"));
   await settle(a.v);
-  expect(a.v.win.bytes).toBeGreaterThan(0);
+  expect(a.v.mem.bytes).toBeGreaterThan(0);
   const turns = a.v.current().turns;
   a.v.close();
   expect(a.v.forgotten).toBe(true);
@@ -328,7 +328,7 @@ test("a pane that closes, or that a newer copy of the mod replaces, empties its 
   // Replaced by a reload: its entry is an older evaluation's.
   const b = openPane(fixture("--extra", "3"));
   await settle(b.v);
-  b.v.win.gen = {};
+  b.v.mem.gen = {};
   releaseOlder();
   expect(b.v.forgotten).toBe(true);
   expect(windowState().panes.size).toBe(0);
@@ -340,7 +340,7 @@ test("a reload of the same code: the copy it replaced in this Herdr pane, its ti
   const a = openPane(file);
   await settle(a.v);
   tick(a);
-  const where = a.v.win.pane;
+  const where = a.v.mem.pane;
   expect(where).toBeTruthy();
   const turns = a.v.current().turns;
   // The new copy, in the same Herdr pane, while the old one still beats: both stay.
@@ -348,19 +348,19 @@ test("a reload of the same code: the copy it replaced in this Herdr pane, its ti
   await settle(b.v);
   tick(b);
   tick(b);
-  expect(b.v.win.pane).toBe(where);
+  expect(b.v.mem.pane).toBe(where);
   expect(a.v.forgotten).toBeUndefined();
   // The old copy's timers stopped (Herdr cancelled them): the new copy's next beat empties it,
   // but not a beat that comes after its own timer was held up (a sleep: no copy beat).
-  a.v.win.beat = Date.now() - 2 * GHOST_MS;
+  a.v.mem.beat = Date.now() - 2 * GHOST_MS;
   b.v.lastTick = Date.now() - 60000;
   tick(b);
   expect(a.v.forgotten).toBeUndefined();
-  a.v.win.beat = Date.now() - 2 * GHOST_MS;
+  a.v.mem.beat = Date.now() - 2 * GHOST_MS;
   tick(b);
   expect(a.v.forgotten).toBe(true);
   expect(turns.length).toBe(0);
-  expect([...windowState().panes]).toEqual([b.v.win]);
+  expect([...windowState().panes]).toEqual([b.v.mem]);
   expect(b.v.current().turns.length).toBeGreaterThan(0);
 }, 20000);
 
@@ -426,7 +426,7 @@ test("a read keeps the window's turn until its chunk is measured and counted: no
   const panes = [openPane(f1), openPane(f2)];
   for (const { v } of panes) {
     const guard = v.guard.bind(v);
-    v.guard = (s) => { held.push(windowState().lock?.e === v.win); log.push(["guard", s.file]); return guard(s); };
+    v.guard = (s) => { held.push(windowState().lock?.e === v.mem); log.push(["guard", s.file]); return guard(s); };
   }
   for (const { v } of panes) await settle(v, 800);
   expect(held.length).toBeGreaterThan(2);
@@ -442,9 +442,9 @@ test("a read keeps the window's turn until its chunk is measured and counted: no
 test("a pane that picks another transcript lets go of the old one's estimate at once", async () => {
   const a = openPane(fixture("--extra", "3"));
   await settle(a.v);
-  expect(a.v.win.bytes).toBeGreaterThan(0);
+  expect(a.v.mem.bytes).toBeGreaterThan(0);
   a.v.pick({ path: fixture("--extra", "4") }, a.cx);
-  expect(a.v.win.bytes).toBe(0);
+  expect(a.v.mem.bytes).toBe(0);
 }, 20000);
 
 test("in a trimmed Chat a pin is loading while its session is read, gone when its number is in the tail but its turn is not, and older than the tail only when its number is; the toast gives the whole session's number", async () => {

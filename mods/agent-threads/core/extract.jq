@@ -10,9 +10,13 @@
 #      slash command line               {cmd: true, o, ts, t: "/name args", u: line uuid}
 #   b  a meta line, by its parent       {pu: parent uuid}: a skill or custom command's text
 #                                       follows its command line this way; a local command
-#                                       has no such line
+#                                       has no such line. o: "scheduled" on a scheduled line
 #   i  "[Request interrupted"           {ts}
-#   t  assistant text block             {t, ts}
+#   t  assistant text block             {t, ts}, and a: 1 on a message that ends the reply
+#                                       (ends_reply, by its stop_reason)
+#   w  work Claude Code starts by       {o: "scheduled", ts}: a meta line whose turnOrigin is
+#      itself, with no prompt line      scheduled (a loop's tick, a schedule come due), or a
+#                                       queued meta line whose origin is. Its text is never read
 #   u  tool call                        {n: tool name, id, ts, in: its input in up to 120
 #                                       characters (the command, the path, the pattern)}
 #   x  a call's result                  {id, ts, f: whether it failed}: extract.sh turns each
@@ -132,7 +136,8 @@ def user_event:
     elif $l.isMeta == true and ($ENV.THREADS_SKILL // "") != "" and $l.uuid == $ENV.THREADS_SKILL then
       {k: "p", o: "human", ts: $l.timestamp, t: ($c | text_of | cap)}
     elif $l.isMeta == true and ($l.origin.kind? // null) != "peer" then
-      if ($l.parentUuid | type) == "string" then {k: "b", pu: $l.parentUuid} else empty end
+      (if ($l.parentUuid | type) == "string" then {k: "b", pu: $l.parentUuid} + (if $l.turnOrigin == "scheduled" then {o: "scheduled"} else {} end) else empty end),
+      (if $l.turnOrigin == "scheduled" then {k: "w", o: "scheduled", ts: $l.timestamp} else empty end)
     else ($c | text_of) as $t
       | if ($t | startswith("[Request interrupted")) then {k: "i", ts: $l.timestamp}
         # Slash commands, in either tag order, with or without origin: local ones (/clear,
@@ -176,7 +181,10 @@ def queued_event:
   | ($a.origin.kind? // "human") as $o
   | ($a.prompt | text_of) as $t
   | {uuid: $l.uuid, imagePasteIds: ($a.imagePasteIds // null)} as $img
-  | if ($t | startswith("<task-notification>")) then notice($t)
+  # A scheduled meta line first: its text is never read, not even as a notification.
+  | if $a.isMeta == true and $o == "scheduled" and ($a.commandMode // "prompt") == "prompt" then
+      {k: "w", o: "scheduled", ts: ($l.timestamp // $a.timestamp)}
+    elif ($t | startswith("<task-notification>")) then notice($t)
     elif (own($o) | not) or ($a.commandMode // "prompt") != "prompt" then empty
     elif $a.isMeta == true and $o != "peer" then empty
     elif ($t | length) == 0 and (imgs($img; $a.prompt) == {}) then empty
@@ -195,9 +203,10 @@ def assistant_event:
   | if ($l.message.model == "<synthetic>") or ($l.isApiErrorMessage == true) then
       {k: "e", t: ($l.message.content | text_of)}, {k: "s", ts: $l.timestamp}
     else
-      ( $l.message.content[]?
+      ($l | ends_reply) as $end
+      | ( $l.message.content[]?
         | select(type == "object")
-        | if .type == "text" then {k: "t", t: ((.text // "") | cap), ts: $l.timestamp}
+        | if .type == "text" then {k: "t", t: ((.text // "") | cap), ts: $l.timestamp} + (if $end then {a: 1} else {} end)
           elif ($ARGS.named.reasoning // "") == "1" and (.type == "thinking" or .type == "reasoning" or .type == "analysis" or .type == "redacted_thinking") then
             (if .type == "redacted_thinking" then "" else (.text // .thinking // "") | tostring | gsub("^\\s+|\\s+$"; "") end) as $r
             | if ($r | length) > 0 then {k: "h", t: ($r | cap), ts: $l.timestamp} else {k: "h", w: 1, ts: $l.timestamp} end
@@ -207,7 +216,7 @@ def assistant_event:
         | {k: "m", id: $l.message.id, m: $l.message.model, e: ($l.effort // $l.perTurnEffort // null), ts: $l.timestamp,
            u: ($l.message.usage | {i: (.input_tokens // 0), o: (.output_tokens // 0),
                                    cr: (.cache_read_input_tokens // 0), cc: (.cache_creation_input_tokens // 0)})} ),
-      ( select($l | ends_reply) | {k: "s", ts: $l.timestamp} )
+      ( select($end) | {k: "s", ts: $l.timestamp} )
     end;
 
 # A subagent's own transcript (subagents/agent-<id>.jsonl) marks every line isSidechain: the
