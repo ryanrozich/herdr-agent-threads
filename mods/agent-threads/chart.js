@@ -70,7 +70,6 @@ export function chartModel(b, { w, h = CHART.H, end = null, loaded = false, prom
     const counts = Array.from({ length: groups }, (_, g) => sum(g, BURN.PROMPTS));
     const top = niceTop(Math.max(...counts));
     if (!top) return out;
-    out.top = `top ${top} per ${fmtPer(k * b.w)}`;
     counts.forEach((c, g) => {
       if (!c) return;
       const v0 = g * k * b.w;
@@ -82,6 +81,13 @@ export function chartModel(b, { w, h = CHART.H, end = null, loaded = false, prom
       const bw = Math.min(Math.max(1, k * b.w * sx - 1.5), end - x - 0.5);
       if (bw > 0) out.bars.push({ x: r(x + 0.5), w: r(bw), h: r((c / top) * h) });
     });
+    // No bar with any width yet (one prompt at the read edge): no scale over nothing, as
+    // before the first prompt (the title, the legend and the note).
+    if (!out.bars.length) {
+      out.legend = [{ slot: BURN.PROMPTS, name: "prompts", share: "" }];
+      return out;
+    }
+    out.top = `top ${top} per ${fmtPer(k * b.w)}`;
   } else {
     // Points: each group's tokens per hour at its middle (the first at the axis's start, the
     // last at the read point), and a drop to nothing on each side of every fold.
@@ -105,7 +111,9 @@ export function chartModel(b, { w, h = CHART.H, end = null, loaded = false, prom
       const x1 = X(f) - G;
       pts.push({ x: x1, vals: null }, { x: x1 + G, vals: null });
     }
-    pts.sort((a, c) => a.x - c.x);
+    // At one x, a fold's drop comes before a point: the first count after a fold sits on the
+    // fold, and the area rises from the baseline there instead of falling back to it.
+    pts.sort((a, c) => a.x - c.x || (a.vals ? 1 : 0) - (c.vals ? 1 : 0));
     let peak = 0;
     for (const p of pts) if (p.vals) peak = Math.max(peak, p.vals.reduce((a, c) => a + c, 0));
     const top = niceTop(peak);

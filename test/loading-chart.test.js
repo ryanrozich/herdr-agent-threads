@@ -11,7 +11,7 @@ import { BURN, newBurn, burnTokens, burnPrompt, burnReal, burnAt } from "../mods
 import { newSession, apply, rewindTail, sessionStats } from "../mods/agent-threads/core/turns.js";
 import { chartModel, niceTop, fmtTop, fmtPer } from "../mods/agent-threads/chart.js";
 import { openCounts, openLines } from "../mods/agent-threads/ui.js";
-import { draw, el, frame, H, openingPane, settle, setup, theme, Threads, until } from "./render-harness.js";
+import { draw, el, frame, H, openingPane, paintKit, settle, setup, theme, Threads, until } from "./render-harness.js";
 
 setup();
 
@@ -392,6 +392,8 @@ test("where Herdr paints paths, the chart is one filled path per area and one st
   const win = globalThis.window;
   globalThis.window = { paint_path: (path, color) => { painted.push([path, color]); return el; } };
   console.log = (...a) => said.push(a.join(" "));
+  // Said once per run: cleared here, so no earlier test's failure hides this one's line.
+  Threads.chartPaintSaid = false;
   try {
     const paints = Threads.prototype.chartPaints.call(null, { m, inks }, 72, kit);
     const lined = m.areas.filter((a) => a.line.length);
@@ -411,7 +413,7 @@ test("where Herdr paints paths, the chart is one filled path per area and one st
       expect(color).toBe(inks.line[a.slot]);
       expect(path.ops.filter((o) => o[0] === "M")).toHaveLength(a.line.length);
     });
-    expect(Threads.prototype.chartPainted.call(null, paints, 461, 72)).toHaveLength(paints.length);
+    expect(Threads.prototype.chartPainted.call(null, { paints }, 461, 72)).toHaveLength(paints.length);
     expect(painted).toEqual(paints);
     expect(said).toEqual([]);
     // A wrong call in the paths: the plainer chart, and one line in the log however often.
@@ -419,7 +421,9 @@ test("where Herdr paints paths, the chart is one filled path per area and one st
     expect(Threads.prototype.chartPaints.call(null, { m, inks }, 72, broken)).toBeNull();
     expect(Threads.prototype.chartPaints.call(null, { m, inks }, 72, broken)).toBeNull();
     globalThis.window = { paint_path: () => { throw new Error("no paint"); } };
-    expect(Threads.prototype.chartPainted.call(null, paints, 461, 72)).toEqual([]);
+    const failed = { paints };
+    expect(Threads.prototype.chartPainted.call(null, failed, 461, 72)).toEqual([]);
+    expect(failed.paints).toBeNull();
     expect(said).toHaveLength(1);
     expect(said[0]).toContain("loading chart");
     expect(said[0]).toContain("no fill");
@@ -498,4 +502,62 @@ test("the loading state's turns row says how many of its turns are the person's 
   expect(prompts).toBe(1);
   // The chart's prompts (Cursor's bars) count by the same rule.
   expect(s.burn.tot[BURN.PROMPTS]).toBe(prompts);
+});
+
+test("a paint that fails drops the chart's paths, so the bars draw in that frame and the next, not an empty plot", () => {
+  const { b, end } = day();
+  const inks = Threads.prototype.chartInks.call(null, theme);
+  // A pane's loading chart, with a Herdr that has paths but fails to paint them.
+  const v = Object.create(Threads.prototype);
+  v.opening = { mtime: end };
+  v.agent = () => ({ name: "Claude Code" });
+  const s = { burn: b, loaded: false, file: "s.jsonl" };
+  const log = console.log;
+  const said = [];
+  paintKit(true);
+  globalThis.window.paint_path = () => { throw new Error("no paint"); };
+  console.log = (...a) => said.push(a.join(" "));
+  Threads.chartPaintSaid = false;
+  try {
+    const bars = (calls) => calls.filter(([n, x]) => n === "bg" && x === inks.fill[0]).length;
+    for (let k = 0; k < 2; k++) {
+      H.rec = [];
+      v.loadChart(theme, s, 461);
+      const calls = H.rec;
+      H.rec = null;
+      expect(v.opening.chart.paints).toBeNull();
+      expect(bars(calls)).toBeGreaterThan(5);
+    }
+    expect(said).toHaveLength(1);
+  } finally {
+    H.rec = null;
+    console.log = log;
+    paintKit(false);
+  }
+});
+
+test("Cursor's one prompt at the read edge: no scale over an empty plot, as before the first prompt", () => {
+  const t0 = new Date(2026, 10, 20, 9, 0).getTime();
+  const b = newBurn();
+  burnPrompt(b, t0);
+  const m = chartModel(b, { w: 461, end: t0 + HOUR, loaded: false, prompts: true, agent: "Cursor", now: t0 });
+  expect(m.bars).toEqual([]);
+  expect(m.top).toBe("");
+  expect(m.legend).toEqual([{ slot: BURN.PROMPTS, name: "prompts", share: "" }]);
+  expect(m.note).toBe("Cursor's log has no token counts");
+});
+
+test("the first count after a fold rises from the baseline at the read edge, not a spike that falls back", () => {
+  const t0 = new Date(2026, 10, 20, 9, 0).getTime();
+  const b = newBurn();
+  for (let t = t0; t < t0 + HOUR; t += 60000) burnTokens(b, t, "opus 5.5", 3000);
+  const after = t0 + 59 * 60000 + 3 * HOUR;
+  burnTokens(b, after, "opus 5.5", 3000);
+  expect(b.folds[0]).toBe(b.v);
+  const m = chartModel(b, { w: 461, end: after + HOUR, loaded: false, now: after });
+  const a = m.areas[0];
+  // The top edge ends at the read edge on the point's value, after the fold's drop.
+  expect(a.fill[2 * (a.n - 1)]).toBe(m.readX);
+  expect(a.fill[2 * (a.n - 1) + 1]).toBeLessThan(72);
+  expect(a.fill[2 * (a.n - 2) + 1]).toBe(72);
 });

@@ -68,11 +68,11 @@ const paintKit = () => (gpuiKit.PathBuilder?.fill && gpuiKit.Background?.linear_
 // A stroked path (the timeline's hatched breaks, TRD-23), where Herdr has one.
 const strokeKit = () => (gpuiKit.PathBuilder?.stroke ? gpuiKit : null);
 // The loading chart's paths failed (main.js chartPaints, chartPainted): said once per run, so a
-// wrong call there shows in the log instead of only as the plainer chart.
-let chartPaintSaid = false;
+// wrong call there shows in the log instead of only as the plainer chart. The flag is kept on
+// the class (Threads.chartPaintSaid), where a test can clear it.
 function chartPaintFailed(what, e) {
-  if (chartPaintSaid) return;
-  chartPaintSaid = true;
+  if (Threads.chartPaintSaid) return;
+  Threads.chartPaintSaid = true;
   console.log(`agent-threads: ${what} failed: ${e?.message ?? e}`);
 }
 import {
@@ -10191,6 +10191,8 @@ export default class Threads extends View {
     }
     const { m, inks } = c;
     const label = (text, color = t.dim) => div().flex_none().whitespace_nowrap().text_size(11.5).text_color(color).child(text);
+    // Painted first: a paint that fails drops the paths, and the bars draw in this same frame.
+    const painted = this.chartPainted(c, w, h);
     const fallback = !c.paints;
     return v_flex().id("th-load-chart").flex_none().w(w)
       .child(h_flex().h(16).mt(16).flex_none().w_full().items_center().justify_between()
@@ -10198,7 +10200,7 @@ export default class Threads extends View {
       .child(div().id("th-load-plot").relative().h(h + 1).mt(6).flex_none().w(w).overflow_hidden()
         .child(div().absolute().top(0).left(0).w(w).h(1).bg(inks.grid))
         .child(div().absolute().top(h / 2).left(0).w(w).h(1).bg(inks.grid))
-        .children(this.chartPainted(c.paints, w, h))
+        .children(painted)
         .when(fallback, (el) => el.children(this.chartBars(m, inks, h)))
         .child(div().absolute().top(h).left(0).w(Math.max(0, m.base)).h(1).bg(inks.axis))
         .when(m.readX != null, (el) => el.child(div().absolute().top(0).left(m.readX).w(1).h(h).bg(inks.edge))))
@@ -10222,7 +10224,8 @@ export default class Threads extends View {
   // The painted parts as [path, colour]: one path per area and per top line, the bars as one
   // path, and the fold marks; null where Herdr has no paths (chartBars draws then). The paths
   // are plain frozen data, kept with the chart; each frame paints them as new elements. kit:
-  // gpui-kit's paths (a test gives its own); a failure is logged once and the bars draw.
+  // gpui-kit's paths (a test gives its own); a failure here or in chartPainted is logged once
+  // and the bars draw.
   chartPaints(c, h, kit = paintKit()) {
     const win = globalThis.window;
     if (!kit || typeof win?.paint_path !== "function") return null;
@@ -10268,13 +10271,16 @@ export default class Threads extends View {
       return null;
     }
   }
-  chartPainted(paints, w, h) {
+  // The chart c's paths as elements. When painting fails, the chart keeps no paths (c.paints
+  // null), so this frame and the next draw the bars (chartBars) in their place.
+  chartPainted(c, w, h) {
     const win = globalThis.window;
-    if (!paints) return [];
+    if (!c.paints) return [];
     try {
-      return paints.map(([path, color]) => div().absolute().top(0).left(0).w(w).h(h + 1).child(win.paint_path(path, color).w(w).h(h + 1)));
+      return c.paints.map(([path, color]) => div().absolute().top(0).left(0).w(w).h(h + 1).child(win.paint_path(path, color).w(w).h(h + 1)));
     } catch (e) {
       chartPaintFailed("painting the loading chart", e);
+      c.paints = null;
       return [];
     }
   }
