@@ -116,6 +116,11 @@ export let keepSettings = false;
 // With settingsStale set, a settings write whose expected text is not what the file holds is
 // rejected, as Herdr rejects a stale snapshot.
 export let settingsStale = false;
+// With drawBetweenAsks set, probeFrame draws again after each group of timers due before the
+// next frame, in the order of their delays (a scroll asked 16 ms on, then one 48 ms on), as
+// Herdr draws about every 16 ms between them. Off, they all run before the next frame's draw.
+// A timer due after the frame is kept for the next with it set, and dropped with it off.
+export let drawBetweenAsks = false;
 // A script that has not ended in 4 s is killed with everything it started, and the call fails
 // with a line naming it: a hung child ends before bun's 5 s test limit kills it as a dangling
 // process, which says nothing of which call it was (once in CI). The script runs in a process
@@ -206,18 +211,43 @@ export function reset() {
   extractHook = null;
   keepSettings = false;
   settingsStale = false;
+  drawBetweenAsks = false;
   lacking.clear();
   stubHas.clear();
   for (const list of [mdSources, overlays, closed, views, editors, scrollHandles, settingsWrites]) list.length = 0;
   for (const k of Object.keys(hostReads)) hostReads[k] = 0;
   for (const k of Object.keys(work)) work[k] = 0;
 }
+// gpui-kit's stand-in. With paint (paintKit(true)), a Herdr that paints paths: PathBuilder's
+// fill and stroke keep each call as [name, ...args] in the built path's cmds, and
+// window.paint_path keeps [path, color] in painted. Without (setup leaves it so), no
+// PathBuilder or Background, so the code takes its divs. The two names are always there, so
+// a later stand-in reaches code that imported the module as a namespace.
+export const painted = [];
+let windowWas;
+export function paintKit(on) {
+  const builder = (kind, ...args) => {
+    const cmds = [[kind, ...args]];
+    const b = { move_to: (...a) => { cmds.push(["move_to", ...a]); return b; }, line_to: (...a) => { cmds.push(["line_to", ...a]); return b; }, close: () => { cmds.push(["close"]); return b; }, build: () => ({ cmds }) };
+    return b;
+  };
+  mock.module("gpui-kit", () => ({
+    View: class {}, div: () => el, svg: (p) => { if (rec) rec.push(["svg", p]); return el; }, image: () => el,
+    PathBuilder: on ? { fill: () => builder("fill"), stroke: (w) => builder("stroke", w) } : undefined,
+    Background: on ? { linear_gradient: (...a) => ({ gradient: a }), stop: (...a) => ({ stop: a }) } : undefined,
+  }));
+  painted.length = 0;
+  if (on) {
+    windowWas = globalThis.window;
+    globalThis.window = { paintKit: true, paint_path: (path, color) => { painted.push([path, color]); return el; } };
+  } else if (globalThis.window?.paintKit) globalThis.window = windowWas;
+}
 // The module stand-ins for gpui-kit, gpui-base and Herdr, and the settings reset. Installed
 // here before main.js is imported, and again by each test file as it starts: another file may
 // have put its own stand-ins in, or left settings behind.
 export function setup() {
   reset();
-  mock.module("gpui-kit", () => ({ View: class {}, div: () => el, svg: (p) => { if (rec) rec.push(["svg", p]); return el; }, image: () => el }));
+  paintKit(false);
   mock.module("gpui-base", () => ({
     v_flex: () => el, h_flex: () => el,
     InputState: { new: () => { const st = { handlers: {}, text: "", on(ev, f) { st.handlers[ev] = f; return true; }, value: () => st.text, set_value(x) { st.text = x; }, focus() {} }; return st; } },
@@ -229,6 +259,9 @@ export function setup() {
     v_virtual_list: (_id, n, sizes, keyOf, draw) => {
       // One number is one height for every item (the Trajectory's list); an array is one each.
       const size = (i) => (typeof sizes === "number" ? sizes : sizes[i]);
+      // Herdr refuses more than 10,000 item sizes, and throws on every draw (seen on Herdr
+      // 0.1.17); one number has no such limit (seen on the rig, not measured on a known version).
+      if (Array.isArray(sizes) && sizes.length > 10000) throw new RangeError("item_sizes may contain at most 10000 entries");
       lastList = { sizes: typeof sizes === "number" ? Array.from({ length: n }, () => sizes) : [...sizes], keys: [], draw };
       for (let i = 0; i < n; i++) { if (!(size(i) > 0)) throw new Error(`item ${keyOf(i)} has height ${size(i)}`); lastList.keys.push(keyOf(i)); }
       draw(listWindow ? listWindow(n) : { start: 0, end: n });
@@ -453,9 +486,11 @@ export function simList(v) {
     sim.frames.push({ key: lastList.keys[start], into: off - pre[start], share: (off - pre[start]) / s[start], end: end >= n, off, sizes: s, keys: lastList.keys, lift: v.anchorLift ?? 0, held: Boolean(v.anchor && !v.anchor.end) });
     return { start, end };
   };
-  sim.wheel = (dy) => {
+  // phase: the event's touch_phase, as gpui gives it ("started", "moved", "ended"); none by
+  // default.
+  sim.wheel = (dy, phase) => {
     sim.off = Math.max(0, Math.min(sim.off - dy, room(lastList.sizes)));
-    v.listWheel({ delta: { y: dy * v.zoom() } });
+    v.listWheel({ delta: { y: dy * v.zoom() }, ...(phase ? { touch_phase: phase } : {}) });
   };
   sim.last = () => sim.frames[sim.frames.length - 1];
   return sim;
@@ -464,15 +499,44 @@ export function simList(v) {
 // trickles measures in over the frames after a re-wrap.
 export const fakeH = (p) => 30 + ((p.key.length * 37 + p.key.charCodeAt(p.key.length - 1) * 13) % 70);
 export function probeFrame(v, cx) {
-  let due = [];
-  v.probeDue = function () { due = Threads.prototype.probeDue.call(this); return due; };
-  try { draw(v, cx); } finally { delete v.probeDue; }
-  // The timers due before the next frame run, as Herdr runs them between frames (a scroll
-  // asked 16 or 48 ms on); the frame marks they would clear are cleared.
+  // Every draw of the frame asks the probe for parts (each ask spends one of a part's tries):
+  // all are answered, a part's last ask winning.
+  const due = new Map();
+  let later = null;
+  v.probeDue = function () { const d = Threads.prototype.probeDue.call(this); for (const [p, sig] of d) due.set(p.key, [p, sig]); return d; };
+  try {
+    draw(v, cx);
+    // The timers due before the next frame (120 ms) run, as Herdr runs them between frames (a
+    // scroll asked 16 or 48 ms on), by a clock moved on to each due time: a timer a callback or
+    // a draw sets joins at its own due time, and a draw follows each group due at once.
+    if (drawBetweenAsks) {
+      let t = 0;
+      let q = cx.timers.map((x) => ({ ...x, at: x.ms }));
+      cx.timers = [];
+      for (let k = 0; k < 50; k++) {
+        q.push(...cx.timers.map((x) => ({ ...x, at: t + x.ms })));
+        cx.timers = [];
+        const next = Math.min(...q.map((x) => x.at));
+        if (!(next <= 120)) break;
+        t = next;
+        const now = q.filter((x) => x.at === t);
+        q = q.filter((x) => x.at !== t);
+        for (const x of now) x.fn(cx);
+        draw(v, cx);
+      }
+      // Due after the frame: kept for the next, with what is left of their delay. So is what the
+      // 50th draw asked for; what was due in the frame and not reached runs in the flush below.
+      later = [...cx.timers.map((x) => ({ ...x, ms: Math.max(1, t + x.ms - 120) })), ...q.filter((x) => x.at > 120).map(({ at, ...x }) => ({ ...x, ms: at - 120 }))];
+      cx.timers = q.filter((x) => x.at <= 120).map(({ at, ...x }) => ({ ...x, ms: at }));
+    }
+  } finally { delete v.probeDue; }
+  // The frame marks the timers would clear are cleared. With drawBetweenAsks off, a timer due
+  // after the frame is dropped.
   cx.flush(120, 3);
   dropTimers(v, cx);
-  for (const [p, sig] of due) v.probed(p.key, sig, { width: 300, height: fakeH(p) * v.zoom() }, cx);
-  return due.length;
+  if (later) cx.timers = later;
+  for (const [p, sig] of due.values()) v.probed(p.key, sig, { width: 300, height: fakeH(p) * v.zoom() }, cx);
+  return due.size;
 }
 // Frames until the rows are built and shaped, the probe has measured everything, and no
 // place is held; the frames each drew.
@@ -540,6 +604,8 @@ export const H = {
   set keepSettings(x) { keepSettings = x; },
   get settingsStale() { return settingsStale; },
   set settingsStale(x) { settingsStale = x; },
+  get drawBetweenAsks() { return drawBetweenAsks; },
+  set drawBetweenAsks(x) { drawBetweenAsks = x; },
 };
 
 // Helpers the render tests share: render.test.js and the topic files on this harness.

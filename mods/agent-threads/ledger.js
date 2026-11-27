@@ -105,9 +105,6 @@ export function barFrac(ms) {
 export const BAR_W = 64;
 export const BAR_H = 4;
 export const BAR_SLANT = 5;
-// The thin line under a turn heading: 3 px, an unfinished call's end one 4 px slant.
-export const LINE_H = 3;
-export const LINE_SLANT = 4;
 // A slanted right end as a polygon, in px: [x, y] points of a bar from a to z, h tall, whose
 // top runs d px past its foot. Under d px wide it is a plain box, never a sliver.
 export function slantPoints(a, z, h, d) {
@@ -210,24 +207,9 @@ function firstLine(text) {
   return flattenMd(line.slice(0, 800), 200).trim().slice(0, 200);
 }
 
-// Stretches of the turn's clock, merged where they touch, as fractions of the turn: [[a, b]].
-// A stretch is at least `min` long so a call of a few ms still shows.
-function stretches(list, t0, span, min = 0.006) {
-  const segs = list.map(([s, e]) => [(s - t0) / span, (e - t0) / span])
-    .map(([a, b]) => [Math.max(0, Math.min(1, a)), Math.max(0, Math.min(1, b))])
-    .map(([a, b]) => (b - a < min ? [Math.max(0, Math.min(a, 1 - min)), Math.min(1, Math.max(a, 1 - min) + min)] : [a, b]))
-    .sort((x, y) => x[0] - y[0]);
-  const out = [];
-  for (const sg of segs) {
-    const last = out[out.length - 1];
-    if (last && sg[0] <= last[1]) last[1] = Math.max(last[1], sg[1]);
-    else out.push([sg[0], sg[1]]);
-  }
-  return out;
-}
-
-// At most n stretches: the closest neighbours are joined until n are left, for a drawing
-// that makes an element per stretch (the line without vector paths).
+// At most n stretches ([[a, b]] in order): the closest neighbours are joined until n are
+// left, for a drawing that makes an element per stretch (the timeline's bars without vector
+// paths, main.js rectLayer).
 export function coarse(segs, n = 40) {
   const out = segs.map((x) => [x[0], x[1]]);
   while (out.length > n) {
@@ -284,9 +266,11 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
   // reader never keeps) is no step of its own.
   for (const g of tr.groups) for (const c of g.cells) if (!(c.kind === "message" && !String(c.text ?? "").trim())) cells.push(c);
   // The reply is the last message cell when the turn has one (trajectory puts it last but
-  // for a background update).
+  // for a background update). With marked answers in their places (final), each is a reply, and
+  // the last message is one only when it holds an answer too, not a note after them.
+  const last = !turn.finals?.length || Boolean(turn.after.marked);
   let replyAt = -1;
-  if (hasReply) for (let i = cells.length - 1; i >= 0; i--) if (cells[i].kind === "message") { replyAt = i; break; }
+  if (hasReply) for (let i = cells.length - 1; i >= 0; i--) if (cells[i].final || (last && cells[i].kind === "message")) { replyAt = i; break; }
   // A turn with no time on any step (the turn's own start and end are not a step's): its
   // cells are left empty and its heading says so.
   const timed = t0 != null && cells.some((c, i) => i > 0 && c.start != null);
@@ -300,21 +284,13 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
   let calls = 0;
   let fails = 0;
   let lastEnd = t0;
-  // The line under the heading: calls (a subagent's apart, failed ones red), the reply, and
-  // the unfinished calls, each drawn with its slanted end.
-  const tools = [];
-  const sub = [];
-  const model = [];
-  const red = [];
-  const openAt = [];
-  const openSub = [];
   cells.forEach((c, i) => {
     const r = { kind: "tr", key: `tr:${key}:${i}`, turn, si, lk: "text", text: "", tool: null, status: null, start: null, dur: null, startQ: false, durQ: false, failed: false };
     if (c.start != null) lastEnd = Math.max(lastEnd ?? c.start, c.start);
     if (c.end != null) lastEnd = Math.max(lastEnd ?? c.end, c.end);
     if (c.kind === "user") {
-      // A task notification's turn has no message: its row says what the Chat's quiet line
-      // says ("Background task finished"), never the notice's text.
+      // A task notification's turn, or one that started by itself, has no message: its row says
+      // what the Chat's quiet line says ("Background task finished", "Goal"), never the text.
       const notice = noticeTurn(turn);
       r.lk = turn.agent ? "agent" : "you";
       r.text = notice ? kindWords(turn.sender) : outlineText(c.text) || " ";
@@ -323,12 +299,12 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
       r.start = t0 != null ? 0 : null;
     } else if (c.kind === "message") {
       const isReply = i === replyAt;
-      r.lk = isReply ? "reply" : "text";
+      r.lk = isReply || c.final ? "reply" : "text";
       r.text = firstLine(c.text) || " ";
       if (c.start != null && t0 != null) r.start = c.start - t0;
       else r.startQ = true;
       if (isReply) {
-        if (c.start != null && c.end != null) { r.dur = c.end - c.start; model.push([c.start, c.end]); }
+        if (c.start != null && c.end != null) r.dur = c.end - c.start;
         else r.durQ = true;
       }
     } else if (c.kind === "tool") {
@@ -368,8 +344,6 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
       const ms = c.subagent?.ms ?? (c.start != null && c.end != null ? c.end - c.start : null);
       if (Number.isFinite(ms)) r.dur = ms;
       else if (!r.open && !r.reading && (r.lk === "tool" || r.lk === "subagent" || r.lk === "failed")) r.durQ = true;
-      if (c.start != null && c.end != null) (failed ? red : c.subagent ? sub : tools).push([c.start, c.end]);
-      else if (c.start != null && r.open) (subOpen ? openSub : openAt).push(c.start);
     } else if (c.kind === "more") {
       calls += c.count;
       r.lk = "more";
@@ -405,11 +379,6 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
       if (tr.interrupted) r.interrupted = true;
     }
   }
-  const open = openAt.map((a) => [a, Math.max(a, t1)]);
-  const opens = openSub.map((a) => [a, Math.max(a, t1)]);
-  const line = timed && span > 0
-    ? { tools: stretches(tools, t0, span), sub: stretches(sub, t0, span), model: stretches(model, t0, span), red: stretches(red, t0, span), open: stretches(open, t0, span), openSub: stretches(opens, t0, span) }
-    : null;
   // The turn's own counts, for the filter buttons and the status line.
   const cnt = { steps: 0, input: 0, model: 0, tools: 0, failed: 0, user: 0, agent: 0 };
   for (const r of rows) {
@@ -431,9 +400,11 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
     // going, not live or running: those mark the chat's live rows, which tick a clock (main.js).
     kind: "trh", key, turn, si, n: turn.n, ts: turn.ts ?? null, going: live, calls, fails, timed,
     tokens: stats(turn).tokens, total: tr.end != null && t0 != null && (tr.done || tr.interrupted) ? tr.end - t0 : null,
-    interrupted: Boolean(tr.interrupted), agent: Boolean(turn.agent), line, stale, lastAt, reading,
+    interrupted: Boolean(tr.interrupted), agent: Boolean(turn.agent), stale, lastAt, reading,
     // Calls past what the reader keeps: their failures are not known, so the count is a floor.
     partial: cells.some((c) => c.kind === "more"),
+    // Its texts dropped past STEP_MAX when these rows were made (main.js tlSame).
+    dropped: turn.stepsDropped ?? 0,
     t0, span, cnt, steps: rows,
     // The keys of its failed calls and of the user's messages, for the session's lists.
     failKeys: rows.filter((r) => r.failed).map((r) => r.key), userKeys: rows.filter((r) => r.lk === "you").map((r) => r.key),
@@ -599,7 +570,7 @@ export function detailOf(r) {
   const k = LEDGER_KINDS[r.lk] ?? LEDGER_KINDS.text;
   const F = [];
   if (r.lk === "you") F.push(["From", "the user"]);
-  else if (r.lk === "agent") F.push(["From", r.notice ? "the harness · a background task finished, nobody typed this" : `${r.sender ?? "an agent"} · another agent, not the user`]);
+  else if (r.lk === "agent") F.push(["From", r.notice ? `the harness · ${r.turn?.self ? "work that started by itself" : "a background task finished"}, nobody typed this` : `${r.sender ?? "an agent"} · another agent, not the user`]);
   else if (r.lk === "context") F.push(["From", "the harness · nobody typed this"]);
   if (r.turn?.n != null) F.push(["Turn", `${r.turn.n}`]);
   F.push(["Started", r.start != null ? `${startText(r.start)} into the turn` : r.startQ ? "not recorded" : "no times in this turn"]);
