@@ -1545,7 +1545,9 @@ test("a wheel up ends the end's own asks: the one 16 ms after the end is taken, 
       v.action("latest", cx);
       settleList(v, cx, sim);
       slowRows(v, cx);
-      for (let k = 0; k < 20 && !v.anchor?.end; k++) probeFrame(v, cx);
+      // The end is taken when the re-wrap's build ends. With no time a slice ends after its first
+      // turn (the time is checked before every turn), so the build takes about a draw a turn.
+      for (let k = 0; k < 200 && !v.anchor?.end; k++) probeFrame(v, cx);
       expect(v.anchor?.end).toBe(true);
     }
     else { v.action("latest", cx); draw(v, cx); }

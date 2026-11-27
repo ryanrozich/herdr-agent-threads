@@ -3334,6 +3334,9 @@ export default class Threads extends View {
   // built over several frames, each inside Herdr's time for a draw.
   buildRows(status, from = null, until = 0) {
     this.buildInfo = { multi: false, marks: [], resume: null };
+    // A deadline a stopped draw left for a turn's steps (stepRows) is not this build's.
+    this.stepUntil = 0;
+    this.stepCut = false;
     // Closed turns' rows and sizes from earlier builds (closedCached), for this slice.
     this.cachedH = new Map();
     this.cacheNew = [];
@@ -3386,12 +3389,17 @@ export default class Threads extends View {
       let dayRow = first && from.before ? from.dayRow : null;
       let unmatched = first ? from.unmatched ?? 0 : 0;
       const flush = () => { if (unmatched) out.push({ kind: "hidden", key: `hid:${si}:${out.length}`, n: unmatched }); unmatched = 0; };
+      // Where a slice stops: before turn ti, with what was built before it.
+      const stop = (ti, a) => {
+        this.buildInfo.resume = { si, ti, row: a.row, rail: a.rail, before: a.band, d: a.day, day: a.day, dayRow: a.dayRow, multi, unmatched: a.unmatched, marks };
+        this.buildInfo.marks = marks;
+        return out;
+      };
       for (let ti = t0; ti < s.turns.length; ti++) {
-        if (until && ti > t0 && (ti & 15) === 0 && now() > until) {
-          this.buildInfo.resume = { si, ti, row: out.length, rail: rail.length, before: band, d: day, day, dayRow, multi, unmatched, marks };
-          this.buildInfo.marks = marks;
-          return out;
-        }
+        // Checked before every turn: on a slower machine 16 turns between checks took a 10 ms
+        // slice to 45 ms, past Herdr's 50 ms for a draw.
+        const at = until ? { row: out.length, rail: rail.length, marks: marks.length, band, day, dayRow, unmatched } : null;
+        if (at && ti > t0 && now() > until) return stop(ti, at);
         const turn = s.turns[ti];
         const key = `${si}:${turn.n}`;
         const railAt = rail.length;
@@ -3424,7 +3432,20 @@ export default class Threads extends View {
         // The outline: one row per turn, under the same day bands, the same search and the
         // same agents toggle. It keeps the turn's key, so the selection carries over.
         if (outline) { out.push({ kind: "line", key, turn, s, si, last, running: live, numW, text: outlineText(noticeTurn(turn) ? kindWords(turn.sender) : turn.prompt, q) }); continue; }
+        // An open turn's steps check the slice's time too (stepRows): one with 400 steps ran a
+        // slice far past its end. A turn they stop is dropped and built again first in the next
+        // slice, where it is not stopped (the slice's first turn), so every slice gains a turn.
+        this.stepUntil = at && ti > t0 ? until : 0;
         this.turnRows({ kind: "turn", key, turn, s, si, last, live }, ti, out, status, cg);
+        this.stepUntil = 0;
+        if (this.stepCut) {
+          this.stepCut = false;
+          out.length = at.row;
+          rail.length = at.rail;
+          marks.length = at.marks;
+          this.cacheNew = this.cacheNew.filter((e) => e.at < at.row);
+          return stop(ti, at);
+        }
         // A line skipped while this turn was the newest one read (noteSkip): one dim line after it.
         if (turn.skipped && !q) out.push({ kind: "note", key: `skip:${key}`, text: skipNote(turn.skipped) });
       }
@@ -3511,6 +3532,8 @@ export default class Threads extends View {
     }
     runs.sort((x, y) => y.a - x.a);
     this.shapeStart();
+    this.stepUntil = 0;
+    this.stepCut = false;
     // From here to its end the rows, their sizes and their index change together: a draw Herdr
     // stops in between leaves them apart, and the next build is of every row (buildStep).
     this.splicing = true;
@@ -3688,12 +3711,15 @@ export default class Threads extends View {
     // Open while it runs: the steps as they arrive, newest at the bottom, then "Working…".
     const open = this.lineIsOpen(item.key, true);
     if (open) this.stepRows(item, out, true);
+    if (this.stepCut) return;
     // An answer the agent has given is shown where it will be when the turn ends, under the
     // steps, with the line open or not.
     if (answered(item.turn)) this.replyRows({ ...item, live: false }, this.replyText(item.turn), out, { running: true });
     if (open && this.status() === "working") out.push({ ...item, live: false, kind: "wspin", key: `ws:${item.key}` });
   }
 
+  // Past the slice's end, for stepRows, whose own `now` is a step's flag.
+  stepsLate() { return now() > this.stepUntil; }
   // Level 1's steps, in order: each interim text, and each group's line; an open group
   // (level 2) adds one row per call. A running turn's last group, with nothing said since,
   // is the one still running. A marked answer in its place among them (a "final") is the
@@ -3702,6 +3728,9 @@ export default class Threads extends View {
     const { key, turn } = item;
     const steps = turn.steps ?? [];
     steps.forEach((st, i) => {
+      // Out of the slice's time (buildRows sets stepUntil): the rest is left, and the turn too.
+      if (this.stepCut) return;
+      if (this.stepUntil && (i & 15) === 15 && this.stepsLate()) { this.stepCut = true; return; }
       if (st.k === "text") {
         out.push({ ...item, live: false, kind: "itext", key: `it:${key}:${i}`, src: st.t, ...this.stepLinks(st) });
         return;
@@ -5295,6 +5324,7 @@ export default class Threads extends View {
     // Level 1, under the line when it is open: the steps, then straight into the reply. The
     // turn's numbers are on the Turn card (i, or the info icon on the line).
     if (this.lineIsOpen(key, false)) this.stepRows(item, out);
+    if (this.stepCut) return;
     if (!text) out.push({ ...item, kind: "noreply", key: `nr:${key}` });
     this.replyRows(item, text, out, { push });
     // What the agent said in its background updates, every one in order (updatesText), when
