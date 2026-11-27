@@ -591,3 +591,118 @@ test("a trim keeps the selection, the open turns, the reader's place and a pendi
   expect(v.tsel).toBe(at(59));
   expect(v.scrollTo).toMatchObject({ key: `md:${at(59)}:0`, how: "land", or: [at(59)] });
 }, 20000);
+
+// A pane with a 60-turn session read in full, and a trim of it past the budget: k, the turns
+// that went, and at(n), turn n's key after it.
+async function trimmedLater(file = fixture("--only", "1")) {
+  fakeReader({ [file]: 60 });
+  const p = openPane(file);
+  await settle(p.v);
+  expect(p.v.current().turns.length).toBe(60);
+  p.v.follow = false;
+  return {
+    ...p,
+    trimNow() {
+      phantom(BUDGET - 100 * 1024);
+      const s = p.v.current();
+      expect(p.v.guard(s)).toBe(false);
+      const k = droppedOf(s);
+      expect(k).toBeGreaterThanOrEqual(3);
+      expect(s.turns.length).toBeGreaterThanOrEqual(3); // turns 58 and 59 are in the tail
+      return { k, at: (n) => `0:${n - k}` };
+    },
+  };
+}
+
+test("a trim moves the step-level opens, the code editors and every other field keyed by turn with their turns, and lets go of the ones of turns that went", async () => {
+  const { v, trimNow } = await trimmedLater();
+  for (const f of ["lineOpen", "lineTouched"]) { v[f].add("0:59"); v[f].add("0:3"); }
+  for (const f of ["groupOpen", "groupTouched"]) { v[f].add("0:59:2"); v[f].add("0:3:1"); }
+  for (const f of ["callOpen", "callAll"]) { v[f].add("0:59:2:1"); v[f].add("0:3:1:0"); }
+  v.codeDue = new Set(["0:59", "0:3"]);
+  v.liveCode = new Set(["0:59"]);
+  v.mdBroken = new Set(["md:0:59:0", "md:0:3:0"]);
+  const released = [];
+  const ed = (n) => ({ st: { release() { released.push(n); } }, text: "x" });
+  const kept = ed(59);
+  v.code.set("0:59:1", kept);
+  v.code.set("0:3:0", ed(3));
+  v.placeBase = "md:0:58:0";
+  v.pinVisit = "0:59";
+  v.pinAgain = "0:59";
+  v.textSel = "0:59";
+  v.tscrollTo = "0:59";
+  v.scrollTo = { key: "0:59", how: "land", head: "0:59", until: Date.now() + 400 };
+  v.openWait = { key: "0:59", gen: 1, filtering: false };
+  v.pinResume = { key: "0:59", part: "md:0:59:2" };
+  v.outlineBack = { sel: "0:59", top: "md:0:58:0", follow: false };
+  v.flash = { key: "0:59", on: true, n: 1 };
+  v.railGrow = { key: "0:3", on: true };
+  const { at } = trimNow();
+  for (const f of ["lineOpen", "lineTouched"]) expect([...v[f]]).toEqual([at(59)]);
+  for (const f of ["groupOpen", "groupTouched"]) expect([...v[f]]).toEqual([`${at(59)}:2`]);
+  for (const f of ["callOpen", "callAll"]) expect([...v[f]]).toEqual([`${at(59)}:2:1`]);
+  expect([...v.codeDue]).toEqual([at(59)]);
+  expect([...v.liveCode]).toEqual([at(59)]);
+  expect([...v.mdBroken]).toEqual([`md:${at(59)}:0`]);
+  expect([...v.code.keys()]).toEqual([`${at(59)}:1`]);
+  expect(v.code.get(`${at(59)}:1`)).toBe(kept);
+  expect(released).toEqual([3]);
+  expect(v.placeBase).toBe(`md:${at(58)}:0`);
+  for (const f of ["pinVisit", "pinAgain", "textSel", "tscrollTo"]) expect(v[f]).toBe(at(59));
+  expect(v.scrollTo).toMatchObject({ key: at(59), head: at(59), how: "land" });
+  expect(v.openWait).toEqual({ key: at(59), gen: 1, filtering: false });
+  expect(v.pinResume).toEqual({ key: at(59), part: `md:${at(59)}:2` });
+  expect(v.outlineBack).toEqual({ sel: at(59), top: `md:${at(58)}:0`, follow: false });
+  expect(v.flash).toEqual({ key: at(59), on: true, n: 1 });
+  expect(v.railGrow).toBeNull(); // its turn went
+}, 20000);
+
+test("a trim keeps the Select view on its turn, so its rows show that turn's reply, and ends it when its turn went", async () => {
+  const a = await trimmedLater();
+  a.v.toggleSelect("0:59", a.cx);
+  const st = a.v.selEditor.st;
+  expect(a.v.selecting).toBe("0:59");
+  const { at } = a.trimNow();
+  expect(a.v.selecting).toBe(at(59));
+  expect(a.v.selEditor.key).toBe(at(59));
+  expect(a.v.selEditor.st).toBe(st);
+  expect(a.v.selEditor.text).toBe(a.v.replyText(a.v.findTurn(at(59))));
+  expect(a.v.rows().some((r) => r.kind === "seltext" && r.key === `sx:${at(59)}`)).toBe(true);
+  // Another pane, its Select view on a turn the trim lets go.
+  windowState().panes.clear();
+  const b = await trimmedLater(fixture("--only", "2"));
+  b.v.toggleSelect("0:3", b.cx);
+  let released = 0;
+  const release = b.v.selEditor.st.release;
+  b.v.selEditor.st.release = () => { released++; return release(); };
+  b.trimNow();
+  expect(b.v.selecting).toBeNull();
+  expect(b.v.selEditor).toBeNull();
+  expect(released).toBe(1);
+  expect(b.v.rows().some((r) => r.kind === "seltext")).toBe(false);
+}, 30000);
+
+test("every field of a pane that holds a turn's key is on TURN_KEYED, or on the list a trim starts over", async () => {
+  const { v, cx } = await trimmedLater();
+  const { moved, reset } = v.turnKeyed();
+  const known = new Set([...moved.map(([f]) => f), ...reset]);
+  // What a person does in a session: the Select view on a turn (which selects and opens it),
+  // and another turn opened. Fields set only elsewhere are not seen here; Maps (memos checked
+  // by their content) are not scanned.
+  v.toggleSelect("0:59", cx);
+  v.toggle("0:58", cx);
+  v.rows();
+  // A key of session 0's turn n: what shiftKey moves.
+  const isKey = (x) => typeof x === "string" && shiftKey(x, 0, 1) !== x;
+  const holds = (x) => {
+    if (isKey(x)) return true;
+    if (x instanceof Set) return [...x].some(isKey);
+    if (x && Object.getPrototypeOf(x) === Object.prototype) return Object.values(x).some((y) => isKey(y) || (Array.isArray(y) && y.some(isKey)));
+    return false;
+  };
+  const left = Object.keys(v).filter((f) => !known.has(f) && holds(v[f]));
+  expect(left).toEqual([]);
+  // The list names fields the pane has: a renamed field does not leave a stale name on it.
+  for (const f of ["sel", "open", "selecting", "selEditor", "scrollTo", "code"]) expect(Object.hasOwn(v, f)).toBe(true);
+}, 20000);

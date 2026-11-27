@@ -139,6 +139,8 @@ export function trim(s, bytes, w) {
 // turn's "si:n" in it (a turn's key, or the first two numbers after a part's prefix, as
 // "md:0:12:3") moves down by k, a key of a turn that went is null, and any other key (another
 // session's, a day band's, the hidden-rows note's, the session's own notes) stays as it is.
+// A key whose prefix is followed by a session index and a number that is not a turn's (a day,
+// a count of rows) would be read as a turn's and moved: its prefix goes here.
 const NOT_A_TURN = /^(day|hid|pday|pins|tail|empty|div|sess):/;
 export function shiftKey(key, si, k) {
   if (typeof key !== "string" || NOT_A_TURN.test(key)) return key;

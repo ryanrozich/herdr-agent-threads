@@ -115,6 +115,23 @@ import { BUDGET, TIGHT_CHUNK, PANE_WEIGHT, measure, sessionBytes, forgetSize, tr
 releaseOlder();
 // How often a read waiting for the window's turn (budget.js takeRead) asks again.
 const READ_TURN_MS = 40;
+// Every field of a pane that keeps a turn's key ("si:n", or a row or part key that holds one),
+// which a trim moves with its turn (shiftKeys): "key", a key; "set", a Set of keys; "map", the
+// code editors by key; a list of props, an object whose props hold keys (or lists of keys),
+// gone when its first prop's turn went. A new field keyed by turn goes here:
+// test/budget.test.js fails on a field that holds one and is on no list.
+const TURN_KEYED = Object.freeze([
+  ["sel", "key"], ["topKey", "key"], ["winSeen", "key"], ["placeBase", "key"], ["pinVisit", "key"], ["pinAgain", "key"],
+  ["tsel", "key"], ["tscrollTo", "key"], ["textSel", "key"], ["selecting", "key"],
+  ["open", "set"], ["full", "set"], ["lineOpen", "set"], ["lineTouched", "set"], ["groupOpen", "set"], ["groupTouched", "set"],
+  ["callOpen", "set"], ["callAll", "set"], ["codeDue", "set"], ["liveCode", "set"], ["mdBroken", "set"],
+  ["code", "map"],
+  ["scrollTo", ["key", "or", "head"]], ["openWait", ["key"]], ["pinResume", ["key", "part"]], ["outlineBack", ["sel", "top"]],
+  ["flash", ["key"]], ["railGrow", ["key"]], ["selEditor", ["key"]],
+]);
+// Fields keyed by turn that a trim does not move: it starts them over (guard) or they are
+// built again from the rows or the pins.
+const TURN_KEYED_RESET = Object.freeze(["capKey", "viewEndKey", "anchor", "rowsKey", "rowBuild", "rowJob", "pinKeys", "pinTurns"]);
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
 // The turn a list row belongs to, or null (a day band, the spacer, the tail).
@@ -2764,33 +2781,41 @@ export default class Threads extends View {
   }
   // The refusal stands for the session it was made for, not one that came after it.
   refusedNow() { return Boolean(this.refused) && this.refused.file === this.current()?.file; }
-  // After trim() let go of k turns of session si: every key the pane keeps of that session's
-  // turns, rows and parts names the same turn under its new number, and one of a turn that
-  // went is dropped (budget.js shiftKey).
+  // After trim() let go of k turns of session si: every field on TURN_KEYED names the same turn
+  // under its new number, and a key of a turn that went is dropped (budget.js shiftKey).
   shiftKeys(si, k) {
     const sh = (x) => shiftKey(x, si, k);
-    for (const f of ["sel", "topKey", "winSeen", "placeBase", "pinVisit", "tsel", "tscrollTo"]) if (this[f] != null) this[f] = sh(this[f]);
-    for (const set of [this.open, this.full, this.codeDue, this.liveCode]) {
-      if (!(set instanceof Set)) continue;
-      const was = [...set];
-      set.clear();
-      for (const x of was) { const y = sh(x); if (y != null) set.add(y); }
-    }
-    if (this.code instanceof Map) {
-      const was = [...this.code];
-      this.code.clear();
-      for (const [x, c] of was) {
-        const y = sh(x);
-        if (y != null) this.code.set(y, c);
-        else { if (c.st) c.st.release(); this.editorFocused = false; }
+    const ed = this.selEditor;
+    for (const [f, how] of TURN_KEYED) {
+      const v = this[f];
+      if (v == null) continue;
+      if (how === "key") this[f] = sh(v);
+      else if (how === "set") {
+        const was = [...v];
+        v.clear();
+        for (const x of was) { const y = sh(x); if (y != null) v.add(y); }
+      } else if (how === "map") {
+        // The code editors: one of a turn that went is let go, as dropCode does.
+        const was = [...v];
+        v.clear();
+        for (const [x, c] of was) {
+          const y = sh(x);
+          if (y != null) v.set(y, c);
+          else { if (c?.st) c.st.release(); this.editorFocused = false; }
+        }
+      } else {
+        // An object whose props hold keys, gone with its first prop's turn.
+        const out = { ...v };
+        for (const p of how) out[p] = Array.isArray(v[p]) ? v[p].map(sh).filter((x) => x != null) : sh(v[p]);
+        this[f] = v[how[0]] != null && out[how[0]] == null ? null : out;
       }
     }
-    const to = this.scrollTo;
-    if (to?.key != null) {
-      const key = sh(to.key);
-      this.scrollTo = key == null ? null : { ...to, key, ...(to.or ? { or: to.or.map(sh).filter((x) => x != null) } : {}), ...(to.head != null ? { head: sh(to.head) } : {}) };
-    }
+    // The Select view is one turn's editor and that turn's key: both moved, or both go.
+    if (ed && !this.selEditor && ed.st) ed.st.release();
+    if ((this.selEditor || this.selecting) && this.selEditor?.key !== this.selecting) this.endSelect();
   }
+  // For the test that every field keyed by turn is on a list.
+  turnKeyed() { return { moved: TURN_KEYED, reset: TURN_KEYED_RESET }; }
   paneWeight() { return PANE_WEIGHT[this.mem?.kind ?? "chat"]; }
   heldBytes() { const w = this.paneWeight(); let n = 0; for (const x of this.sessions) n += sessionBytes(x, w); return n; }
   refuse(s) {
