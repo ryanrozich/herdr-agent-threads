@@ -67,6 +67,14 @@ import * as herdrNs from "herdr";
 const paintKit = () => (gpuiKit.PathBuilder?.fill && gpuiKit.Background?.linear_gradient ? gpuiKit : null);
 // A stroked path (the timeline's hatched breaks, TRD-23), where Herdr has one.
 const strokeKit = () => (gpuiKit.PathBuilder?.stroke ? gpuiKit : null);
+// The loading chart's paths failed (main.js chartPaints, chartPainted): said once per run, so a
+// wrong call there shows in the log instead of only as the plainer chart. The flag is kept on
+// the class (Threads.chartPaintSaid), where a test can clear it.
+function chartPaintFailed(what, e) {
+  if (Threads.chartPaintSaid) return;
+  Threads.chartPaintSaid = true;
+  console.log(`agent-threads: ${what} failed: ${e?.message ?? e}`);
+}
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
@@ -86,7 +94,9 @@ import {
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
   REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear, pairEvent, pairAlone, pinFit, weightHerdr, rowEvent, closeWeights, rowSolve, capList, LIST_MAX, RowWindow, TURN_KINDS, turnsIn,
 } from "./ui.js";
-import { openLines, newestPrompt, figRuns } from "./ui.js";
+import { openLines, openCounts, newestPrompt, figRuns } from "./ui.js";
+import { chartModel, CHART } from "./chart.js";
+import { BURN } from "./core/burn.js";
 import { hash } from "./core/ids.js";
 import { PIN_LIMIT, turnIds, turnId, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious, behindLook } from "./settings.js";
@@ -10508,6 +10518,8 @@ export default class Threads extends View {
   openFinish() {
     const o = this.opening;
     o.done = true;
+    // The chart's memo goes with the loading state (loadChart).
+    o.chart = null;
     o.shownAt = Date.now();
     this.shownList = this.sessions;
     // The end is held while parts above it wait, and in the next frame (render: partsDue).
@@ -10560,7 +10572,7 @@ export default class Threads extends View {
   openSwitch(s) {
     const o = this.opening;
     if (!o || o.shows === s) return;
-    Object.assign(o, { shows: s, mtime: null, newest: null, v: null, stats: null });
+    Object.assign(o, { shows: s, mtime: null, newest: null, v: null, stats: null, chart: null });
   }
   // What the loading state shows now (ui.js openLines). The counts are summed again only when
   // the session changed, as the status line's are (statusStats, whose tokens these are).
@@ -10581,7 +10593,7 @@ export default class Threads extends View {
       for (const t of s.turns) if (t.sender?.kind === "you" && !t.cmd) prompts++;
       let model = null;
       for (let i = s.turns.length - 1; i >= 0 && !model; i--) model = s.turns[i].model ?? null;
-      o.stats = { tools: st.tools, tokens: st.tokens, prompts, model, pins: this.pinStore.sessions[this.sessionKey(s)]?.pins?.length ?? 0 };
+      o.stats = { tools: st.tools, tokens: st.tokens, cachePct: st.cachePct, prompts, model, pins: this.pinStore.sessions[this.sessionKey(s)]?.pins?.length ?? 0 };
     }
     const h = harnessOfFile(s.file);
     const read = s.offset > 0 || s.loaded;
@@ -10590,7 +10602,7 @@ export default class Threads extends View {
       offset: s.offset, size: s.size, pct: o.pct, units: h === "opencode" ? "turns" : "bytes", turns: s.turns.length, loaded: Boolean(s.loaded),
       agent: h === "claude" ? "Claude Code" : this.agent().name, model: o.stats.model, start: s.turns[0]?.ts ?? null, active: o.mtime,
       working: Boolean(s.loaded && s.turns.length && this.isLive(s, si, s.turns.length - 1)),
-      prompts: read ? o.stats.prompts : null, tools: read ? o.stats.tools : null, tokens: read ? o.stats.tokens : null, pins: o.stats.pins,
+      prompts: read ? o.stats.prompts : null, tools: read ? o.stats.tools : null, tokens: read ? o.stats.tokens : null, cachePct: read ? o.stats.cachePct : null, pins: o.stats.pins,
       newest: (s.loaded ? newestPrompt(s.turns) : null) ?? o.newest, now: Date.now(),
     };
     // Every figure holds its peak, as the bar does: a read started over part way (a stall,
@@ -10603,7 +10615,9 @@ export default class Threads extends View {
   // of the session. Every line keeps its row from the first paint (ui.js openLines), and each
   // digit takes a cell of one width, so nothing moves as figures arrive and grow.
   openView(t, s) {
-    const L = openLines(this.openInfo(s));
+    const info = this.openInfo(s);
+    const L = openLines(info);
+    const C = openCounts(info);
     const pct = this.opening.pct;
     const figs = (text, size) => {
       const cw = Math.ceil(size * 0.62);
@@ -10622,19 +10636,151 @@ export default class Threads extends View {
     return v_flex().id("th-opening").flex_1().min_h(0).w_full().bg(t.background).items_center()
       // Clear of the floating top, as the list's first row is (TOP_BAND).
       .child(v_flex().w(w).px(ROW.PAD_X).pt(18 + (this.floating() ? TOP_BAND : 0)).flex_none()
-        .child(div().h(22).flex_none().text_size(14).font_semibold().text_color(t.foreground).child(L[0]))
-        .child(line(L[1], 18, 12.5, t.muted, 4))
+        .child(h_flex().h(32).flex_none().items_center().text_size(14).font_semibold().text_color(t.foreground).child(L[0]))
+        .child(line(L[1], 18, 12.5, t.muted, 2))
         .child(div().h(3).mt(6).flex_none().w_full().rounded(2).bg(t.border).overflow_hidden()
           .child(pct != null ? div().h_full().w(`${pct}%`).bg(t.accent) : div().h_full().w("30%").bg(t.accent).loop("opacity", { from: 0.3, to: 1, period: 1100 })))
         .child(line(L[2], 18, 12.5, t.foreground, 8))
+        .child(this.loadChart(t, s, w - 2 * ROW.PAD_X))
         .child(h_flex().h(18).mt(18).flex_none().gap(6).items_center().min_w(0)
           .when(Boolean(mk), (el) => el.child(mk))
           .child(h_flex().flex_1().min_w(0).overflow_hidden().text_size(12).text_color(t.muted).children(figs(L[3], 12))))
         .child(line(L[4], 18, 12, t.muted, 4))
         .child(line(L[5], 18, 12, t.muted, 4))
-        .child(line(L[6], 18, 12, t.muted, 4))
+        .child(line(C[0], 18, 12, t.muted, 4))
+        .child(line(C[1], 18, 12, t.muted, 2))
         .child(line(L[7], 16, 11.5, t.dim, 18))
         .child(div().h(38).mt(4).flex_none().w_full().overflow_hidden().text_size(12.5).line_height("19px").text_color(t.foreground).child(said || " ")));
+  }
+
+  // ---- the loading chart (chart.js) ----
+  // Under the bar: tokens over the session's time by model (prompts for Cursor), filled to
+  // the point read, with its scale, time axis and legend. Each row has its place from the
+  // first paint, empty until the series has a point. The model and its paths are made again
+  // only when the series, the width, the file's last write or the theme change, and are
+  // dropped with the loading state (openFinish).
+  loadChart(t, s, w) {
+    const o = this.opening;
+    const h = CHART.H;
+    const b = s.burn ?? null;
+    const end = o.mtime ?? null;
+    const key = `${b?.ver ?? -1}|${w}|${s.loaded ? 1 : 0}|${end}|${dayKey(Date.now())}|${t.background}|${t.foreground}|${t.accent}`;
+    let c = o.chart;
+    if (!c || c.key !== key || c.b !== b) {
+      const m = chartModel(b, { w, h, end, loaded: Boolean(s.loaded), prompts: harnessOfFile(s.file) === "cursor", agent: this.agent().name });
+      o.chart = c = { key, b, m, inks: this.chartInks(t), paints: null };
+      c.paints = this.chartPaints(c, h);
+    }
+    const { m, inks } = c;
+    const label = (text, color = t.dim) => div().flex_none().whitespace_nowrap().text_size(11.5).text_color(color).child(text);
+    // Painted first: a paint that fails drops the paths, and the bars draw in this same frame.
+    const painted = this.chartPainted(c, w, h);
+    const fallback = !c.paints;
+    return v_flex().id("th-load-chart").flex_none().w(w)
+      .child(h_flex().h(16).mt(16).flex_none().w_full().items_center().justify_between()
+        .child(label(m.title)).child(label(m.top || " ")))
+      .child(div().id("th-load-plot").relative().h(h + 1).mt(6).flex_none().w(w).overflow_hidden()
+        .child(div().absolute().top(0).left(0).w(w).h(1).bg(inks.grid))
+        .child(div().absolute().top(h / 2).left(0).w(w).h(1).bg(inks.grid))
+        .children(painted)
+        .when(fallback, (el) => el.children(this.chartBars(m, inks, h)))
+        .child(div().absolute().top(h).left(0).w(Math.max(0, m.base)).h(1).bg(inks.axis))
+        .when(m.readX != null, (el) => el.child(div().absolute().top(0).left(m.readX).w(1).h(h).bg(inks.edge))))
+      .child(div().relative().h(14).mt(5).flex_none().w(w).overflow_hidden().text_size(10.5).text_color(t.dim)
+        .children(m.labels.map((l) => (l.right ? div().absolute().top(0).right(0) : div().absolute().top(0).left(l.x)).whitespace_nowrap().child(l.text))))
+      .child(h_flex().h(16).mt(8).flex_none().w_full().gap(14).items_center().overflow_hidden()
+        .children(m.legend.map((it) => h_flex().flex_none().gap(5).items_center()
+          .child(div().flex_none().w(8).h(8).rounded(2).bg(inks.line[it.slot]))
+          .child(label(it.name, t.muted))
+          .when(Boolean(it.share), (el) => el.child(label(it.share)))))
+        .when(m.more > 0, (el) => el.child(label(`+${m.more}`)))
+        .when(Boolean(m.note), (el) => el.child(label(m.note))));
+  }
+  // The chart's colours from the theme: five for models in order of first use, grey for the
+  // rest, and the accent for prompts; each area is its line's colour, see-through.
+  chartInks(t) {
+    const dark = (contrast(t.background, "#FFFFFF") ?? 0) > (contrast(t.background, "#000000") ?? 0);
+    const line = [t.accent, t.ansi2 ?? t.done, t.ansi3 ?? t.working, t.ansi5 ?? t.blocked, t.ansi1 && t.ansi3 ? mix(t.ansi1, t.ansi3, 0.5) : t.muted, t.dim, t.accent];
+    return { line, fill: line.map((x) => alpha(x, dark ? 0.5 : 0.32)), grid: alpha(t.foreground, dark ? 0.06 : 0.05), axis: alpha(t.foreground, dark ? 0.14 : 0.12), edge: alpha(t.accent, 0.7), fold: t.dim };
+  }
+  // The painted parts as [path, colour]: one path per area and per top line, the bars as one
+  // path, and the fold marks; null where Herdr has no paths (chartBars draws then). The paths
+  // are plain frozen data, kept with the chart; each frame paints them as new elements. kit:
+  // gpui-kit's paths (a test gives its own); a failure here or in chartPainted is logged once
+  // and the bars draw.
+  chartPaints(c, h, kit = paintKit()) {
+    const win = globalThis.window;
+    if (!kit || typeof win?.paint_path !== "function") return null;
+    const { m, inks } = c;
+    const at = (pb, color) => [pb.build(), color];
+    const poly = (pb, xy, close) => {
+      pb.move_to(xy[0], xy[1]);
+      for (let i = 2; i < xy.length; i += 2) pb.line_to(xy[i], xy[i + 1]);
+      if (close) pb.close();
+    };
+    try {
+      const out = [];
+      for (const a of m.areas) {
+        const f = kit.PathBuilder.fill();
+        poly(f, a.fill, true);
+        out.push(at(f, inks.fill[a.slot]));
+      }
+      // Herdr's stroked paths came with its filled ones; an older one without them keeps the areas.
+      const stroke = typeof kit.PathBuilder.stroke === "function";
+      for (const a of m.areas) {
+        if (!stroke || !a.line.length) continue;
+        const l = kit.PathBuilder.stroke(1.25);
+        for (const seg of a.line) poly(l, seg, false);
+        out.push(at(l, inks.line[a.slot]));
+      }
+      if (m.bars.length) {
+        const f = kit.PathBuilder.fill();
+        const top = kit.PathBuilder.fill();
+        for (const r of m.bars) {
+          poly(f, [r.x, h - r.h, r.x + r.w, h - r.h, r.x + r.w, h, r.x, h], true);
+          poly(top, [r.x, h - r.h, r.x + r.w, h - r.h, r.x + r.w, h - r.h + 1.25, r.x, h - r.h + 1.25], true);
+        }
+        out.push(at(f, inks.fill[BURN.PROMPTS]), at(top, inks.line[BURN.PROMPTS]));
+      }
+      if (stroke && m.folds.length) {
+        const l = kit.PathBuilder.stroke(1);
+        for (const x of m.folds) { poly(l, [x - 2.5, h + 0.5, x - 0.5, h - 6], false); poly(l, [x + 0.5, h + 0.5, x + 2.5, h - 6], false); }
+        out.push(at(l, inks.fold));
+      }
+      return out;
+    } catch (e) {
+      chartPaintFailed("the loading chart's paths", e);
+      return null;
+    }
+  }
+  // The chart c's paths as elements. When painting fails, the chart keeps no paths (c.paints
+  // null), so this frame and the next draw the bars (chartBars) in their place.
+  chartPainted(c, w, h) {
+    const win = globalThis.window;
+    if (!c.paints) return [];
+    try {
+      return c.paints.map(([path, color]) => div().absolute().top(0).left(0).w(w).h(h + 1).child(win.paint_path(path, color).w(w).h(h + 1)));
+    } catch (e) {
+      chartPaintFailed("painting the loading chart", e);
+      c.paints = null;
+      return [];
+    }
+  }
+  // Without paths: each point's total as a bar of the first model's colour, or the prompts' bars.
+  chartBars(m, inks, h) {
+    if (m.bars.length) return m.bars.map((r) => div().absolute().left(r.x).top(h - r.h).w(r.w).h(r.h).bg(inks.fill[BURN.PROMPTS]));
+    const a = m.areas.at(-1);
+    if (!a) return [];
+    const top = a.fill;
+    const n = a.n;
+    const out = [];
+    for (let i = 0; i + 1 < n; i++) {
+      const x = top[2 * i];
+      const y = top[2 * i + 1];
+      const wd = top[2 * i + 2] - x;
+      if (wd > 0 && y < h) out.push(div().absolute().left(x).top(y).w(Math.max(1, wd)).h(h - y).bg(inks.fill[0]));
+    }
+    return out;
   }
 
   progress(t, s) {

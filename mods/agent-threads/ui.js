@@ -3399,7 +3399,10 @@ export function openLines(o) {
   const amount = (x) => (prompts ? openN(x) : kb ? fmtBytes(x) : (x / OPEN_MB).toFixed(1));
   const unit = prompts ? " prompts" : kb ? "" : " MB";
   const read = !(o.size > 0) ? "" : o.offset > 0 && o.pct != null ? `${amount(Math.min(o.offset, o.size))} of ${amount(o.size)}${unit} · ${o.pct}%` : `${amount(o.size)}${unit}`;
-  const turns = o.offset > 0 || o.loaded ? `${openMany(o.turns ?? 0, "turn")}${o.loaded ? "" : " so far"}` : "";
+  // A turn is every row (agents' messages, task notifications, commands too); the prompts
+  // below are only those a person typed, so the row says how many of its turns they are.
+  const mine = o.prompts != null && o.prompts < (o.turns ?? 0) ? `, ${openN(o.prompts)} of them your prompts` : "";
+  const turns = o.offset > 0 || o.loaded ? `${openMany(o.turns ?? 0, "turn")}${o.loaded ? "" : " so far"}${mine}` : "";
   const agent = [o.agent, o.model ? shortModel(o.model) : null].filter(Boolean).join(" · ");
   const active = o.loaded && o.working ? "Working now" : o.active ? `last active ${openWhen(o.active, o.now)}` : null;
   const when = [o.start ? `Started ${openWhen(o.start, o.now)}` : null, active].filter(Boolean).join(" · ");
@@ -3408,6 +3411,14 @@ export function openLines(o) {
     o.tokens != null ? `${fmtTokens(o.tokens)} tokens` : null, o.pins > 0 ? openMany(o.pins, "pin") : null].filter(Boolean);
   const head = o.newest ? `Newest prompt${o.newest.ts ? ` · ${openWhen(o.newest.ts, o.now)}` : ""}` : "";
   return ["Reading this session", read, turns, agent, when, spans, counts.length ? `So far: ${counts.join(" · ")}` : "", head, o.newest?.text ?? ""];
+}
+// The counts so far as the loading state shows them, in two rows: what happened (prompts,
+// tool calls, pins), then the tokens and the share of the prompt read from cache, in the
+// status line's forms. A count the session does not record is left out, never 0.
+export function openCounts(o) {
+  const done = [o.prompts != null ? openMany(o.prompts, "prompt") : null, o.tools != null ? openMany(o.tools, "tool call") : null, o.pins > 0 ? openMany(o.pins, "pin") : null].filter(Boolean);
+  const tokens = o.tokens != null ? [`${fmtTokens(o.tokens)} tokens`, o.cachePct != null ? `cache ${fmtPct(o.cachePct)}` : null].filter(Boolean).join(" · ") : "";
+  return [done.length ? `So far: ${done.join(" · ")}` : "", tokens];
 }
 // The newest prompt a person typed, by the rule that gives a turn the prompt bubble: their own
 // sender, not a command line, with text. Plain text, its whitespace collapsed. Null when none.
