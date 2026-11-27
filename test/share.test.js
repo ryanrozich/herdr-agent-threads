@@ -208,3 +208,120 @@ test("the last pane on a session empties it as it closes; one that closes before
   expect(windowState().shared.size).toBe(0);
   expect(windowBytes()).toBe(0);
 }, 20000);
+
+// What a pane's view of s adds: its weight times the session's fixed bytes.
+const viewOf = (s, kind) => VIEW_WEIGHT[kind] * (sessionBytes(s, 1) - sessionBytes(s, 0));
+
+test("a Chat that joins a Pinned pane's copy, read in full, past the budget trims it with no call of its own", async () => {
+  const file = fixture("--only", "1");
+  const st = fakeReader({ [file]: 60 });
+  const pin = openPane(file, { view: "pinned" });
+  await settle(pin.v);
+  const s = pin.v.current();
+  phantom(BUDGET - windowBytes() - Math.floor(viewOf(s, "chat") / 2));
+  const asked = st.asked.length;
+  const chat = openPane(file);
+  await settle(chat.v);
+  expect(chat.v.current()).toBe(s);
+  expect(pin.v.current()).toBe(s);
+  expect(st.asked.length).toBe(asked);
+  expect(tailOf(s)?.of).toBe(60);
+  expect(windowBytes()).toBeLessThanOrEqual(BUDGET);
+  expect(pin.v.refused).toBeFalsy();
+  for (const p of [chat, pin]) expect(() => p.v.render(p.cx)).not.toThrow();
+}, 20000);
+
+test("a side pane that joins past the budget stands back alone, the pane already on it keeps it, and Retry takes the copy back once there is room", async () => {
+  const file = fixture("--only", "1");
+  const st = fakeReader({ [file]: 60 });
+  const pin = openPane(file, { view: "pinned" });
+  await settle(pin.v);
+  const s = pin.v.current();
+  const room = phantom(BUDGET - windowBytes() - Math.floor(viewOf(s, "trajectory") / 2));
+  const traj = openPane(file, { view: "trajectory" });
+  await until(() => traj.v.refused, "the Trajectory standing back");
+  expect(traj.v.refusedNow()).toBe(true);
+  expect(traj.v.current()).not.toBe(s);
+  expect(traj.v.current().turns.length).toBe(0);
+  expect(pin.v.refused).toBeFalsy();
+  expect(pin.v.current()).toBe(s);
+  expect(s.turns.length).toBe(60);
+  expect(tailOf(s)).toBeNull();
+  expect(holdersOf(s)).toBe(1);
+  expect(windowBytes()).toBeLessThanOrEqual(BUDGET);
+  for (const p of [pin, traj]) expect(() => p.v.render(p.cx)).not.toThrow();
+  // Room made: Retry follows the Pinned pane's copy, with no call.
+  windowState().panes.delete(room);
+  const asked = st.asked.length;
+  traj.v.retryRead(traj.cx);
+  expect(traj.v.current()).toBe(s);
+  expect(traj.v.refused).toBeNull();
+  expect(holdersOf(s)).toBe(2);
+  expect(st.asked.length).toBe(asked);
+  expect(() => traj.v.render(traj.cx)).not.toThrow();
+}, 20000);
+
+test("a Trajectory opened while the Chat reads follows it: no call of its own, a heading for every turn, and again after a trim", async () => {
+  const file = fixture("--only", "1");
+  const st = fakeReader({ [file]: 200 }, 16000, 10);
+  const chat = openPane(file);
+  await until(() => chat.v.current()?.offset > 0, "the Chat's first chunk");
+  const s = chat.v.current();
+  const traj = openPane(file, { view: "trajectory" });
+  expect(traj.v.current()).toBe(s);
+  await until(() => traj.v.readFollowing, "the Trajectory following");
+  expect(traj.v.unread()).toBe(true);
+  await settle(chat.v, 800);
+  await settle(traj.v, 800);
+  const offs = callsOf(st, file);
+  expect(new Set(offs).size).toBe(offs.length);
+  expect(traj.v.unread()).toBe(false);
+  const heads = () => traj.v.ledger().rows.filter((r) => r.kind === "trh").map((r) => r.key);
+  expect(() => traj.v.render(traj.cx)).not.toThrow();
+  expect(heads().length).toBe(200);
+  expect(heads().at(-1)).toBe("0:200");
+  // The window just full, and the transcript grows: the Chat's read trims the copy, and the
+  // Trajectory's ledger is the tail's, under the new numbers.
+  phantom(BUDGET - windowBytes() - 1);
+  fakeReader({ [file]: 220 }, 16000);
+  chat.v.read(chat.cx);
+  await settle(chat.v, 800);
+  expect(tailOf(s)?.of).toBe(220);
+  expect(traj.v.current()).toBe(s);
+  expect(traj.v.refused).toBeFalsy();
+  expect(() => traj.v.render(traj.cx)).not.toThrow();
+  expect(heads().length).toBe(s.turns.length);
+  expect(heads().at(-1)).toBe(`0:${s.turns.length}`);
+  expect(windowBytes()).toBeLessThanOrEqual(BUDGET);
+}, 60000);
+
+test("a Pinned pane beside a Chat being trimmed keeps the copy, and each pane's keys move by its own place for the session", async () => {
+  const [f1, f2] = [fixture("--only", "1"), fixture("--only", "2")];
+  fakeReader({ [f1]: 5, [f2]: 60 });
+  const chat = openPane(f1);
+  await settle(chat.v);
+  const pin = openPane(f2, { view: "pinned" });
+  await settle(pin.v);
+  const s = pin.v.current();
+  // The agent's /clear: the Chat moves to the session the Pinned pane shows.
+  chat.v.adopt({ kind: "found", id: s.id, file: f2, live: true }, chat.cx);
+  expect(chat.v.sessions.length).toBe(2);
+  expect(chat.v.current()).toBe(s);
+  const t = s.turns[58];
+  chat.v.sel = "1:59";
+  pin.v.sel = "0:59";
+  for (const p of [chat, pin]) p.v.follow = false;
+  phantom(BUDGET - windowBytes() - 1);
+  fakeReader({ [f1]: 5, [f2]: 70 });
+  chat.v.read(chat.cx);
+  await settle(chat.v);
+  expect(tailOf(s)?.of).toBe(70);
+  expect(s.turns).toContain(t);
+  expect(t.n).toBeLessThan(59);
+  expect(pin.v.refused).toBeFalsy();
+  expect(pin.v.current()).toBe(s);
+  expect(chat.v.sel).toBe(`1:${t.n}`);
+  expect(pin.v.sel).toBe(`0:${t.n}`);
+  expect(windowBytes()).toBeLessThanOrEqual(BUDGET);
+  for (const p of [chat, pin]) expect(() => p.v.render(p.cx)).not.toThrow();
+}, 20000);

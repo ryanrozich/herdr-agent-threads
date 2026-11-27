@@ -381,6 +381,8 @@ export function letSession(e, s, empty = true) {
   if (!r) { if (empty) gut(s); return empty; }
   r.holders.delete(e);
   if (r.reader?.e === e) r.reader = null;
+  // A holder no longer in the registry (released, or collected before a prune) holds nothing.
+  for (const h of [...r.holders]) if (!windowState().panes.has(h)) r.holders.delete(h);
   if (r.holders.size) return false;
   if (records().get(r.key) === r) records().delete(r.key);
   SHARE.delete(s);
@@ -388,7 +390,9 @@ export function letSession(e, s, empty = true) {
   return empty;
 }
 // Whether a pane other than entry e still holds s.
-export const heldElsewhere = (s, e = null) => { const r = SHARE.get(s); return Boolean(r) && [...r.holders].some((h) => h !== e); };
+export const heldElsewhere = (s, e = null) => { const r = SHARE.get(s); return Boolean(r) && liveHolders(r).some((h) => h !== e); };
+// Whether s is the window's (held through holdSession), not a pane's own.
+export const isShared = (s) => SHARE.has(s);
 // The panes that hold s (live, not emptied), or none for a session not shared.
 export function sharers(s) {
   const r = SHARE.get(s);
@@ -413,7 +417,7 @@ export function claimRead(e, s, gen) {
   // An older copy in the same Herdr pane is one a reload replaced (sweepGhosts): Herdr stopped
   // its tasks, so its read is over, swept or not.
   const replaced = cur?.e.pane && cur.e.pane === e.pane && (cur.e.born ?? 0) < (e.born ?? 0);
-  if (cur && cur.e !== e && !replaced && windowState().panes.has(cur.e) && r.holders.has(cur.e) && !deref(cur.e)?.forgotten) return false;
+  if (cur && cur.e !== e && !replaced && readerAlive(r)) return false;
   r.reader = { e, gen };
   return true;
 }
@@ -422,6 +426,13 @@ export function releaseRead(e, s, gen = null) {
   if (r?.reader?.e === e && (gen == null || r.reader.gen === gen)) r.reader = null;
 }
 // The pane reading s, or null.
-export const readerOf = (s) => { const r = SHARE.get(s); return r?.reader ? (deref(r.reader.e) ?? null) : null; };
+export const readerOf = (s) => { const r = SHARE.get(s); return r && readerAlive(r) ? deref(r.reader.e) : null; };
+// A reader still in the registry, holding the session, and a pane that is there and not emptied.
+function readerAlive(r) {
+  const e = r.reader?.e;
+  if (!e || !windowState().panes.has(e) || !r.holders.has(e)) return false;
+  const p = deref(e);
+  return Boolean(p) && !p.forgotten;
+}
 // For the debug report: how many panes hold s.
 export const holdersOf = (s) => { const r = SHARE.get(s); return r ? liveHolders(r).length : 0; };
