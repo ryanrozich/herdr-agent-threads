@@ -315,7 +315,8 @@ test("a resumed build Herdr stops inside a later slice builds each row once: the
     let stops = 0;
     let slices = 0;
     v.keptFor().rows.clear();
-    // Every slice ends at the next sixteenth turn: its time is up at once.
+    // Every slice's time is up at once, so each ends after its first turn (the time is checked
+    // before every turn): about one draw a turn, 120 of them.
     v.buildMax = () => -1;
     const fn = v[at];
     v[at] = function (r, ...a) {
@@ -325,7 +326,7 @@ test("a resumed build Herdr stops inside a later slice builds each row once: the
     const buildRows = v.buildRows;
     v.buildRows = function (...a) { slices++; return buildRows.apply(this, a); };
     v.rowsKey = null;
-    for (let k = 0; k < 60 && (v.rowJob || v.rowsKey == null); k++) { try { draw(v, cx); } catch (e) { if (e !== STOP) throw e; stops++; } cx.flush?.(0); }
+    for (let k = 0; k < 300 && (v.rowJob || v.rowsKey == null); k++) { try { draw(v, cx); } catch (e) { if (e !== STOP) throw e; stops++; } cx.flush?.(0); }
     delete v[at];
     delete v.buildMax;
     delete v.buildRows;
@@ -376,9 +377,10 @@ test("a resumed build Herdr stops in the running turn's last row, whose done eve
   let ended = null;
   const buildStep = v.buildStep;
   v.buildStep = function (...a) { const j = this.rowJob; const out = buildStep.apply(this, a); if (j && !this.rowJob) ended = j; return out; };
+  // Each slice ends after its first turn (its time is up at once): about one draw a turn.
   v.rowsKey = null;
   const { apply } = await import("../mods/agent-threads/core/turns.js");
-  for (let k = 0; k < 60 && (v.rowJob || v.rowsKey == null); k++) {
+  for (let k = 0; k < 300 && (v.rowJob || v.rowsKey == null); k++) {
     try { draw(v, cx); } catch (e) {
       if (e !== STOP) throw e;
       stops++;
