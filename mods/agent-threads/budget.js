@@ -183,14 +183,17 @@ export function leaveWindow(e) {
   w.panes.delete(e);
   dropRead(e);
 }
-// A pane collected with no close() (a WeakRef that comes back empty) leaves the registry here,
-// so its last estimate does not count against the budget for good.
 export function windowBytes(except = null) {
-  const w = windowState();
   let n = 0;
-  for (const e of [...w.panes]) {
-    if (e.ref && typeof e.ref.deref === "function" && e.ref.deref() === undefined) { leaveWindow(e); continue; }
-    if (e !== except) n += e.bytes;
+  for (const e of windowState().panes) if (e !== except) n += e.bytes;
+  return n;
+}
+// On each pane's 1 s timer: a pane collected with no close() (a WeakRef that comes back empty)
+// leaves the registry, so its last estimate does not count against the budget for good.
+export function pruneWindow() {
+  let n = 0;
+  for (const e of [...windowState().panes]) {
+    if (e.ref && typeof e.ref.deref === "function" && e.ref.deref() === undefined) { leaveWindow(e); n++; }
   }
   return n;
 }
@@ -274,6 +277,12 @@ export function takeRead(e, gen, now = Date.now()) {
   w.queue.shift();
   w.lock = { e, gen, at: now };
   return true;
+}
+// A read still at work (its heartbeat) keeps its turn fresh, so a long extractor call and the
+// apply and measure after it are not taken for a dead turn (LOCK_STALE).
+export function holdRead(e, gen, now = Date.now()) {
+  const w = windowState();
+  if (w.lock?.e === e && w.lock.gen === gen) w.lock.at = now;
 }
 // gen: only that read's turn (null: whatever the pane holds or waits for).
 export function dropRead(e, gen = null) {

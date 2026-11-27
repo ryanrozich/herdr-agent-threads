@@ -77,9 +77,10 @@ export function newPin(turns, turn, now = Date.now()) {
 }
 
 // gone: the session is fully read and the turn is not in it. loading: not read yet. beyond:
-// the session keeps only its newest turns (cut, budget.js trim), so the turn may be older.
-export function pinState({ turn, loaded, live, seen, cut = false }) {
-  if (!turn) return cut ? "beyond" : loaded ? "gone" : "loading";
+// read, but the session keeps only its newest turns (budget.js trim let go of the first
+// dropped) and the pin's number n, in the whole session, is one of those.
+export function pinState({ turn, loaded, live, seen, n = 0, dropped = 0 }) {
+  if (!turn) return !loaded ? "loading" : dropped > 0 && (n ?? 0) <= dropped ? "beyond" : "gone";
   if (live) return "live";
   const now = seenOf(turn);
   return now.len > (seen?.len ?? 0) || now.fu > (seen?.fu ?? 0) ? "new" : "quiet";

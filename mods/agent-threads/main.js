@@ -100,7 +100,7 @@ import("./build.js")
   .then((m) => { built = parseBuild(m?.BUILD) ? m.BUILD : null; })
   .catch(() => { built = null; });
 import { isDiagram, drawDiagram } from "./diagram.js";
-import { BUDGET, TIGHT_CHUNK, PANE_WEIGHT, measure, sessionBytes, forgetSize, trim, tailOf, tailNote, droppedOf, gut, joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, dropRead, windowState } from "./budget.js";
+import { BUDGET, TIGHT_CHUNK, PANE_WEIGHT, measure, sessionBytes, forgetSize, trim, tailOf, tailNote, droppedOf, gut, joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, holdRead, dropRead, windowState, pruneWindow } from "./budget.js";
 // A hot reload evaluates this module again in the same VM, beside the old one, and then
 // replaces every copy: the copies it replaces give back what they hold now (budget.js).
 releaseOlder();
@@ -1133,7 +1133,7 @@ export default class Threads extends View {
       if (this.forgotten) return;
       // This copy is alive; an earlier copy in this pane that a reload replaced lets go
       // (budget.js sweepGhosts), unless this timer itself was held up (a sleep).
-      if (this.win) { const at = Date.now(); if (this.lastTick == null || at - this.lastTick <= TICK_GAP) sweepGhosts(this.win, at); this.win.beat = at; }
+      if (this.win) { const at = Date.now(); if (this.lastTick == null || at - this.lastTick <= TICK_GAP) sweepGhosts(this.win, at); this.win.beat = at; pruneWindow(); }
       this.watchRead(cx);
       this.poll(cx);
       this.flushCode(cx);
@@ -1303,12 +1303,16 @@ export default class Threads extends View {
     // of this exists.
     if (this.outv?.st) this.outv.st.release();
     if (this.launcher || this.gal || this.outv) return;
-    this.watchGen = (this.watchGen ?? 0) + 1;
-    this.lookGen = (this.lookGen ?? 0) + 1;
-    this.prefsGen = (this.prefsGen ?? 0) + 1;
-    this.dropCode();
-    this.endSelect();
-    this.forget();
+    // Whatever throws here, the pane still leaves the window and empties its sessions.
+    try {
+      this.watchGen = (this.watchGen ?? 0) + 1;
+      this.lookGen = (this.lookGen ?? 0) + 1;
+      this.prefsGen = (this.prefsGen ?? 0) + 1;
+      this.dropCode();
+      this.endSelect();
+    } finally {
+      this.forget();
+    }
   }
 
   // A pane closed, or replaced by a reload (budget.js releaseOlder, sweepGhosts): it leaves the
@@ -2213,7 +2217,7 @@ export default class Threads extends View {
           const seen = seenOf(turn);
           if (seen.len !== pin.seen?.len || seen.fu !== pin.seen?.fu) { pin.seen = seen; this.pinChangedLater(this.sessionKey(s)); }
         }
-        out.push({ pin, s, si, turn, key, state: pinState({ turn, loaded: s.loaded, live, seen: pin.seen, cut: dropped > 0 }) });
+        out.push({ pin, s, si, turn, key, state: pinState({ turn, loaded: s.loaded, live, seen: pin.seen, n: pin.n, dropped }) });
       }
     });
     out.sort(byTime);
@@ -2248,7 +2252,8 @@ export default class Threads extends View {
     const i = this.pinnedList().findIndex((p) => p.pin === pin);
     // A pin opens the Pinned column when there is room and it was not closed this pane's life.
     const col = !this.pinnedPane && !this.pinnedPaneOpen() && !this.pinColClosed && this.view === "all" && this.openPinned(cx, true);
-    this.say(`Pinned #${turn.n} · ${col ? "in the Pinned column · " : ""}press ${i + 1} to come back`, "pin", cx, 3000);
+    // The pin's number in the whole session, as the Pinned list shows it.
+    this.say(`Pinned #${pin.n} · ${col ? "in the Pinned column · " : ""}press ${i + 1} to come back`, "pin", cx, 3000);
     return true;
   }
 
@@ -2509,7 +2514,8 @@ export default class Threads extends View {
     this.readBeat = Date.now();
     const gen = (this.readGen = (this.readGen ?? 0) + 1);
     const live = () => this.readGen === gen && this.current() === s;
-    const beat = () => { this.readBeat = Date.now(); };
+    // The read's heartbeat; while it holds the window's turn, the turn's too (budget.js holdRead).
+    const beat = () => { this.readBeat = Date.now(); if (this.win) holdRead(this.win, gen, this.readBeat); };
     // Runs fn over items, yielding after each SLICE_MS of work. False when superseded.
     const sliced = async (items, fn, cx) => {
       let t0 = now();

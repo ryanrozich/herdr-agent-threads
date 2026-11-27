@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { newSession, apply, parseChunk } from "../mods/agent-threads/core/turns.js";
 import {
   BUDGET, TIGHT_CHUNK, PANE_WEIGHT, LOCK_STALE, QUEUE_STALE, GHOST_MS, measure, sessionBytes, trim, tailOf, tailNote, droppedOf, gut, windowState,
-  joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, dropRead,
+  joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, dropRead, pruneWindow,
 } from "../mods/agent-threads/budget.js";
 import { turnId } from "../mods/agent-threads/pins.js";
 import { fixture, H, makeCx, modDir, settle, setup, Threads, unsliced, until } from "./render-harness.js";
@@ -203,6 +203,9 @@ test("a registry entry whose pane was collected with no close() stops counting, 
   dead.ref = { deref: () => undefined };
   dead.bytes = 99 * MiB;
   const live = phantom(MiB);
+  // windowBytes only reads; the 1 s timer's pruneWindow lets the dead entry go.
+  expect(windowBytes()).toBe(99 * MiB + MiB);
+  expect(pruneWindow()).toBe(1);
   expect(windowBytes()).toBe(MiB);
   expect(windowState().panes.has(dead)).toBe(false);
   expect(windowState().panes.has(live)).toBe(true);
@@ -442,4 +445,70 @@ test("a pane that picks another transcript lets go of the old one's estimate at 
   expect(a.v.win.bytes).toBeGreaterThan(0);
   a.v.pick({ path: fixture("--extra", "4") }, a.cx);
   expect(a.v.win.bytes).toBe(0);
+}, 20000);
+
+test("in a trimmed Chat a pin is loading while its session is read, gone when its number is in the tail but its turn is not, and older than the tail only when its number is; the toast gives the whole session's number", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 60 });
+  phantom(BUDGET - 100 * 1024);
+  const { v, cx } = openPane(file);
+  await settle(v);
+  const s = v.current();
+  const n = s.turns.length;
+  const dropped = droppedOf(s);
+  expect(dropped).toBe(60 - n);
+  const whole = sessionOf(60, PAD);
+  const id = (i) => turnId(whole.turns, whole.turns[i]);
+  // Turn 59's second and count, another prompt: the agent rewrote that turn.
+  const rewritten = id(58).replace(/\|[^|]+\|/, "|x|");
+  const k = v.sessionKey(s);
+  v.pinStore.sessions[k] = { at: Date.now(), pins: [
+    { id: id(0), n: 1, text: "prompt 1", at: Date.now(), seen: { len: 0, fu: 0 } },
+    { id: rewritten, n: 59, text: "prompt 59", at: Date.now(), seen: { len: 0, fu: 0 } },
+  ] };
+  v.pinVer++;
+  expect(v.pinnedAll().map((p) => p.state)).toEqual(["beyond", "gone"]);
+  // Still being read: neither is known yet.
+  s.loaded = false;
+  expect(v.pinnedAll().map((p) => p.state)).toEqual(["loading", "loading"]);
+  s.loaded = true;
+  // The toast and the Pinned list give one number: the whole session's.
+  v.pinStore.sessions[k].pins.length = 0;
+  v.pinVer++;
+  expect(v.togglePin(`0:${n - 1}`, cx)).toBe(true);
+  expect(v.toast.text).toStartWith("Pinned #59 ");
+}, 20000);
+
+test("a pane whose close() throws part way still leaves the window and empties its sessions", async () => {
+  const a = openPane(fixture("--extra", "3"));
+  await settle(a.v);
+  const turns = a.v.current().turns;
+  expect(turns.length).toBeGreaterThan(0);
+  a.v.dropCode = () => { throw new Error("boom"); };
+  expect(() => a.v.close()).toThrow("boom");
+  expect(a.v.forgotten).toBe(true);
+  expect(turns.length).toBe(0);
+  expect(windowState().panes.size).toBe(0);
+}, 20000);
+
+test("a read whose extractor call ran past LOCK_STALE keeps the window's turn: its heartbeat renews it, so no other pane takes it before the chunk is counted", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 5 });
+  const ask = H.extractHook;
+  // The call came back after LOCK_STALE, no other pane having asked meanwhile.
+  H.extractHook = async (args) => { const r = await ask(args); const l = windowState().lock; if (l) l.at = Date.now() - LOCK_STALE - 1; return r; };
+  const otherPane = {};
+  const other = joinWindow(otherPane, "pinned");
+  const { v } = openPane(file);
+  const took = [];
+  const guard = v.guard.bind(v);
+  v.guard = (s) => {
+    took.push(takeRead(other, 1));
+    dropRead(other);
+    return guard(s);
+  };
+  await settle(v);
+  expect(otherPane).toBeTruthy();
+  expect(took.length).toBeGreaterThan(0);
+  expect(took.every((x) => x === false)).toBe(true);
 }, 20000);
