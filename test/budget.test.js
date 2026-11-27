@@ -1350,6 +1350,14 @@ test("a read superseded while it applies its chunk, past the budget: the next re
     first ??= { turns: s.turns.length, partial: s.partial };
     return inner(args);
   };
+  // supersededIn only moves readGen on, and the read it stopped leaves its flags to the newer
+  // read, so the pane still says it is reading: let go of them as watchRead does when it
+  // supersedes a read, or read() only asks for another and nothing reads.
+  expect(v.reading).toBe(true);
+  v.reading = false;
+  v.readAgain = false;
+  v.readWaiting = false;
+  v.readBeat = null;
   v.read(out.cx);
   await settle(v);
   expect(first).toEqual({ turns: 0, partial: false });
