@@ -29,10 +29,12 @@ function baseOf(turn) {
 }
 
 // Every turn of a session under its fingerprint; with ids, only the turns from the seconds
-// those ids name (the count for repeats only ever counts turns from the same second).
-export function turnIds(turns, ids = null) {
+// those ids name (the count for repeats only ever counts turns from the same second). before:
+// the counts of turns no longer in turns that came first (carryIds), so a repeat keeps its count
+// in the whole session.
+export function turnIds(turns, ids = null, before = null) {
   const only = ids ? new Set(Array.from(ids, (id) => String(id).split("|")[0])) : null;
-  const seen = new Map();
+  const seen = new Map(before ?? []);
   const out = new Map();
   for (const t of turns) {
     if (only && !only.has(secOf(t))) continue;
@@ -44,10 +46,26 @@ export function turnIds(turns, ids = null) {
   return out;
 }
 
-export function turnId(turns, turn) {
+export function turnId(turns, turn, before = null) {
   const b = baseOf(turn);
   const sec = secOf(turn);
-  let k = 0;
+  let k = before?.get(b) ?? 0;
   for (const t of turns) { if (t !== turn && secOf(t) !== sec) continue; if (baseOf(t) === b) k++; if (t === turn) break; }
   return `${b}|${k}`;
+}
+
+// The counts turnIds and turnId start from once the oldest turns of a session went (budget.js
+// trim): for each fingerprint of a turn that went, how many such turns, carried over from the
+// last trim's (before). Only those of a second a kept turn is from: turns come in time order, so
+// no later turn can share any other second.
+export function carryIds(dropped, kept, before = null) {
+  const secs = new Set(kept.map(secOf));
+  const out = new Map();
+  for (const [b, n] of before ?? []) if (secs.has(b.split("|")[0])) out.set(b, n);
+  for (const t of dropped) {
+    if (!secs.has(secOf(t))) continue;
+    const b = baseOf(t);
+    out.set(b, (out.get(b) ?? 0) + 1);
+  }
+  return out.size ? out : null;
 }
