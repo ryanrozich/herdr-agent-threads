@@ -72,13 +72,16 @@ export function byTime(a, b) {
 }
 export function seenOf(turn) { return { len: reply(turn).length, fu: turn.followups ?? 0 }; }
 
-export function newPin(turns, turn, now = Date.now()) {
-  return { id: turnId(turns, turn), n: turn.n, text: firstLine(turn.prompt ?? "").slice(0, PIN_TEXT), at: now, seen: seenOf(turn) };
+// before: the counts of the turns a trim let go (budget.js idsBefore).
+export function newPin(turns, turn, now = Date.now(), before = null) {
+  return { id: turnId(turns, turn, before), n: turn.n, text: firstLine(turn.prompt ?? "").slice(0, PIN_TEXT), at: now, seen: seenOf(turn) };
 }
 
-// gone: the session is fully read and the turn is not in it. loading: not read yet.
-export function pinState({ turn, loaded, live, seen }) {
-  if (!turn) return loaded ? "gone" : "loading";
+// gone: the session is fully read and the turn is not in it. loading: not read yet. beyond:
+// read, but the session keeps only its newest turns (budget.js trim let go of the first
+// dropped) and the pin's number n, in the whole session, is one of those.
+export function pinState({ turn, loaded, live, seen, n = 0, dropped = 0 }) {
+  if (!turn) return !loaded ? "loading" : dropped > 0 && (n ?? 0) <= dropped ? "beyond" : "gone";
   if (live) return "live";
   const now = seenOf(turn);
   return now.len > (seen?.len ?? 0) || now.fu > (seen?.fu ?? 0) ? "new" : "quiet";
