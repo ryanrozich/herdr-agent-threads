@@ -2600,6 +2600,9 @@ export default class Threads extends View {
     this.follow = true;
     this.known.add(r.file);
     this.watch(dirname(r.file), cx);
+    // Another pane read it in full already: this one follows its turns, with no call of its own
+    // (the next write is read by whichever pane's watch sees it first).
+    if (s.loaded && holdersOf(s) > 1) { this.readFollowing = false; this.shareSeen = null; cx.notify(); return; }
     this.read(cx);
   }
 

@@ -363,7 +363,8 @@ test("a reload of the same code: the copy it replaced in this Herdr pane, its ti
   a.v.mem.beat = Date.now() - 2 * GHOST_MS;
   tick(b);
   expect(a.v.forgotten).toBe(true);
-  expect(turns.length).toBe(0);
+  // The two copies shared one session (test/share.test.js): it stays whole for the new one.
+  expect(b.v.current().turns).toBe(turns);
   expect([...windowState().panes]).toEqual([b.v.mem]);
   expect(b.v.current().turns.length).toBeGreaterThan(0);
 }, 20000);

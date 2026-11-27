@@ -408,7 +408,10 @@ export function claimRead(e, s, gen) {
   const r = SHARE.get(s);
   if (!r || !e) return true;
   const cur = r.reader;
-  if (cur && cur.e !== e && windowState().panes.has(cur.e) && r.holders.has(cur.e) && !deref(cur.e)?.forgotten) return false;
+  // An older copy in the same Herdr pane is one a reload replaced (sweepGhosts): Herdr stopped
+  // its tasks, so its read is over, swept or not.
+  const replaced = cur?.e.pane && cur.e.pane === e.pane && (cur.e.born ?? 0) < (e.born ?? 0);
+  if (cur && cur.e !== e && !replaced && windowState().panes.has(cur.e) && r.holders.has(cur.e) && !deref(cur.e)?.forgotten) return false;
   r.reader = { e, gen };
   return true;
 }
