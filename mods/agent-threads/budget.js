@@ -7,6 +7,7 @@
 // old one), and past BUDGET a session keeps only its newest turns (trim) or a side pane reads
 // nothing. The same registry lets one read run at a time (takeRead) and lets a new copy of the
 // mod release what the copies it replaces still hold (releaseOlder).
+import { carryIds } from "./core/ids.js";
 
 const MiB = 1024 * 1024;
 // All Threads panes of a window together, in estimated VM bytes (sessionBytes). 256 MiB VM, less
@@ -112,12 +113,20 @@ export function trim(s, bytes, w) {
   let k = 0;
   let text = m.text;
   let fixed = m.fixed;
+  // The calls still waiting for their output are counted for the session (measure): each turn's
+  // go with it.
+  const calls = new Map();
+  if (s.calls) for (const c of s.calls.values()) if (c.turn) calls.set(c.turn, (calls.get(c.turn) ?? 0) + 1);
   while (k < s.turns.length - 1 && weigh(text, fixed, w) > bytes) {
-    const b = SIZES.get(s.turns[k++]) ?? [0, 0];
+    const t = s.turns[k++];
+    const b = SIZES.get(t) ?? [0, 0];
     text -= b[0];
-    fixed -= b[1];
+    fixed -= b[1] + (calls.get(t) ?? 0) * PER_INFO;
   }
-  const dropped = new Set(s.turns.splice(0, k));
+  const went = s.turns.splice(0, k);
+  const dropped = new Set(went);
+  // A repeated prompt keeps its count among the whole session's (core/ids.js), so pins match.
+  m.ids = carryIds(went, s.turns, m.ids);
   s.version++;
   // A later turn a turn was answered in keeps its number less k (turns.js linkAnswer, closeOpen).
   for (const [i, t] of s.turns.entries()) {
@@ -162,6 +171,8 @@ export function tailOf(s) {
 // How many of the session's oldest turns trim() let go: a turn numbered n in the tail is turn
 // n + droppedOf(s) of the whole session.
 export const droppedOf = (s) => META.get(s)?.dropped ?? 0;
+// The fingerprint counts of the turns trim() let go (core/ids.js carryIds), or null.
+export const idsBefore = (s) => META.get(s)?.ids ?? null;
 export const tailNote = (t) => `This session is too large to show in full: showing the newest ${t.shown.toLocaleString()} of ${t.of.toLocaleString()} turns`;
 
 // Empties a session in place: a pane that closed or was replaced gives its turns back now, even
@@ -223,16 +234,19 @@ function failed(err) {
   w.releaseError = String(err?.message ?? err);
 }
 // The largest whole-session estimate any pane has made for a transcript, as [text, fixed], for a
-// side pane to judge before it reads (fileBytes, at its own weight).
+// side pane to judge before it reads (fileBytes, at its own weight). A session read to its end
+// is the file as it is now: its estimate stands, smaller or not (a transcript replaced by a
+// shorter one at the same path). Retry lets the estimate go (forgetFile) and reads to see.
 export function noteFile(s) {
   const m = META.get(s);
   if (!m || !s.file) return;
   const f = windowState().files;
   const was = f.get(s.file);
   const now = [m.text + m.gone[0], m.fixed + m.gone[1]];
-  if (!was || now[1] > was[1]) f.set(s.file, now);
+  if (!was || s.loaded || now[1] > was[1]) { f.delete(s.file); f.set(s.file, now); }
   if (f.size > 64) f.delete(f.keys().next().value);
 }
+export function forgetFile(file) { windowState().files.delete(file); }
 export function fileBytes(file, w) {
   const b = windowState().files.get(file);
   return b ? weigh(b[0], b[1], w) : 0;
@@ -279,7 +293,10 @@ export function sweepGhosts(e, now = Date.now()) {
 
 // A read holds the window's turn while it runs the extractor and applies the chunk; others wait
 // in order. A turn not renewed for LOCK_STALE (past the extractor's own 30 s stall) is taken as
-// dead, and a waiter that stopped asking for QUEUE_STALE leaves the line.
+// dead, and a waiter that stopped asking for QUEUE_STALE leaves the line. A turn whose extractor
+// is still running (holdRead with exec) is never taken for dead, as after a computer's sleep: the
+// reading pane's own watch (main.js watchRead, EXEC_STALL) lets it go if the call never ends,
+// and a pane that leaves the window lets it go too (leaveWindow).
 export const LOCK_STALE = 35000;
 export const QUEUE_STALE = 2000;
 export function takeRead(e, gen, now = Date.now()) {
@@ -287,7 +304,7 @@ export function takeRead(e, gen, now = Date.now()) {
   // A pane of a registry that was replaced (another layout's, a test's) is not held up.
   if (!w.panes.has(e)) return true;
   if (w.lock?.e === e) { w.lock = { e, gen, at: now }; return true; }
-  if (w.lock && now - w.lock.at > LOCK_STALE) w.lock = null;
+  if (w.lock && !w.lock.exec && now - w.lock.at > LOCK_STALE) w.lock = null;
   let q = w.queue.find((x) => x.e === e);
   if (q) q.at = now;
   else w.queue.push((q = { e, at: now }));
@@ -299,9 +316,12 @@ export function takeRead(e, gen, now = Date.now()) {
 }
 // A read still at work (its heartbeat) keeps its turn fresh, so a long extractor call and the
 // apply and measure after it are not taken for a dead turn (LOCK_STALE).
-export function holdRead(e, gen, now = Date.now()) {
+// exec: whether its extractor call is in flight now (left as it was when not given).
+export function holdRead(e, gen, now = Date.now(), exec) {
   const w = windowState();
-  if (w.lock?.e === e && w.lock.gen === gen) w.lock.at = now;
+  if (w.lock?.e !== e || w.lock.gen !== gen) return;
+  w.lock.at = now;
+  if (exec != null) w.lock.exec = exec;
 }
 // gen: only that read's turn (null: whatever the pane holds or waits for).
 export function dropRead(e, gen = null) {

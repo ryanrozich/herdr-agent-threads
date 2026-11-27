@@ -9,10 +9,10 @@ import { join } from "node:path";
 import { newSession, apply, parseChunk } from "../mods/agent-threads/core/turns.js";
 import {
   BUDGET, TIGHT_CHUNK, TRIM_TO, PANE_WEIGHT, LOCK_STALE, QUEUE_STALE, GHOST_MS, measure, sessionBytes, trim, shiftKey, tailOf, tailNote, droppedOf, gut, windowState,
-  joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, dropRead, pruneWindow,
+  joinWindow, leaveWindow, windowBytes, noteFile, fileBytes, releaseOlder, sweepGhosts, takeRead, holdRead, dropRead, pruneWindow, idsBefore,
 } from "../mods/agent-threads/budget.js";
-import { turnId } from "../mods/agent-threads/pins.js";
-import { drawRange, fixture, H, makeCx, modDir, settle, setup, Threads, unsliced, until } from "./render-harness.js";
+import { turnId, turnIds } from "../mods/agent-threads/pins.js";
+import { drawRange, fixture, H, makeCx, modDir, PINS, settle, setup, Threads, unsliced, until } from "./render-harness.js";
 
 setup();
 
@@ -1016,4 +1016,240 @@ test("a trim keeps TRIM_TO of what the pane's other sessions leave of the room: 
   expect(s.turns.length).toBeGreaterThan(1);
   expect(sessionBytes(s, w)).toBeLessThanOrEqual(left);
   expect(v.mem.bytes).toBeLessThanOrEqual(room);
+}, 20000);
+
+// ---- the review's findings on the guard ----
+
+test("trim counts a dropped turn's waiting calls as going with it, so it lets go of no more turns than fit", () => {
+  const w = PANE_WEIGHT.chat;
+  const s = sessionOf(10, PAD);
+  measure(s);
+  const bare = sessionBytes(s, w);
+  // 100 calls of the oldest turn wait for their output: charged to the session (measure).
+  for (let i = 0; i < 100; i++) s.calls.set(`c${i}`, { turn: s.turns[0] });
+  measure(s);
+  const all = sessionBytes(s, w);
+  expect(all).toBeGreaterThan(bare);
+  // Room for all but the oldest turn and its calls (the same turn as one's), and a byte.
+  const one = sessionOf(1, PAD);
+  measure(one);
+  const room = bare - sessionBytes(one, w) + 1;
+  expect(trim(s, room, w)).toBe(1);
+  expect(s.calls.size).toBe(0);
+  // The estimate trim leaves is the one a new measure makes.
+  const left = sessionBytes(s, w);
+  measure(s);
+  expect(sessionBytes(s, w)).toBe(left);
+});
+
+test("a repeated prompt keeps its count in the whole session after a trim: a pin on the first copy is older than the tail, one on the second still finds it", () => {
+  const w = PANE_WEIGHT.chat;
+  const s = newSession("s", "/x/r.jsonl");
+  const T = new Date(Date.UTC(2026, 10, 1, 9)).toISOString();
+  for (let i = 0; i < 2; i++) for (const e of [{ k: "p", o: "human", ts: T, t: "same prompt" }, { k: "t", ts: T, t: "r" }, { k: "d", ts: T, ms: 1 }]) apply(s, e);
+  for (let i = 2; i < 6; i++) for (const e of turnEvents(i, PAD)) apply(s, e);
+  const [first, second] = s.turns;
+  const id1 = turnId(s.turns, first);
+  const id2 = turnId(s.turns, second);
+  expect(id1).not.toBe(id2);
+  measure(s);
+  // The oldest turn goes.
+  expect(trim(s, sessionBytes(s, w) - 1, w)).toBe(1);
+  expect(s.turns[0]).toBe(second);
+  const ids = turnIds(s.turns, [id1, id2], idsBefore(s));
+  expect(ids.get(id1)).toBeUndefined();
+  expect(ids.get(id2)).toBe(second);
+  expect(turnId(s.turns, second, idsBefore(s))).toBe(id2);
+});
+
+test("a read whose extractor call is out keeps the window's turn past LOCK_STALE (a computer's sleep), and only then can it go stale", () => {
+  const [a, b] = [joinWindow({}, "chat"), joinWindow({}, "pinned")];
+  expect(takeRead(a, 1, 0)).toBe(true);
+  holdRead(a, 1, 0, true);
+  expect(takeRead(b, 1, LOCK_STALE + 5000)).toBe(false);
+  expect(takeRead(b, 1, LOCK_STALE * 10)).toBe(false);
+  // The call ends: the turn is renewed then, and goes stale as before when no beat follows.
+  const t = LOCK_STALE * 10 + 500;
+  holdRead(a, 1, t, false);
+  expect(takeRead(b, 1, t + 1000)).toBe(false);
+  expect(takeRead(b, 1, t + LOCK_STALE + 1)).toBe(true);
+  leaveWindow(a);
+  leaveWindow(b);
+});
+
+test("a side pane refused by an estimate made for another file at that path reads it on Retry, and says when a session is too large on its own", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 60 });
+  // What a pane found here before: far over the budget.
+  windowState().files.set(file, [BUDGET * 2, 0]);
+  const { v, cx } = openPane(file, { view: "pinned" });
+  await until(() => v.refused, "the Pinned pane refusing");
+  H.rec = [];
+  v.render(cx);
+  const said = H.rec.flatMap((e) => e.slice(1)).filter((x) => typeof x === "string").join(" ");
+  H.rec = null;
+  expect(said).toContain("larger than the memory budget of the Threads panes in this window on its own");
+  expect(said).toContain("Open it in a Chat");
+  v.retryRead(cx);
+  await settle(v);
+  expect(v.refused).toBeNull();
+  expect(v.current().turns.length).toBe(60);
+  expect(fileBytes(file, PANE_WEIGHT.pinned)).toBeLessThan(BUDGET);
+}, 20000);
+
+test("a side pane counts its own other sessions before it reads one: refused before any call, with the note to close a pane", async () => {
+  const [fa, fb] = [fixture("--only", "1"), fixture("--only", "2")];
+  const st = fakeReader({ [fa]: 60 });
+  const { v, cx } = openPane(fa, { view: "pinned" });
+  await settle(v);
+  const mine = v.heldBytes();
+  expect(mine).toBeGreaterThan(0);
+  // Session b's estimate fits with the other panes, and not with this pane's session a too.
+  const need = 100 * 1024;
+  windowState().files.set(fb, [need, 0]);
+  phantom(BUDGET - need - Math.floor(mine / 2));
+  v.sessions.push(newSession("b", fb));
+  const asked = st.asked.length;
+  v.read(cx);
+  expect(v.refused?.file).toBe(fb);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(st.asked.length).toBe(asked);
+  H.rec = [];
+  v.render(cx);
+  const said = H.rec.flatMap((e) => e.slice(1)).filter((x) => typeof x === "string").join(" ");
+  H.rec = null;
+  expect(said).toContain("Close another Threads pane to make room, then Retry");
+}, 20000);
+
+test("a read superseded after its chunk is applied counts that chunk before it ends", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 60 }, 1000, 5);
+  const { v, cx } = openPane(file);
+  const real = performance.now;
+  let t = 0;
+  let superseded = false;
+  // Every clock read is 20 ms on: the measure after the chunk yields after its second turn.
+  performance.now = () => (t += 20);
+  cx.sleepHook = () => {
+    // The first yield with the chunk applied (its offset moved) is the measure's. The newer
+    // read (readGen) is a retry's, as watchRead's or Retry's would be.
+    const s = v.current();
+    if (!superseded && s && s.offset > 0 && !s.partial) { superseded = true; v.readGen++; }
+    return new Promise((r) => setTimeout(r, 0));
+  };
+  try {
+    await until(() => superseded, "the read superseded");
+    await new Promise((r) => setTimeout(r, 50));
+  } finally { performance.now = real; cx.sleepHook = null; }
+  const s = v.current();
+  expect(s.turns.length).toBe(60);
+  const w = PANE_WEIGHT.chat;
+  const est = sessionBytes(s, w);
+  expect(est).toBeGreaterThan(0);
+  measure(s);
+  expect(sessionBytes(s, w)).toBe(est);
+}, 20000);
+
+test("a press's pending open opens the turn under its new key when a trim comes before the timer", async () => {
+  const { v, cx, trimNow } = await trimmedLater();
+  v.rows();
+  const due = cx.timers.length;
+  v.openAfterPress("0:59", cx);
+  const timer = cx.timers[due];
+  expect(timer).toBeDefined();
+  const { at } = trimNow();
+  expect(v.openWait?.key).toBe(at(59));
+  timer.fn(cx);
+  expect(v.open.has(at(59))).toBe(true);
+  expect(v.open.has("0:59")).toBe(false);
+}, 20000);
+
+test("a pin saved as the pane closes still reaches pins.json", async () => {
+  const { v, cx } = await trimmedLater();
+  delete H.recordFiles[PINS];
+  v.togglePin("0:57", cx);
+  v.savePins(cx);
+  v.forget();
+  await until(() => H.recordFiles[PINS] != null, "pins.json written");
+  expect(H.recordFiles[PINS]).toContain("prompt 57");
+}, 20000);
+
+test("in a trimmed Chat the Pinned view's row gives the pin's number in the whole session", async () => {
+  const { v, cx, trimNow } = await trimmedLater();
+  const { k, at } = trimNow();
+  v.togglePin(at(59), cx);
+  v.setView("pinned");
+  const row = v.rows().find((r) => r.compact);
+  expect(row?.pinN).toBe(59);
+  H.rec = [];
+  v.render(cx);
+  const said = H.rec.flatMap((e) => e.slice(1)).filter((x) => typeof x === "string");
+  H.rec = null;
+  expect(said).toContain("#59");
+  expect(said).not.toContain(`#${59 - k}`);
+}, 20000);
+
+test("a Trajectory finds the turn a trimmed Chat selected by its id, under its own number", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 60 });
+  const { v } = openPane(file, { view: "trajectory" });
+  await settle(v);
+  const s = v.current();
+  const id = turnId(s.turns, s.turns[58]);
+  // The Chat dropped 40 turns: turn 59 is its 0:19.
+  H.state.shared["threads.turnSel"] = { t4: { key: "0:19", id, by: "chat-copy", at: Date.now(), pane: "chat" } };
+  v.syncSel();
+  expect(v.tsel).toBe("0:59");
+}, 20000);
+
+test("a trim keeps a reader's place who is not following: a jump to the top row under its new key", async () => {
+  const { v, trimNow } = await trimmedLater();
+  v.rows();
+  v.follow = false;
+  v.toBottom = false;
+  v.scrollTo = null;
+  v.anchor = null;
+  v.anchorDue = false;
+  v.topKey = "0:58";
+  const { at } = trimNow();
+  expect(v.scrollTo).toEqual({ key: at(58), how: "top" });
+}, 20000);
+
+test("a trim that lets go of a code editor without the keyboard leaves the one that has it", async () => {
+  const { v, trimNow } = await trimmedLater();
+  const ed = () => { const e = { handlers: {}, released: 0, on(n, f) { this.handlers[n] = f; }, release() { this.released++; } }; return e; };
+  const [old, kept] = [ed(), ed()];
+  v.code.set("0:3:0", { st: old, text: "x" });
+  v.code.set("0:59:0", { st: kept, text: "y" });
+  v.watchEditor(old);
+  v.watchEditor(kept);
+  kept.handlers.focus();
+  expect(v.editorFocused).toBe(true);
+  const { at } = trimNow();
+  expect(old.released).toBe(1);
+  expect(kept.released).toBe(0);
+  expect(v.code.get(`${at(59)}:0`)?.st).toBe(kept);
+  expect(v.editorFocused).toBe(true);
+}, 20000);
+
+test("a trimmed session that gains a turn without trimming again says the new counts in the kept note", async () => {
+  const { v, trimNow } = await trimmedLater();
+  trimNow(Math.floor(v.mem.bytes * 0.6));
+  const s = v.current();
+  // Two days, so a later build keeps the rows before the second (keptFrom).
+  const half = Math.floor(s.turns.length / 2);
+  s.turns.forEach((t, i) => { t.day = i < half ? "20261101" : "20261102"; });
+  v.rows();
+  expect(v.rowBuild?.multi).toBe(true);
+  const before = v.baseRows;
+  const noteAt = before.findIndex((r) => r.key === "tail:0");
+  expect(noteAt).toBeGreaterThanOrEqual(0);
+  const firstTurn = before.findIndex((r) => r.kind === "turn");
+  for (const e of turnEvents(60, PAD)) apply(s, e);
+  s.turns.at(-1).day = "20261102";
+  v.rows();
+  // The rows before the change were kept, the note among them with today's counts.
+  expect(v.baseRows[firstTurn]).toBe(before[firstTurn]);
+  expect(v.baseRows[noteAt].text).toBe(tailNote(tailOf(s)));
+  expect(v.baseSizes.length).toBe(v.baseRows.length);
 }, 20000);

@@ -72,8 +72,9 @@ export function byTime(a, b) {
 }
 export function seenOf(turn) { return { len: reply(turn).length, fu: turn.followups ?? 0 }; }
 
-export function newPin(turns, turn, now = Date.now()) {
-  return { id: turnId(turns, turn), n: turn.n, text: firstLine(turn.prompt ?? "").slice(0, PIN_TEXT), at: now, seen: seenOf(turn) };
+// before: the counts of the turns a trim let go (budget.js idsBefore).
+export function newPin(turns, turn, now = Date.now(), before = null) {
+  return { id: turnId(turns, turn, before), n: turn.n, text: firstLine(turn.prompt ?? "").slice(0, PIN_TEXT), at: now, seen: seenOf(turn) };
 }
 
 // gone: the session is fully read and the turn is not in it. loading: not read yet. beyond:
