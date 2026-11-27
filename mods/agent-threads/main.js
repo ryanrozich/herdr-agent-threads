@@ -2617,9 +2617,12 @@ export default class Threads extends View {
     // A read superseded with events of its chunk applied: the session stays in the pane's sum
     // (heldBytes), so its turns are counted all at once and the pane's total published before
     // the window's read turn is let go (finally).
+    // Superseded by another session (a /clear adopting one), its excess is let go here
+    // (trimOlder): the newer read's guard trims or refuses only its own session.
     const counted = () => {
       if (!this.sessions?.includes(s)) return;
       measure(s);
+      this.trimOlder(s);
       if (this.mem) this.mem.bytes = this.heldBytes();
     };
     // The read's heartbeat; while it holds the window's turn, the turn's too (budget.js holdRead).
@@ -2837,6 +2840,42 @@ export default class Threads extends View {
     this.mem.bytes = mine;
     return false;
   }
+  // A session a read was reading when another session took the pane (a /clear adopting one),
+  // past the budget once its turns are counted: it keeps the newest turns that fit, as the
+  // guard trims, so the newer session is not trimmed or refused for bytes it does not hold.
+  // In every kind of pane, since the session is no longer the one a side pane refuses. The
+  // newer session's rows, keys and place stay as they are: only the keys of the older
+  // session's turns move (shiftKeys, shiftRows), and a held place, range or row that names one
+  // of them moves too, or starts over.
+  trimOlder(s) {
+    const si = this.sessions.indexOf(s);
+    if (!this.mem || si < 0 || s === this.current()) return;
+    const w = this.paneWeight();
+    const room = BUDGET - windowBytes(this.mem);
+    const mine = this.heldBytes();
+    if (mine <= room) return;
+    const top = this.topKey;
+    const k = trim(s, Math.max(0, Math.floor((room - (mine - sessionBytes(s, w))) * TRIM_TO)), w);
+    if (!k) return;
+    const its = (key) => typeof key === "string" && key.startsWith(`${si}:`);
+    const stay = its(top) && !this.follow && !this.toBottom && !this.scrollTo;
+    this.shiftKeys(si, k);
+    if (stay) this.scrollTo = { key: this.topKey ?? `${si}:1`, how: "top" };
+    this.shiftRows(s, si, k);
+    this.dropBuilt();
+    const a = this.anchor;
+    if (a && !a.end && (its(a.key) || its(a.turn) || [...(a.held?.keys() ?? [])].some(its))) this.dropAnchor();
+    for (const f of ["capKey", "viewEndKey"]) if (its(this[f])) this[f] = shiftKey(this[f], si, k);
+    if (its(this.win.from) || its(this.win.to)) {
+      const from = its(this.win.from) ? shiftKey(this.win.from, si, k) : this.win.from;
+      const to = its(this.win.to) ? shiftKey(this.win.to, si, k) : this.win.to;
+      if ((this.win.from != null && from == null) || (this.win.to != null && to == null)) this.win.reset();
+      else { this.win.from = from; this.win.to = to; this.win.at = null; }
+    }
+    this.rowsKey = null;
+    this.rowBuild = null;
+    this.rowJob = null;
+  }
   // The refusal stands for the session it was made for, not one that came after it.
   refusedNow() { return Boolean(this.refused) && this.refused.file === this.current()?.file; }
   // After trim() let go of k turns of session si: every field on TURN_KEYED names the same turn
@@ -2990,6 +3029,17 @@ export default class Threads extends View {
     this.tableMemo = null;
     this.fillMemo = null;
     this.bubbleMemo = null;
+    // The memos keyed by or holding the session's text: the link rules on its replies, the
+    // heights of its Markdown, the running answer's cut, its calls' inputs and outputs and
+    // their editors, and the loading state's newest prompt. Retry builds them again; the pins
+    // and what the person wrote stay.
+    this.linkMemo = null;
+    if (this.opening) this.opening.newest = null;
+    this.mdHeights = null;
+    this.cutKept = null;
+    for (const k of [...this.calls.keys()]) if (k.startsWith(`${s.file}#`)) this.calls.delete(k);
+    for (const e of this.outEds?.values() ?? []) this.letGoEditor(e);
+    this.outEds?.clear();
     this.restart(s, true);
   }
 
@@ -4244,6 +4294,8 @@ export default class Threads extends View {
         for (const id of job.ids) {
           const k = `${job.file}#${id}`;
           const was = this.calls.get(k);
+          // Gone while it was read (a refused session lets go of its calls): not kept.
+          if (!was) continue;
           const c = got.get(id);
           // A tail read that misses a call's input keeps the input read before.
           if (c || was?.input != null) this.calls.set(k, { ...was, ...c, st: "ok", ver: job.ver });

@@ -1286,10 +1286,12 @@ test("a final reply's text is counted once: its step is the same object as its e
 
 // A read superseded at its first yield in phase ("apply": with part of its chunk applied;
 // "measure": with the chunk applied, in the measure after it).
-async function supersededIn(phase) {
+// out.cx gets the pane's cx.
+async function supersededIn(phase, out = {}) {
   const file = fixture("--only", "1");
   fakeReader({ [file]: 60 }, 1000, 5);
   const { v, cx } = openPane(file);
+  out.cx = cx;
   const real = performance.now;
   let t = 0;
   let superseded = false;
@@ -1326,6 +1328,76 @@ test("a read superseded in the measure after its chunk publishes the pane's tota
   expect(v.current().turns.length).toBe(60);
   expect(v.mem.bytes).toBeGreaterThan(0);
   expect(v.mem.bytes).toBe(v.heldBytes());
+}, 20000);
+
+// A newer read in the same pane on the same session (a retry, watchRead's) is the one that
+// holds it to the budget: the session's half-applied chunk is started over (s.partial) before
+// its first call, and its first chunk's guard trims it.
+test("a read superseded while it applies its chunk, past the budget: the next read starts the session over before its first call, and its first guard trims it", async () => {
+  windowState().panes.clear();
+  const out = {};
+  const v = await supersededIn("apply", out);
+  const s = v.current();
+  expect(s.partial).toBe(true);
+  const applied = s.turns.length;
+  expect(applied).toBeGreaterThan(1);
+  // The window has room for half of what the session holds now.
+  phantom(BUDGET - windowBytes(v.mem) - Math.floor(v.heldBytes() / 2));
+  expect(v.heldBytes()).toBeGreaterThan(BUDGET - windowBytes(v.mem));
+  const inner = H.extractHook;
+  let first = null;
+  H.extractHook = async (args) => {
+    first ??= { turns: s.turns.length, partial: s.partial };
+    return inner(args);
+  };
+  v.read(out.cx);
+  await settle(v);
+  expect(first).toEqual({ turns: 0, partial: false });
+  expect(s.partial).toBe(false);
+  expect(tailOf(s)).not.toBeNull();
+  expect(v.heldBytes()).toBeLessThanOrEqual(BUDGET - windowBytes(v.mem));
+  expect(v.mem.bytes).toBe(v.heldBytes());
+}, 20000);
+
+// Red at ae69b5c9: the older session kept every turn it applied, past the budget, and only the
+// newer session's guard could trim, which trims the newer session.
+test("a read a /clear supersedes while it applies its chunk lets the older session's excess go, and leaves the newer session's keys and place", async () => {
+  windowState().panes.clear();
+  const file = fixture("--only", "1");
+  const next = fixture("--only", "2");
+  fakeReader({ [file]: 60, [next]: 3 }, 1000, 5);
+  const { v, cx } = openPane(file);
+  const real = performance.now;
+  let t = 0;
+  let s2 = null;
+  performance.now = () => (t += 20);
+  cx.sleepHook = () => {
+    const s = v.current();
+    if (!s2 && s?.partial && s.turns.length > 1) {
+      // The agent's /clear, with the window left room for half of what the session holds.
+      measure(s);
+      phantom(BUDGET - windowBytes(v.mem) - Math.floor(v.heldBytes() / 2));
+      s2 = newSession("s2", next);
+      v.sessions.push(s2);
+      v.topKey = "1:1";
+      v.sel = "1:1";
+    }
+    return new Promise((r) => setTimeout(r, 0));
+  };
+  try {
+    await until(() => s2, "the /clear");
+    await new Promise((r) => setTimeout(r, 50));
+  } finally { performance.now = real; cx.sleepHook = null; }
+  const [s] = v.sessions;
+  expect(s.partial).toBe(true);
+  expect(tailOf(s)).not.toBeNull();
+  expect(v.heldBytes()).toBeLessThanOrEqual(BUDGET - windowBytes(v.mem));
+  expect(v.mem.bytes).toBe(v.heldBytes());
+  // The newer session's keys and place are as they were.
+  expect(v.topKey).toBe("1:1");
+  expect(v.sel).toBe("1:1");
+  expect(v.current()).toBe(s2);
+  expect(() => v.render(cx)).not.toThrow();
 }, 20000);
 
 test("the chunk size is chosen once the read has the window's turn: the window passing half the budget in between gives the smaller chunk", async () => {
@@ -1388,19 +1460,55 @@ test("leaving the Select view gives the keyboard back to the pane only when no c
   expect(v.focusedEd).toBeNull();
 }, 20000);
 
-test("a side pane that refuses a session it has read lets go of everything built from its turns", async () => {
+// Red at ae69b5c9: the link rules' memo and the Markdown heights still held the replies' text.
+test("a side pane that refuses a session it has read lets go of everything built from its turns, and of its text", async () => {
   const file = fixture("--only", "1");
-  fakeReader({ [file]: 60 });
+  // Each prompt and reply carries a mark found nowhere else, so a string that holds one was
+  // made from the session.
+  const markP = (i) => `QZPROMPTMARK${i}`;
+  const markR = (i) => `QZREPLYMARK${i}`;
+  const per = 1000;
+  H.extractHook = async (args) => {
+    if (args[1] !== file) return null;
+    const n = 60;
+    const off = Number(args[2]);
+    const a = Math.floor(off / per);
+    const b = Math.min(n, Math.floor((off + Number(args[3])) / per));
+    const lines = [{ k: "file", size: n * per }, { k: "chunk", used: Math.max(0, b - a) * per }];
+    for (let i = a; i < b; i++) {
+      lines.push({ k: "p", o: "human", ts: ts(i), t: `${markP(i)} asks about ACME-${i}${PAD}` });
+      lines.push({ k: "t", ts: ts(i), t: `${markR(i)} answers, see ACME-${i}.\n\nA second paragraph of ${markR(i)}.` });
+      lines.push({ k: "d", ts: ts(i), ms: 1000 });
+    }
+    return { code: 0, stdout: `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`, stderr: "" };
+  };
   const { v, cx } = openPane(file, { view: "trajectory" });
   await settle(v);
+  v.applyPrefs(JSON.stringify({ links: [{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.example/ACME-$1" }] }));
+  expect(v.links.length).toBe(1);
   for (let i = 0; i < 5; i++) v.render(cx);
   const s = v.current();
   const old = new Set(s.turns);
-  // Whether x reaches one of the session's turns before the refusal, through Maps, Sets,
-  // arrays and own values (the sessions themselves not walked: restart empties them).
+  // What a Pinned pane's open reply builds from its text: the link rules on its segments
+  // (linkedSegs) and its Markdown's height (mdHeight).
+  const last = s.turns[s.turns.length - 1];
+  const textIn = (x, depth = 4) => {
+    if (typeof x === "string") return x.includes("QZREPLYMARK") ? x : null;
+    if (!x || typeof x !== "object" || depth <= 0) return null;
+    for (const y of Array.isArray(x) ? x : Object.values(x)) { const t = textIn(y, depth - 1); if (t) return t; }
+    return null;
+  };
+  const reply = textIn(last);
+  expect(reply).toContain("QZREPLYMARK");
+  expect(v.linkedSegs(`0:${last.n}`, [{ kind: "md", text: reply }])).not.toBeNull();
+  v.mdHeight(reply);
+  const marked = (x) => typeof x === "string" && (x.includes("QZPROMPTMARK") || x.includes("QZREPLYMARK"));
+  // Whether x reaches one of the session's turns before the refusal, or a string made from
+  // its text, through Maps (keys too), Sets, arrays and own values (the sessions themselves
+  // not walked: restart empties them).
   const skip = new Set([v.sessions, ...v.sessions]);
   const reaches = (x, depth = 12, seen = new Set()) => {
-    if (old.has(x)) return true;
+    if (old.has(x) || marked(x)) return true;
     if (!x || typeof x !== "object" || depth <= 0 || seen.has(x) || skip.has(x)) return false;
     seen.add(x);
     const d = depth - 1;
