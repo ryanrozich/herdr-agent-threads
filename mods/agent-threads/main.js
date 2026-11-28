@@ -109,7 +109,8 @@ import("./build.js")
   .then((m) => { built = parseBuild(m?.BUILD) ? m.BUILD : null; })
   .catch(() => { built = null; });
 import { isDiagram, drawDiagram } from "./diagram.js";
-import { BUDGET, TIGHT_CHUNK, TRIM_TO, PANE_WEIGHT, measure, sessionBytes, forgetSize, trim, shiftKey, tailOf, tailNote, droppedOf, idsBefore, gut, joinWindow, leaveWindow, windowBytes, noteFile, forgetFile, fileBytes, releaseOlder, sweepGhosts, takeRead, holdRead, dropRead, windowState, pruneWindow } from "./budget.js";
+import { BUDGET, TIGHT_CHUNK, TRIM_TO, PANE_WEIGHT, measure, sessionBytes, forgetSize, trim, shiftKey, tailOf, tailNote, droppedOf, idsBefore, gut, joinWindow, leaveWindow, windowBytes, noteFile, forgetFile, fileBytes, releaseOlder, sweepGhosts, takeRead, holdRead, dropRead, windowState, pruneWindow,
+  holdSession, letSession, heldElsewhere, isShared, VIEW_WEIGHT, sharers, chatHolds, shareWeight, sharedBytes, claimRead, releaseRead, readerOf, holdersOf } from "./budget.js";
 // A hot reload evaluates this module again in the same VM, beside the old one, and then
 // replaces every copy: the copies it replaces give back what they hold now (budget.js).
 releaseOlder();
@@ -149,7 +150,7 @@ const TURN_KEYED_RESET = Object.freeze([
   "tlModel", "tlJob", "tlKeep", "tlHatch", "fillMemo", "bubbleMemo", "mdMemo", "tableMemo", "outEds",
   "codeInfo", "landed", "diagramOpened", "outputOpened", "drawingRow", "drawError", "lastRange",
   "stickyShown", "stickyNow", "buildRail", "railMemo", "dayOfRows", "stickRows", "staleRows", "buildStale", "hoverPin", "unpinDown", "railHover", "railQuiet", "railHeld",
-  "dayAbove", "railSeen", "focusedEd", "ledgerShown", "ledgerJob", "tlFails",
+  "dayAbove", "railSeen", "focusedEd", "ledgerShown", "ledgerJob", "tlFails", "shareSeen",
 ]);
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -1211,6 +1212,8 @@ export default class Threads extends View {
       // The day pill goes DAY_PILL_MS after the last scroll.
       if (this.scrollSeenAt && Date.now() - this.scrollSeenAt >= DAY_PILL_MS) { this.scrollSeenAt = 0; this.stickyDue = true; }
       if (this.stickyDue) { this.stickyDue = false; cx.notify(); }
+      // Another pane read more of the session this one shows: draw it.
+      if (this.shareDue) { this.shareDue = false; cx.notify(); }
     });
     // The running turn's clock, once a second while one is shown.
     cx.timer.every(1000, (cx) => {
@@ -1219,6 +1222,13 @@ export default class Threads extends View {
       // (budget.js sweepGhosts), unless this timer itself was held up (a sleep).
       if (this.mem) { const at = Date.now(); if (this.lastTick == null || at - this.lastTick <= TICK_GAP) sweepGhosts(this.mem, at); this.mem.beat = at; pruneWindow(); }
       this.watchRead(cx);
+      // This pane left a read to another pane on its session, which has stopped reading it (it
+      // closed, or moved to another session) before the end: this one goes on from its offset.
+      const fc = this.current();
+      if (this.readFollowing && !this.reading && fc && !readerOf(fc)) {
+        if (fc.loaded && !(fc.offset < fc.size)) this.readFollowing = false;
+        else { this.read(cx); cx.notify(); }
+      }
       this.poll(cx);
       this.flushCode(cx);
       if (this.pinDueAt != null && Date.now() >= this.pinDueAt) this.savePins(cx);
@@ -1258,7 +1268,7 @@ export default class Threads extends View {
       tried: (this.res.tried ?? []).map((x) => `${x.ok ? "ok" : "no"} ${x.what}: ${x.detail}`),
       sessions: this.sessions.map((x) => ({ id: x.id.slice(-4), turns: x.turns.length, loaded: Boolean(x.loaded), clearAt: x.clearAt, error: x.error ?? null, skipped: x.skipped ?? null, tail: tailOf(x) })),
       // The memory guard (budget.js): this pane's estimate and the window's, in MiB.
-      guard: { pane: +((this.mem?.bytes ?? 0) / 1048576).toFixed(1), window: +(windowBytes() / 1048576).toFixed(1), budget: BUDGET / 1048576, refused: this.refusedNow(), releaseErrors: windowState().releaseErrors ?? 0, releaseError: windowState().releaseError ?? null },
+      guard: { pane: +((this.mem?.bytes ?? 0) / 1048576).toFixed(1), window: +(windowBytes() / 1048576).toFixed(1), budget: BUDGET / 1048576, refused: this.refusedNow(), holders: this.current() ? holdersOf(this.current()) : 0, reader: Boolean(this.current() && readerOf(this.current()) === this), releaseErrors: windowState().releaseErrors ?? 0, releaseError: windowState().releaseError ?? null },
       rows: rows.map((r) => `${r.kind}${r.turn ? `#${r.turn.n}` : ""}${r.kind === "divider" ? `:${dividerLabel(r.s)}` : ""}`),
       live: this.liveShown ? this.liveState(theme()).label : null, status: this.status(),
       sel: this.sel, query: this.query, count: this.filterCount(),
@@ -1409,9 +1419,12 @@ export default class Threads extends View {
   // failed keeps running this code: it draws a note (render) and its timers do nothing.
   forget() {
     if (this.forgotten) return;
-    if (this.mem) leaveWindow(this.mem);
-    // The sessions first: they are what the memory is, whatever the calls below do.
-    for (const s of this.sessions ?? []) gut(s);
+    // The sessions first: they are what the memory is, whatever the calls below do. One another
+    // pane still holds stays whole for it (leaveWindow lets go of this pane's hold; the last
+    // holder empties it).
+    const mem = this.mem;
+    if (mem) leaveWindow(mem);
+    for (const s of this.sessions ?? []) if (!heldElsewhere(s, mem)) gut(s);
     try { this.dropKept(); this.dropCode(); this.endSelect(); } catch { /* half-made pane */ }
     for (const k of Object.keys(this)) delete this[k];
     this.forgotten = true;
@@ -2575,16 +2588,24 @@ export default class Threads extends View {
         this.res = { ...this.res, pendingId: null, ...this.endState("exited") };
         return;
     }
-    const s = newSession(r.id, r.file);
+    // The window's copy of the session when another pane holds it (budget.js holdSession):
+    // that pane reads it, and this one follows its turns (followShared).
+    const s = holdSession(this.mem, r.id, r.file, () => newSession(r.id, r.file));
     s.senders = this.senders;
-    if (cur) s.reason = "new";
+    // Why the session starts is its first pane's to say: another pane may hold it as its first.
+    if (cur && holdersOf(s) <= 1) s.reason = "new";
     // Cursor records no turn times: the pane keeps the ones it watches (turns.js, clockStart).
-    if (harnessOfFile(r.file) === "cursor") s.clock = {};
-    this.sessions.push(s);
+    if (harnessOfFile(r.file) === "cursor" && !s.clock) s.clock = {};
+    if (!this.sessions.includes(s)) this.sessions.push(s);
     this.res = { ...r, ...this.endState(ended) };
     this.follow = true;
     this.known.add(r.file);
     this.watch(dirname(r.file), cx);
+    // Another pane read it in full already: this one follows its turns, with no call of its own
+    // (the next write is read by whichever pane's watch sees it first).
+    // Its view is counted now: past the budget, the copy is trimmed (a Chat on it) or this pane
+    // stands back (joined).
+    if (s.loaded && holdersOf(s) > 1) { this.readFollowing = false; this.shareSeen = null; this.joined(s); cx.notify(); return; }
     this.read(cx);
   }
 
@@ -2602,10 +2623,25 @@ export default class Threads extends View {
     // A Pinned or Trajectory pane on a session another pane found too large for the window
     // reads none of it (budget.js), counting the other panes and this pane's other sessions,
     // as the guard after each chunk does.
-    if (this.mem && this.mem.kind !== "chat" && !s.loaded && !s.offset && windowBytes(this.mem) + this.heldBytes(s) + fileBytes(s.file, this.paneWeight()) > BUDGET) { this.refuse(s); return; }
+    // A session a Chat holds is trimmed past the budget, never refused.
+    if (this.mem && this.mem.kind !== "chat" && !chatHolds(s) && !s.loaded && !s.offset) {
+      const at = (w) => windowBytes(this.mem) + this.heldBytes(s) + fileBytes(s.file, w);
+      const w = shareWeight(s, this.paneWeight());
+      if (at(w) > BUDGET) {
+        // The panes already on it would fit without this one: this one stands back alone.
+        if (heldElsewhere(s, this.mem) && at(w - (VIEW_WEIGHT[this.mem.kind] ?? 0)) <= BUDGET) this.standBack(s);
+        else this.refuse(s);
+        return;
+      }
+    }
     // Another session while the loading state is up: none of the first one's last write or
     // newest prompt, before its first chunk is read.
     if (this.opening && !this.opening.done && this.opening.list === this.sessions) this.openSwitch(s);
+    // Another pane of the window is reading this session (budget.js claimRead): this one makes
+    // no extractor call and follows its turns (followShared). Asked before a half-applied
+    // chunk is taken for an interrupted read: it is the reader's, in flight.
+    if (this.mem && !claimRead(this.mem, s, -1)) { this.readFollowing = true; return; }
+    this.readFollowing = false;
     // A chunk applied only in part (an interrupt, a read superseded mid-apply, a throw):
     // its offset was never advanced, so reading on would apply its events twice. Start over.
     if (s.partial) this.restart(s, true);
@@ -2613,6 +2649,7 @@ export default class Threads extends View {
     this.readWaiting = false;
     this.readBeat = Date.now();
     const gen = (this.readGen = (this.readGen ?? 0) + 1);
+    if (this.mem) claimRead(this.mem, s, gen);
     const live = () => this.readGen === gen && this.current() === s;
     // A read superseded with events of its chunk applied: the session stays in the pane's sum
     // (heldBytes), so its turns are counted all at once and the pane's total published before
@@ -2735,6 +2772,7 @@ export default class Threads extends View {
             }
             if (this.guard(s)) return;
             if (this.mem) dropRead(this.mem, gen);
+            this.tellSharers(s);
             if (s.offset < s.size) cap = readCap(cap, cut, chunk, CHUNK);
             grown = used > 0;
             chunk = nextChunk(s, used, chunk, Math.min(cap, chunk * 2));
@@ -2760,6 +2798,8 @@ export default class Threads extends View {
           if ((s.turns.length !== count || !this.sel) && this.follow) this.jumpLatest(true);
           else if (this.follow && wasLoaded && grew && this.view !== "pinned" && !this.outlined()) this.toBottom = true;
           else if (wasLoaded) this.noteNew(before);
+          this.shareSeen = this.shareMark(s);
+          this.tellSharers(s);
         } while (this.readAgain && live());
       } catch (e) {
         if (this.readGen === gen) {
@@ -2768,12 +2808,15 @@ export default class Threads extends View {
           s.error = String(e?.message ?? e);
         }
       } finally {
-        if (this.mem) dropRead(this.mem, gen);
+        if (this.mem) { dropRead(this.mem, gen); releaseRead(this.mem, s, gen); }
         // A read that was superseded (watchRead, a retry) leaves the flags to the newer one.
         if (this.readGen === gen) {
           this.reading = false;
           this.readWaiting = false;
           this.readBeat = null;
+          // What this read did is this pane's own: not followed again (followShared).
+          if (this.current() === s) this.shareSeen = this.shareMark(s);
+          if (this.sessions.includes(s)) this.tellSharers(s);
           // The pane moved to another session while this one was read (/clear, a pick):
           // the read asked for meanwhile is for that session, so start it now.
           if (this.readAgain && this.current() && this.current() !== s) this.read(cx);
@@ -2786,15 +2829,38 @@ export default class Threads extends View {
   // Starts a session over from the top (a replaced file, an interrupted read, Retry).
   // fresh (an interrupted read, Retry): also shown as not loaded, with no error, so the
   // progress shows again.
+  // The session is the window's (budget.js holdSession): every pane on it starts over with it,
+  // and a read of it by another pane (a Retry here while that pane reads) stops, so no chunk of
+  // the old read lands in the new session.
   restart(s, fresh = false) {
-    this.dropAnchor();
+    const others = sharers(s).filter((p) => p !== this);
+    for (const p of others) p.restartView(s);
+    this.restartView(s, true);
     forgetSize(s);
+    Object.assign(s, newSession(s.id, s.file), { reason: s.reason, version: s.version + 1, partial: false, clock: s.clock, senders: s.senders });
+    if (fresh) { s.loaded = false; s.error = null; s.missing = false; }
+    for (const p of [this, ...others]) if (p.mem) p.mem.bytes = p.heldBytes();
+  }
+  // This pane's part of a restart of s: the held place and the row window go (their keys hold
+  // turn numbers), and a read of s it has in flight stops (own: the pane that restarts, whose
+  // read goes on).
+  restartView(s, own = false) {
+    if (!own && this.reading && this.current() === s && readerOf(s) === this) {
+      this.readGen = (this.readGen ?? 0) + 1;
+      this.reading = false;
+      this.readAgain = false;
+      this.readWaiting = false;
+      this.readBeat = null;
+      if (this.mem) { dropRead(this.mem); releaseRead(this.mem, s); }
+    }
+    // A Select view of the session holds its old reply's text: it ends, as on a refusal.
+    const si = this.sessions.indexOf(s);
+    if (si >= 0 && (this.selEditor?.key?.startsWith(`${si}:`) || this.selecting?.startsWith(`${si}:`))) this.endSelect();
+    this.dropAnchor();
     this.win.reset();
     this.capKey = null;
     this.viewEndKey = null;
-    Object.assign(s, newSession(s.id, s.file), { reason: s.reason, version: s.version + 1, partial: false, clock: s.clock, senders: s.senders });
-    if (fresh) { s.loaded = false; s.error = null; s.missing = false; }
-    if (this.mem) this.mem.bytes = this.heldBytes();
+    this.shareSeen = null;
   }
 
   // The window's memory guard (budget.js), after each chunk: this pane's estimate in the
@@ -2805,41 +2871,116 @@ export default class Threads extends View {
     if (!this.mem) return false;
     measure(s);
     noteFile(s);
-    const w = this.paneWeight();
+    // The session is counted once with every pane's view of it (budget.js shareWeight).
+    const w = shareWeight(s, this.paneWeight());
     const room = BUDGET - windowBytes(this.mem);
     let mine = this.heldBytes();
     if (mine > room) {
-      if (this.mem.kind !== "chat") { this.refuse(s); return true; }
+      // Side panes alone on it let it go; with a Chat on it, it keeps its newest turns.
+      if (this.mem.kind !== "chat" && !chatHolds(s)) {
+        if (this.sideOver(s)) return true;
+        this.mem.bytes = this.heldBytes();
+        return false;
+      }
       // TRIM_TO of what the pane's other sessions leave: of the whole room, less them, it went
       // below zero once they held more than TRIM_TO of it, and the session kept one turn.
       const k = trim(s, Math.floor((room - (mine - sessionBytes(s, w))) * TRIM_TO), w);
-      if (k) {
-        // Every turn has a new number: every row and place is built again, and the row window
-        // starts over (its keys hold turn numbers, as in restart and pick). The selection,
-        // the open turns and the reader's place keep their turns (shiftKeys).
-        // A reader who is not following and has no jump on the way keeps the row at the top:
-        // the list's offset in px would now land on later turns. A held place (a re-wrap's
-        // anchor, due or taken) goes with the rows (dropAnchor), so it is no reason not to.
-        // Asked once the keys moved: a jump to a turn that went is gone, and the top row is
-        // kept instead.
-        this.shiftKeys(this.sessions.indexOf(s), k);
-        // The top row's turn went: the tail's first turn is at the top now.
-        if (!this.follow && !this.toBottom && !this.scrollTo) this.scrollTo = { key: this.topKey ?? `${this.sessions.indexOf(s)}:1`, how: "top" };
-        this.shiftRows(s, this.sessions.indexOf(s), k);
-        this.dropBuilt();
-        this.dropTexts(s);
-        this.dropAnchor();
-        this.win.reset();
-        this.capKey = null;
-        this.viewEndKey = null;
-        this.rowsKey = null;
-        this.rowBuild = null;
-        this.rowJob = null;
-        mine = this.heldBytes();
-      }
+      // Every pane on the session moves its keys and rows with the turns, now: none draws a
+      // frame with keys of the old numbering (one VM, one thread).
+      if (k) { this.trimmedAll(s, k); mine = this.heldBytes(); }
     }
     this.mem.bytes = mine;
     return false;
+  }
+  // Every pane that holds s, this one first, after trim() let k of its turns go.
+  trimmedAll(s, k) {
+    const all = [this, ...sharers(s).filter((p) => p !== this)];
+    for (const p of all) {
+      p.trimmed(s, k);
+      if (p !== this && p.mem) p.mem.bytes = p.heldBytes();
+    }
+  }
+  // A pane that joined a copy another pane read in full (adopt): its view is counted now, and
+  // past the budget the copy keeps its newest turns (a Chat on it) or the side panes that joined
+  // last stand back (sideOver), as a read's guard does after a chunk.
+  joined(s) {
+    if (!this.mem) return;
+    measure(s);
+    const room = BUDGET - windowBytes(this.mem);
+    const mine = this.heldBytes();
+    if (mine > room) {
+      if (chatHolds(s)) {
+        const w = shareWeight(s, this.paneWeight());
+        const k = trim(s, Math.max(0, Math.floor((room - (mine - sessionBytes(s, w))) * TRIM_TO)), w);
+        if (k) this.trimmedAll(s, k);
+      } else this.sideOver(s);
+    }
+    if (this.mem) this.mem.bytes = this.heldBytes();
+  }
+  // Side panes alone on s, past the budget: the ones that joined last stand back, newest first,
+  // while the window is over; when the first one alone is still over, it lets s go (refuse).
+  // The order is of joining s (sharers: the copy's holders as they came, a Retry's at the end).
+  // The first keeps it, and so does a pane that holds s as an older session: it has no refusal
+  // view to say it went (standBack).
+  // True when this pane no longer shows s (it stood back, or s was refused): its read stops.
+  sideOver(s) {
+    const all = sharers(s);
+    if (!all.includes(this)) all.push(this);
+    const back = all.slice(1).filter((p) => p.current() === s);
+    while (back.length && windowBytes() > BUDGET) back.pop().standBack(s);
+    if (windowBytes() > BUDGET) { all[0].refuse(s); return true; }
+    return !this.sessions.includes(s);
+  }
+  // This pane alone lets s go: refused, with an empty session of its own in s's place (Retry
+  // takes the window's copy again), and the panes still on s read on if it is not read in full.
+  // Only for a pane's current session: its refusal view says so (sideOver never asks it of an
+  // older one, which would go with nothing on screen to say so).
+  standBack(s) {
+    const i = this.sessions.indexOf(s);
+    if (i < 0 || s !== this.current()) return;
+    this.refuseView(s);
+    this.restartView(s);
+    if (this.mem) letSession(this.mem, s, false);
+    const own = newSession(s.id, s.file);
+    Object.assign(own, { senders: s.senders, reason: s.reason, clock: s.clock ? {} : null });
+    this.sessions[i] = own;
+    for (const p of sharers(s)) p.readFollowing = true;
+    if (this.mem) this.mem.bytes = this.heldBytes();
+  }
+  // This pane's part of a trim of s: its current session's (trimmedCurrent) or an older one's
+  // (trimmedOlder), by where s is in its own list.
+  trimmed(s, k) {
+    const si = this.sessions.indexOf(s);
+    if (si < 0) return;
+    // What it last saw names the newest turn by its old key (newestSig): the same turn's new one,
+    // so a reply that came with the trimming chunk is still noted as new (followShared).
+    const was = this.shareSeen;
+    if (was?.s === s) this.shareSeen = { ...was, n: Math.max(0, was.n - k), sig: shiftKey(was.sig, si, k) };
+    if (s === this.current()) this.trimmedCurrent(s, si, k);
+    else this.trimmedOlder(s, si, k);
+  }
+  trimmedCurrent(s, si, k) {
+    // Every turn has a new number: every row and place is built again, and the row window
+    // starts over (its keys hold turn numbers, as in restart and pick). The selection,
+    // the open turns and the reader's place keep their turns (shiftKeys).
+    // A reader who is not following and has no jump on the way keeps the row at the top:
+    // the list's offset in px would now land on later turns. A held place (a re-wrap's
+    // anchor, due or taken) goes with the rows (dropAnchor), so it is no reason not to.
+    // Asked once the keys moved: a jump to a turn that went is gone, and the top row is
+    // kept instead.
+    this.shiftKeys(si, k);
+    // The top row's turn went: the tail's first turn is at the top now.
+    if (!this.follow && !this.toBottom && !this.scrollTo) this.scrollTo = { key: this.topKey ?? `${si}:1`, how: "top" };
+    this.shiftRows(s, si, k);
+    this.dropBuilt();
+    this.dropTexts(s);
+    this.dropAnchor();
+    this.win.reset();
+    this.capKey = null;
+    this.viewEndKey = null;
+    this.rowsKey = null;
+    this.rowBuild = null;
+    this.rowJob = null;
   }
   // A session a read was reading when another session took the pane (a /clear adopting one),
   // past the budget once its turns are counted: it keeps the newest turns that fit, as the
@@ -2851,12 +2992,14 @@ export default class Threads extends View {
   trimOlder(s) {
     const si = this.sessions.indexOf(s);
     if (!this.mem || si < 0 || s === this.current()) return;
-    const w = this.paneWeight();
+    const w = shareWeight(s, this.paneWeight());
     const room = BUDGET - windowBytes(this.mem);
     const mine = this.heldBytes();
     if (mine <= room) return;
     const k = trim(s, Math.max(0, Math.floor((room - (mine - sessionBytes(s, w))) * TRIM_TO)), w);
-    if (!k) return;
+    if (k) this.trimmedAll(s, k);
+  }
+  trimmedOlder(s, si, k) {
     const its = (key) => typeof key === "string" && key.startsWith(`${si}:`);
     // The older session's rows sit above the newer one's, and the list keeps its offset in px:
     // a reader who is not following keeps the row at the top, in either session, as in guard.
@@ -3026,8 +3169,51 @@ export default class Threads extends View {
   turnKeyed() { return { moved: TURN_KEYED, reset: TURN_KEYED_RESET }; }
   paneWeight() { return PANE_WEIGHT[this.mem?.kind ?? "chat"]; }
   // What this pane's sessions hold, but except's.
-  heldBytes(except = null) { const w = this.paneWeight(); let n = 0; for (const x of this.sessions) if (x !== except) n += sessionBytes(x, w); return n; }
+  // ---- one copy of a session per window (budget.js holdSession) ----
+  // What a pane last saw of its current session, to tell what another pane's read changed.
+  // follower: made while following another pane's read (followShared), not after its own.
+  shareMark(s, follower = false) { return { s, v: s.version, off: s.offset, n: s.turns.length, loaded: Boolean(s.loaded), sig: this.newestSig(), follower }; }
+  // The reader, after a chunk or a read: every other pane on s draws again (the 120 ms timer).
+  tellSharers(s) { for (const p of sharers(s)) if (p !== this) p.shareDue = true; }
+  // A pane that follows another's read of its session does what the end of its own read does
+  // (read): on the newest turn while following, at the bottom as the reply grows, or the new
+  // turns noted. True when something moved.
+  followShared(cx) {
+    // The launcher, the gallery and the output viewer hold no sessions and no registry entry.
+    if (!this.mem || !this.sessions) return false;
+    const s = this.current();
+    if (!s || this.reading || readerOf(s) === this) return false;
+    const was = this.shareSeen;
+    // A pane alone on its session follows no one, unless it was following a reader that has
+    // just closed: what that reader read last is still noted.
+    if (!(was?.s === s && was.follower) && holdersOf(s) < 2) return false;
+    if (was && was.s === s && was.v === s.version && was.off === s.offset && was.n === s.turns.length && was.loaded === Boolean(s.loaded)) return false;
+    if (!was || was.s !== s) {
+      // Marked once the jump is made: a draw Herdr stops in it makes it again.
+      if (s.loaded && this.follow) this.jumpLatest(true);
+      this.shareSeen = this.shareMark(s, true);
+      return true;
+    }
+    if (s.loaded) {
+      const grew = was.v !== s.version || was.off !== s.offset;
+      if ((s.turns.length !== was.n || !this.sel) && this.follow) this.jumpLatest(true);
+      else if (this.follow && was.loaded && grew && this.view !== "pinned" && !this.outlined()) this.toBottom = true;
+      else if (was.loaded) this.noteNew(was.sig);
+      if (!was.loaded && cx && this.openActive() && this.opening.list === this.sessions) this.openStat(s, cx);
+      this.readStalls = 0;
+    }
+    this.shareSeen = this.shareMark(s, true);
+    return true;
+  }
+  // Each counted once with every pane's view of it (budget.js sharedBytes).
+  heldBytes(except = null) { const w = this.paneWeight(); let n = 0; for (const x of this.sessions) if (x !== except) n += sharedBytes(x, w); return n; }
+  // Past the budget with no Chat on s: every pane on it lets it go (refuseView), then it starts
+  // over empty, once.
   refuse(s) {
+    for (const p of [this, ...sharers(s).filter((p) => p !== this)]) p.refuseView(s);
+    this.restart(s, true);
+  }
+  refuseView(s) {
     this.refused = { file: s.file };
     // What was built from the session's turns goes with them, as on a trim: the refusal view
     // draws none of it, so nothing would build it again, and the pane's estimate drops now.
@@ -3060,7 +3246,6 @@ export default class Threads extends View {
     if (this.opening) this.opening = { ...this.opening, newest: null };
     for (const e of this.outEds?.values() ?? []) this.letGoEditor(e);
     this.outEds = null;
-    this.restart(s, true);
   }
 
   // On the 1 s timer: a read with no heartbeat for READ_STALL (EXEC_STALL while it awaits
@@ -3078,7 +3263,9 @@ export default class Threads extends View {
     if (gap > TICK_GAP) { this.readBeat = at; return; }
     if (at - this.readBeat < (this.readWaiting ? EXEC_STALL : READ_STALL)) return;
     const s = this.current();
-    if (this.mem) dropRead(this.mem);
+    // The stalled read's claim on its session goes too, or a pane on it would wait for a read
+    // that never ends (followShared, the 1 s timer); by its generation, so a newer one stays.
+    if (this.mem) { dropRead(this.mem); if (s) releaseRead(this.mem, s, this.readGen); }
     this.readGen = (this.readGen ?? 0) + 1;
     this.reading = false;
     this.readAgain = false;
@@ -3098,12 +3285,26 @@ export default class Threads extends View {
 
   // Retry (the failure state and the error banner): read the session again from the top.
   retryRead(cx) {
-    const s = this.current();
+    let s = this.current();
     if (!s) return;
     this.refused = null;
     // The estimate that refused it may be of another file at that path, since replaced: it is
     // let go, and the read finds out (the guard after each chunk refuses again if it must).
     forgetFile(s.file);
+    // A pane that stood back (standBack) takes the window's copy again when another pane holds
+    // one: it follows that copy (joined, or the read it is in) rather than start it over.
+    if (this.mem && !isShared(s)) {
+      const j = holdSession(this.mem, s.id, s.file, () => s);
+      if (j !== s) {
+        this.sessions[this.sessions.length - 1] = s = j;
+        this.shareSeen = null;
+        this.readStalls = 0;
+        if (s.loaded) this.joined(s);
+        else this.read(cx);
+        cx.notify();
+        return;
+      }
+    }
     this.readGen = (this.readGen ?? 0) + 1;
     this.reading = false;
     this.readAgain = false;
@@ -7704,7 +7905,11 @@ export default class Threads extends View {
     this.win.reset();
     this.capKey = null;
     this.viewEndKey = null;
+    // Each session is let go of, not emptied: what still reaches it (a count's progress, a
+    // read in flight) sees it whole, as before it was shared (budget.js letSession).
+    if (this.mem) for (const s of this.sessions) letSession(this.mem, s, false);
     this.sessions = [];
+    this.shareSeen = null;
     // What the sessions held leaves the window's estimate now (budget.js).
     if (this.mem) this.mem.bytes = 0;
     this.senderHits = null;
@@ -8233,6 +8438,10 @@ export default class Threads extends View {
       // Counted at once: a render that is stopped too would never reach the end of the frame.
       this.publishCuts();
     }
+    // Another pane read more of the session this one shows (followShared): inside the stop
+    // watch (renderOpen), and before renderWant, which keeps any jump it asks for.
+    this.renderOpen = true;
+    this.followShared(cx);
     // Herdr asks for no render after one it stopped: the 120 ms timer asks for the next.
     this.renderWant = { toBottom: this.toBottom, scrollTo: this.scrollTo, wheels: this.wheelN ?? 0 };
     const light = this.cutUntil > now();
@@ -8817,6 +9026,9 @@ export default class Threads extends View {
     if (!s && (this.res.kind === "none" || this.res.kind === "gone")) return "No session";
     if (!s && this.res.kind === "pending") return "0 turns";
     if (!s) return this.res.kind === "resolving" ? "Finding…" : "";
+    // Refused, or stood back beside the other panes (budget.js): its session is left unread on
+    // purpose, and the card under the header says why.
+    if (this.refusedNow()) return "Too large";
     if (!s.loaded) return s.error ? "Read failed" : `Reading…${this.readPct(s) != null && !this.openActive() ? ` ${this.readPct(s)}%` : ""}`;
     // Read, and the list still drawn hidden under the opening's loading state (which says how
     // much is read, so neither repeats the percentage).

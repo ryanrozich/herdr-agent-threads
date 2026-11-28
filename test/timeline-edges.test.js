@@ -68,7 +68,9 @@ const whole = (heads, now = T0) => TL.timelineModel(null, heads, CW, "clock", no
 // A Trajectory pane docked along the bottom, w px wide, its rows built whole. hold (heldRead):
 // its first read is held midway.
 async function dockPane(file, w = 1440, hold = null) {
-  await pane(file);
+  // The Chat sets up the window's state; it closes, so the Trajectory reads the transcript itself
+  // (with hold's reader) rather than follow the Chat's copy (test/share.test.js).
+  (await pane(file)).v.close();
   if (hold) H.extractHook = hold.hook;
   const state = H.state;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };

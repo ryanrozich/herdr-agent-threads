@@ -260,6 +260,9 @@ test("a Pinned pane on a session too large for the window reads none of it and s
   const chat = openPane(file);
   await settle(chat.v);
   expect(chat.v.current().turns.length).toBe(60);
+  // A Pinned pane beside the Chat shares its copy (test/share.test.js): the Chat closes, and
+  // its estimate of the file stays for the Pinned pane to judge by.
+  chat.v.close();
   // The Chat's estimate of the file, at the Pinned pane's weight: half of it is left.
   const needs = fileBytes(file, PANE_WEIGHT.pinned);
   expect(needs).toBeGreaterThan(0);
@@ -360,7 +363,8 @@ test("a reload of the same code: the copy it replaced in this Herdr pane, its ti
   a.v.mem.beat = Date.now() - 2 * GHOST_MS;
   tick(b);
   expect(a.v.forgotten).toBe(true);
-  expect(turns.length).toBe(0);
+  // The two copies shared one session (test/share.test.js): it stays whole for the new one.
+  expect(b.v.current().turns).toBe(turns);
   expect([...windowState().panes]).toEqual([b.v.mem]);
   expect(b.v.current().turns.length).toBeGreaterThan(0);
 }, 20000);
@@ -399,6 +403,9 @@ test("a refusal is for its session: a new, small session in the same side pane i
   fakeReader({ [file]: 60, [small]: 3 });
   const chat = openPane(file);
   await settle(chat.v);
+  // A Pinned pane beside the Chat shares its copy (test/share.test.js): the Chat closes, and
+  // its estimate of the file stays for the Pinned pane to judge by.
+  chat.v.close();
   phantom(BUDGET - windowBytes() - fileBytes(file, PANE_WEIGHT.pinned) / 2);
   const { v, cx } = openPane(file, { view: "pinned" });
   await until(() => v.refused, "the Pinned pane refusing");
