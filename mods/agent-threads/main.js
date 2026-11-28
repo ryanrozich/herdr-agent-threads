@@ -9014,6 +9014,9 @@ export default class Threads extends View {
     if (!s && (this.res.kind === "none" || this.res.kind === "gone")) return "No session";
     if (!s && this.res.kind === "pending") return "0 turns";
     if (!s) return this.res.kind === "resolving" ? "Finding…" : "";
+    // Refused, or stood back beside the other panes (budget.js): its session is left unread on
+    // purpose, and the card under the header says why.
+    if (this.refusedNow()) return "Too large";
     if (!s.loaded) return s.error ? "Read failed" : `Reading…${this.readPct(s) != null && !this.openActive() ? ` ${this.readPct(s)}%` : ""}`;
     // Read, and the list still drawn hidden under the opening's loading state (which says how
     // much is read, so neither repeats the percentage).

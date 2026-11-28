@@ -3,7 +3,7 @@
 // their own rows, keys and place, and the window's budget counts the copy once.
 import { test, expect } from "bun:test";
 import {
-  BUDGET, BASE_WEIGHT, VIEW_WEIGHT, PANE_WEIGHT, sessionBytes, tailOf, windowState, windowBytes, holdersOf,
+  BUDGET, BASE_WEIGHT, VIEW_WEIGHT, PANE_WEIGHT, sessionBytes, tailOf, windowState, windowBytes, holdersOf, fileBytes,
 } from "../mods/agent-threads/budget.js";
 import { fixture, H, makeCx, settle, setup, Threads, unsliced, until } from "./render-harness.js";
 
@@ -414,4 +414,32 @@ test("a follower that is not following notes a turn that came with the chunk tha
   expect(other.v.shareSeen?.n).toBe(60 - tailOf(s).of + tailOf(s).shown);
   expect(other.v.followShared(other.cx)).toBe(true);
   expect(other.v.unseen).toBe("pending");
+}, 20000);
+
+test("a refused or stood-back pane's header says the session is too large, not that it is reading", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 60 });
+  const pin = openPane(file, { view: "pinned" });
+  await settle(pin.v);
+  const s = pin.v.current();
+  expect(pin.v.headerText()).not.toStartWith("Reading");
+  // Stood back beside the Pinned pane.
+  const room = phantom(BUDGET - windowBytes() - Math.floor(viewOf(s, "trajectory") / 2));
+  const traj = openPane(file, { view: "trajectory" });
+  await until(() => traj.v.refused, "the Trajectory standing back");
+  expect(traj.v.headerText()).toBe("Too large");
+  // Retry with room: the header is the session's again.
+  windowState().panes.delete(room);
+  traj.v.retryRead(traj.cx);
+  expect(traj.v.headerText()).not.toBe("Too large");
+  // Refused alone: the Pinned pane, its estimate over what the window has left.
+  traj.v.close();
+  pin.v.close();
+  phantom(BUDGET - fileBytes(file, PANE_WEIGHT.pinned) / 2);
+  const again = openPane(file, { view: "pinned" });
+  await until(() => again.v.refused, "the Pinned pane refusing");
+  expect(again.v.current().loaded).toBeFalsy();
+  expect(again.v.headerText()).toBe("Too large");
+  again.v.report();
+  expect(H.state.shared["threads.debug"]["t4:pinned"].header).toBe("Too large");
 }, 20000);
