@@ -3,7 +3,7 @@
 // their own rows, keys and place, and the window's budget counts the copy once.
 import { test, expect } from "bun:test";
 import {
-  BUDGET, BASE_WEIGHT, VIEW_WEIGHT, PANE_WEIGHT, sessionBytes, tailOf, windowState, windowBytes, holdersOf, fileBytes,
+  BUDGET, BASE_WEIGHT, VIEW_WEIGHT, PANE_WEIGHT, sessionBytes, tailOf, windowState, windowBytes, holdersOf,
 } from "../mods/agent-threads/budget.js";
 import { fixture, H, makeCx, settle, setup, Threads, unsliced, until } from "./render-harness.js";
 
@@ -432,11 +432,14 @@ test("a refused or stood-back pane's header says the session is too large, not t
   windowState().panes.delete(room);
   traj.v.retryRead(traj.cx);
   expect(traj.v.headerText()).not.toBe("Too large");
-  // Refused alone: the Pinned pane, its estimate over what the window has left.
-  traj.v.close();
-  pin.v.close();
-  phantom(BUDGET - fileBytes(file, PANE_WEIGHT.pinned) / 2);
-  const again = openPane(file, { view: "pinned" });
+  // Refused alone: a Pinned pane on another transcript, with the window full, lets it go after
+  // its first chunk. (No pane here closes: the harness's tasks outlive a closed pane, which
+  // Herdr's never do.)
+  await settle(traj.v);
+  const other = fixture("--only", "2");
+  fakeReader({ [file]: 60, [other]: 60 });
+  phantom(BUDGET - windowBytes() - 1);
+  const again = openPane(other, { view: "pinned" });
   await until(() => again.v.refused, "the Pinned pane refusing");
   expect(again.v.current().loaded).toBeFalsy();
   expect(again.v.headerText()).toBe("Too large");
