@@ -410,13 +410,14 @@ export const shareWeight = (s, w) => { const r = SHARE.get(s); return r && liveH
 export const sharedBytes = (s, w) => sessionBytes(s, shareWeight(s, w));
 // The read of s: one pane at a time. False while another pane in the registry reads it; else
 // this read (gen) of entry e is its reader until releaseRead.
-export function claimRead(e, s, gen) {
+export function claimRead(e, s, gen, now = Date.now()) {
   const r = SHARE.get(s);
   if (!r || !e) return true;
   const cur = r.reader;
-  // An older copy in the same Herdr pane is one a reload replaced (sweepGhosts): Herdr stopped
-  // its tasks, so its read is over, swept or not.
-  const replaced = cur?.e.pane && cur.e.pane === e.pane && (cur.e.born ?? 0) < (e.born ?? 0);
+  // An older copy in the same Herdr pane whose timer stopped beating is one a reload replaced
+  // (sweepGhosts): Herdr stopped its tasks, so its read is over, swept or not. One still beating
+  // is a live pane (two Chats on one terminal can share a pane id) and keeps its read.
+  const replaced = cur?.e.pane && cur.e.pane === e.pane && (cur.e.born ?? 0) < (e.born ?? 0) && now - (cur.e.beat ?? 0) > GHOST_MS;
   if (cur && cur.e !== e && !replaced && readerAlive(r)) return false;
   r.reader = { e, gen };
   return true;

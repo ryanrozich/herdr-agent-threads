@@ -3,8 +3,10 @@
 // their own rows, keys and place, and the window's budget counts the copy once.
 import { test, expect } from "bun:test";
 import {
-  BUDGET, BASE_WEIGHT, VIEW_WEIGHT, PANE_WEIGHT, sessionBytes, tailOf, windowState, windowBytes, holdersOf,
+  BUDGET, BASE_WEIGHT, VIEW_WEIGHT, PANE_WEIGHT, GHOST_MS, sessionBytes, tailOf, windowState, windowBytes, holdersOf,
+  joinWindow, holdSession, claimRead, readerOf,
 } from "../mods/agent-threads/budget.js";
+import { newSession } from "../mods/agent-threads/core/turns.js";
 import { fixture, H, makeCx, settle, setup, Threads, unsliced, until } from "./render-harness.js";
 
 setup();
@@ -113,6 +115,8 @@ test("the reading pane closes mid-read: the session stays whole for the other pa
   expect(holdersOf(s)).toBe(1);
   // Its 1 s timer sees no reader and reads on.
   for (let i = 0; i < 400 && !(s.loaded && !pin.v.reading); i++) { tick(pin); await sleep(25); }
+  expect(s.loaded).toBe(true);
+  expect(pin.v.reading).toBeFalsy();
   // A chunk the Chat had half applied is read again from the top (read: s.partial).
   expect(pin.v.current()).toBe(s);
   expect(s.turns.length).toBe(1000);
@@ -445,4 +449,119 @@ test("a refused or stood-back pane's header says the session is too large, not t
   expect(again.v.headerText()).toBe("Too large");
   again.v.report();
   expect(H.state.shared["threads.debug"]["t4:pinned"].header).toBe("Too large");
+}, 20000);
+
+test("a read stays with a live pane that shares a Herdr pane id with a newer one, and passes to the newer one once the older stops beating", () => {
+  const a = {};
+  const b = {};
+  const ea = joinWindow(a, "chat");
+  const eb = joinWindow(b, "chat");
+  ea.pane = "p2";
+  eb.pane = "p2";
+  const make = () => newSession("s", "/x/s.jsonl");
+  const s = holdSession(ea, "s", "/x/s.jsonl", make);
+  expect(holdSession(eb, "s", "/x/s.jsonl", make)).toBe(s);
+  const now = Date.now();
+  ea.beat = now;
+  eb.beat = now;
+  expect(claimRead(ea, s, 1, now)).toBe(true);
+  // Two Chats on one terminal: the older one still beats, so it keeps its read.
+  expect(claimRead(eb, s, 1, now)).toBe(false);
+  expect(readerOf(s)).toBe(a);
+  // A reload replaced it: its timer stopped.
+  ea.beat = now - 2 * GHOST_MS;
+  expect(claimRead(eb, s, 2, now)).toBe(true);
+  expect(readerOf(s)).toBe(b);
+});
+
+test("a read the watchdog gives up on lets go of its session, and the pane following it reads on", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 200 }, 16000);
+  const inner = H.extractHook;
+  let first = true;
+  // The Chat's first call never returns.
+  H.extractHook = async (args) => { if (first) { first = false; return new Promise(() => {}); } return inner(args); };
+  const chat = openPane(file);
+  await until(() => chat.v.readWaiting, "the Chat's call");
+  const s = chat.v.current();
+  const pin = openPane(file, { view: "pinned" });
+  await until(() => pin.v.readFollowing, "the Pinned pane following");
+  expect(readerOf(s)).toBe(chat.v);
+  // The second stall in a row: the watchdog shows the error and stops the read.
+  chat.v.readStalls = 1;
+  chat.v.lastTick = Date.now();
+  chat.v.readBeat = Date.now() - 3600000;
+  chat.v.watchRead(chat.cx);
+  expect(chat.v.reading).toBe(false);
+  expect(readerOf(s)).toBeNull();
+  for (let i = 0; i < 400 && !(s.loaded && !pin.v.reading); i++) { tick(pin); await sleep(25); }
+  expect(s.loaded).toBe(true);
+  expect(s.turns.length).toBe(200);
+  expect(s.error).toBeNull();
+}, 60000);
+
+test("a restart of the shared copy ends another pane's Select view of it", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 60 });
+  const chat = openPane(file);
+  await settle(chat.v);
+  const pin = openPane(file, { view: "pinned" });
+  await settle(pin.v);
+  chat.v.selEditor = { key: "0:3", st: null, text: "reply 3" };
+  chat.v.selecting = "0:3";
+  pin.v.retryRead(pin.cx);
+  expect(chat.v.selecting).toBeNull();
+  expect(chat.v.selEditor).toBeNull();
+  await settle(pin.v);
+  expect(chat.v.current().turns.length).toBe(60);
+}, 20000);
+
+test("a pane left alone on a session it was following notes what the reader read just before it closed", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 60 });
+  const chat = openPane(file);
+  await settle(chat.v);
+  const other = openPane(file);
+  await settle(other.v);
+  const s = chat.v.current();
+  other.v.follow = false;
+  other.v.sel = "0:30";
+  other.v.followShared(other.cx);
+  expect(other.v.shareSeen?.n).toBe(60);
+  fakeReader({ [file]: 65 });
+  chat.v.read(chat.cx);
+  await settle(chat.v);
+  expect(s.turns.length).toBe(65);
+  chat.v.close();
+  expect(holdersOf(s)).toBe(1);
+  expect(other.v.followShared(other.cx)).toBe(true);
+  expect(other.v.unseen).toBe("pending");
+  // Once noted, nothing more to follow.
+  expect(other.v.followShared(other.cx)).toBe(false);
+}, 20000);
+
+test("a follower's first jump that a draw stops is made again on the next draw, which runs inside the stop watch", async () => {
+  const file = fixture("--only", "1");
+  fakeReader({ [file]: 60 });
+  const chat = openPane(file);
+  await settle(chat.v);
+  const other = openPane(file);
+  await settle(other.v);
+  other.v.shareSeen = null;
+  other.v.follow = true;
+  const jump = other.v.jumpLatest;
+  let n = 0;
+  other.v.jumpLatest = function (...a) { n++; if (n === 1) throw new Error("stopped"); return jump.apply(this, a); };
+  expect(() => other.v.followShared(other.cx)).toThrow("stopped");
+  expect(other.v.shareSeen).toBeNull();
+  expect(other.v.followShared(other.cx)).toBe(true);
+  expect(n).toBe(2);
+  expect(other.v.shareSeen?.follower).toBe(true);
+  // The draw calls it with the stop watch set.
+  other.v.shareSeen = null;
+  let open = null;
+  const follow = other.v.followShared;
+  other.v.followShared = function (cx) { open = this.renderOpen; return follow.call(this, cx); };
+  other.v.render(other.cx);
+  expect(open).toBe(true);
 }, 20000);

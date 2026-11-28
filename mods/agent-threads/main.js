@@ -2853,6 +2853,9 @@ export default class Threads extends View {
       this.readBeat = null;
       if (this.mem) { dropRead(this.mem); releaseRead(this.mem, s); }
     }
+    // A Select view of the session holds its old reply's text: it ends, as on a refusal.
+    const si = this.sessions.indexOf(s);
+    if (si >= 0 && (this.selEditor?.key?.startsWith(`${si}:`) || this.selecting?.startsWith(`${si}:`))) this.endSelect();
     this.dropAnchor();
     this.win.reset();
     this.capKey = null;
@@ -3168,7 +3171,8 @@ export default class Threads extends View {
   // What this pane's sessions hold, but except's.
   // ---- one copy of a session per window (budget.js holdSession) ----
   // What a pane last saw of its current session, to tell what another pane's read changed.
-  shareMark(s) { return { s, v: s.version, off: s.offset, n: s.turns.length, loaded: Boolean(s.loaded), sig: this.newestSig() }; }
+  // follower: made while following another pane's read (followShared), not after its own.
+  shareMark(s, follower = false) { return { s, v: s.version, off: s.offset, n: s.turns.length, loaded: Boolean(s.loaded), sig: this.newestSig(), follower }; }
   // The reader, after a chunk or a read: every other pane on s draws again (the 120 ms timer).
   tellSharers(s) { for (const p of sharers(s)) if (p !== this) p.shareDue = true; }
   // A pane that follows another's read of its session does what the end of its own read does
@@ -3178,12 +3182,16 @@ export default class Threads extends View {
     // The launcher, the gallery and the output viewer hold no sessions and no registry entry.
     if (!this.mem || !this.sessions) return false;
     const s = this.current();
-    if (!s || this.reading || readerOf(s) === this || holdersOf(s) < 2) return false;
+    if (!s || this.reading || readerOf(s) === this) return false;
     const was = this.shareSeen;
+    // A pane alone on its session follows no one, unless it was following a reader that has
+    // just closed: what that reader read last is still noted.
+    if (!(was?.s === s && was.follower) && holdersOf(s) < 2) return false;
     if (was && was.s === s && was.v === s.version && was.off === s.offset && was.n === s.turns.length && was.loaded === Boolean(s.loaded)) return false;
     if (!was || was.s !== s) {
-      this.shareSeen = this.shareMark(s);
+      // Marked once the jump is made: a draw Herdr stops in it makes it again.
       if (s.loaded && this.follow) this.jumpLatest(true);
+      this.shareSeen = this.shareMark(s, true);
       return true;
     }
     if (s.loaded) {
@@ -3194,7 +3202,7 @@ export default class Threads extends View {
       if (!was.loaded && cx && this.openActive() && this.opening.list === this.sessions) this.openStat(s, cx);
       this.readStalls = 0;
     }
-    this.shareSeen = this.shareMark(s);
+    this.shareSeen = this.shareMark(s, true);
     return true;
   }
   // Each counted once with every pane's view of it (budget.js sharedBytes).
@@ -3255,7 +3263,9 @@ export default class Threads extends View {
     if (gap > TICK_GAP) { this.readBeat = at; return; }
     if (at - this.readBeat < (this.readWaiting ? EXEC_STALL : READ_STALL)) return;
     const s = this.current();
-    if (this.mem) dropRead(this.mem);
+    // The stalled read's claim on its session goes too, or a pane on it would wait for a read
+    // that never ends (followShared, the 1 s timer); by its generation, so a newer one stays.
+    if (this.mem) { dropRead(this.mem); if (s) releaseRead(this.mem, s, this.readGen); }
     this.readGen = (this.readGen ?? 0) + 1;
     this.reading = false;
     this.readAgain = false;
@@ -8399,8 +8409,6 @@ export default class Threads extends View {
     // A copy a reload replaced, still drawn because the reload failed (forget).
     if (this.forgotten) return div().size_full().p(16).text_size(13).child("Agent Threads was updated. Close this pane and open it again.");
     if (this.drawingRow) this.rowCut(this.drawingRow);
-    // Another pane read more of the session this one shows (followShared).
-    this.followShared(cx);
     // A placement's lift (letGo) is for the one layout that lands it, gone before anything in
     // this frame builds the list's heights.
     if (this.anchorLift || this.anchorSlot) { this.anchorLift = 0; this.anchorSlot = null; this.fitKey = null; }
@@ -8430,6 +8438,10 @@ export default class Threads extends View {
       // Counted at once: a render that is stopped too would never reach the end of the frame.
       this.publishCuts();
     }
+    // Another pane read more of the session this one shows (followShared): inside the stop
+    // watch (renderOpen), and before renderWant, which keeps any jump it asks for.
+    this.renderOpen = true;
+    this.followShared(cx);
     // Herdr asks for no render after one it stopped: the 120 ms timer asks for the next.
     this.renderWant = { toBottom: this.toBottom, scrollTo: this.scrollTo, wheels: this.wheelN ?? 0 };
     const light = this.cutUntil > now();
